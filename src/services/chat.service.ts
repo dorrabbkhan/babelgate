@@ -6,6 +6,7 @@ import {
 } from "../transformers";
 import type { RoutePlan } from "../routing/plan-route";
 import { authHeaders } from "../routing/registry";
+import { logRoute, type Hop } from "../routing/route-log";
 import type { CanonicalRequest } from "../types/canonical.types";
 import { canonicalResponseSchema } from "../types/canonical.schema";
 import { UpstreamError } from "../utils/errors";
@@ -40,63 +41,66 @@ export interface ChatInput {
  * Non-streaming chat over a RoutePlan: per target — encode with the
  * registry provider's adapter, postJson with its URL, auth and
  * timeouts; decode the reply → model := requestedModel → encode in the
- * client's format (moved from proxy.service, spec §3.1).
+ * client's format (moved from proxy.service, spec §3.1). The route log
+ * line and the x-babelgate-* reply headers come from spec §3.4.
  */
 export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
   const { source, canonical, requestedModel, plan, config, requestId } =
     input;
 
-  const result = await attemptTargets(
-    plan,
-    config.registry,
-    async (entry, target) => {
-      const targetBody = adapters[entry.type].fromCanonicalRequest(
-        canonicalForTarget(canonical, entry, target),
-      );
-      const targetRoute = PROVIDER_ROUTES[entry.type].find(
-        (r) => r.kind === "chat",
-      )!;
-      const url = `${entry.baseUrl}${targetRoute.requestPath(target.model)}`;
-
-      logger.info(
-        {
-          requestId,
-          sourceApi: source,
-          targetApi: entry.type,
-          url,
-          model: target.model,
-          requestedModel,
-        },
-        "Forwarding request to upstream",
-      );
-
-      const upstream = await postJson({
-        url,
-        headers: authHeaders(entry),
-        body: targetBody,
-        timeoutMs: entry.timeoutMs ?? config.upstreamTimeoutMs,
-        retries: config.upstreamRetries,
-        requestId,
-      }).catch((err) => {
-        throw err instanceof UpstreamError
-          ? toClientFacing(err, entry.type)
-          : err;
-      });
-
-      if (upstream.status < 200 || upstream.status >= 300) {
-        const err = new UpstreamError(
-          `Upstream ${entry.type} returned ${upstream.status}`,
-          upstream.status,
-          upstream.body,
+  const hops: Hop[] = [];
+  let result;
+  try {
+    result = await attemptTargets(
+      plan,
+      config.registry,
+      async (entry, target) => {
+        const targetBody = adapters[entry.type].fromCanonicalRequest(
+          canonicalForTarget(canonical, entry, target),
         );
-        err.retryAfterSeconds = upstream.retryAfterSeconds;
-        throw toClientFacing(err, entry.type);
-      }
+        const targetRoute = PROVIDER_ROUTES[entry.type].find(
+          (r) => r.kind === "chat",
+        )!;
+        const url = `${entry.baseUrl}${targetRoute.requestPath(target.model)}`;
 
-      return upstream;
-    },
-    { requestId, signal: input.opts?.signal },
-  );
+        const upstream = await postJson({
+          url,
+          headers: authHeaders(entry),
+          body: targetBody,
+          timeoutMs: entry.timeoutMs ?? config.upstreamTimeoutMs,
+          retries: config.upstreamRetries,
+          requestId,
+        }).catch((err) => {
+          throw err instanceof UpstreamError
+            ? toClientFacing(err, entry.type)
+            : err;
+        });
+
+        if (upstream.status < 200 || upstream.status >= 300) {
+          const err = new UpstreamError(
+            `Upstream ${entry.type} returned ${upstream.status}`,
+            upstream.status,
+            upstream.body,
+          );
+          err.retryAfterSeconds = upstream.retryAfterSeconds;
+          throw toClientFacing(err, entry.type);
+        }
+
+        return upstream;
+      },
+      { requestId, signal: input.opts?.signal, hops },
+    );
+  } catch (err) {
+    logRoute({
+      requestId,
+      sourceApi: source,
+      requestedModel,
+      reason: plan.reason,
+      hops,
+      stream: false,
+    });
+    throw err;
+  }
 
   // Target → Canonical → Source. §3.5: replies carry the model name the
   // client asked for, not the routed name sent upstream.
@@ -118,20 +122,25 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     }
   }
 
-  logger.info(
-    {
-      requestId,
-      sourceApi: source,
-      targetApi: result.entry.type,
-      model: result.target.model,
-      requestedModel,
-      inputTokens: canonicalResp.usage?.inputTokens,
-      outputTokens: canonicalResp.usage?.outputTokens,
-      finishReason: canonicalResp.finishReason,
-      upstreamDurationMs: result.value.durationMs,
-    },
-    "Request completed",
-  );
+  logRoute({
+    requestId,
+    sourceApi: source,
+    requestedModel,
+    reason: plan.reason,
+    hops: result.hops,
+    winner: result.target.provider,
+    stream: false,
+    inputTokens: canonicalResp.usage?.inputTokens,
+    outputTokens: canonicalResp.usage?.outputTokens,
+    finishReason: canonicalResp.finishReason,
+  });
 
-  return { body: adapters[source].fromCanonicalResponse(canonicalResp) };
+  return {
+    body: adapters[source].fromCanonicalResponse(canonicalResp),
+    headers: {
+      "x-babelgate-provider": result.target.provider,
+      "x-babelgate-model": result.target.model,
+      "x-babelgate-attempts": String(result.hops.length),
+    },
+  };
 }

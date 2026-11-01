@@ -18,6 +18,12 @@ export const MOCK_BASE_URLS: Record<Provider, string> = {
   anthropic: "http://anthropic.mock",
 };
 
+/** A second OpenAI-type host for multi-provider (fallback) tests. */
+export const OPENAI2_BASE_URL = "http://openai2.mock";
+
+/** Nothing listens on this port — a guaranteed transport failure. */
+export const DEAD_BASE_URL = "http://127.0.0.1:9";
+
 /** Captured request bodies per provider (reset between tests) */
 export const capturedRequests: Record<Provider, unknown[]> = {
   openai: [],
@@ -34,11 +40,17 @@ export const capturedHeaders: Record<Provider, Headers[]> = {
   anthropic: [],
 };
 
+/** Captured requests/headers on the second OpenAI-type host */
+export const capturedRequests2: unknown[] = [];
+export const capturedHeaders2: Headers[] = [];
+
 export function resetCaptured(): void {
   for (const p of Object.keys(capturedRequests) as Provider[]) {
     capturedRequests[p].length = 0;
     capturedHeaders[p].length = 0;
   }
+  capturedRequests2.length = 0;
+  capturedHeaders2.length = 0;
 }
 
 /** Responses to return per provider — overridable per test */
@@ -50,7 +62,12 @@ export function resetOverrides(): void {
   for (const key of Object.keys(responseOverrides) as Provider[]) {
     delete responseOverrides[key];
   }
+  delete responseOverrides2.status;
+  delete responseOverrides2.body;
 }
+
+/** Overrides for the second OpenAI-type host (cleared by resetOverrides) */
+export const responseOverrides2: { status?: number; body?: unknown } = {};
 
 /**
  * Which fixture case each provider's upstream serves (default "text").
@@ -291,5 +308,38 @@ export const upstreamHandlers = [
       });
     }
     return HttpResponse.json(anthropicFixtures.models);
+  }),
+
+  // ===== Second OpenAI-type host (fallback tests) =====
+
+  http.post(`${OPENAI2_BASE_URL}/v1/chat/completions`, async ({ request }) => {
+    const body = await request.json();
+    capturedRequests2.push(body);
+    capturedHeaders2.push(request.headers);
+    if (
+      responseOverrides2.status !== undefined ||
+      responseOverrides2.body !== undefined
+    ) {
+      return HttpResponse.json(responseOverrides2.body ?? {}, {
+        status: responseOverrides2.status ?? 200,
+      });
+    }
+    if (wantsStream(request.url, body)) {
+      return streamFixtureResponse("openai");
+    }
+    return HttpResponse.json(openaiFixtures.responses.basic);
+  }),
+
+  http.get(`${OPENAI2_BASE_URL}/v1/models`, ({ request }) => {
+    capturedHeaders2.push(request.headers);
+    if (
+      responseOverrides2.status !== undefined ||
+      responseOverrides2.body !== undefined
+    ) {
+      return HttpResponse.json(responseOverrides2.body ?? {}, {
+        status: responseOverrides2.status ?? 200,
+      });
+    }
+    return HttpResponse.json(openaiFixtures.models);
   }),
 ];

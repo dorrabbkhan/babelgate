@@ -1,18 +1,13 @@
 import type { ProviderEntry, ProviderRegistry } from "../routing/registry";
 import type { RoutePlan, RouteTarget } from "../routing/plan-route";
+import { hopOutcome, isFallbackEligible } from "../routing/fallback";
+import type { Hop } from "../routing/route-log";
 import type { Provider } from "../transformers";
 import type { CanonicalRequest } from "../types/canonical.types";
-import { UpstreamError } from "../utils/errors";
+import { ProxyError, UpstreamError } from "../utils/errors";
 import { toClientError } from "./upstream-errors";
 
-/** One tried target in a route plan (spec §3.4 route log line). */
-export interface Hop {
-  provider: string;
-  model: string;
-  outcome: "ok" | "http_error" | "timeout" | "transport";
-  status?: number;
-  ms: number;
-}
+export type { Hop } from "../routing/route-log";
 
 export interface AttemptResult<T> {
   value: T;
@@ -60,31 +55,70 @@ export function canonicalForTarget(
 }
 
 /**
- * The fallback loop shared by both chat services (spec §3.4). Task 1
- * tries `plan.targets[0]` only and rethrows its error unchanged;
- * Task 5 adds fallback hops and outcome classification.
+ * The fallback loop shared by both chat services (spec §3.4): try each
+ * of plan's targets in order. A client abort rethrows immediately —
+ * no further target is tried. A fallback-eligible failure with targets
+ * remaining records its hop and continues; anything else, and the last
+ * target's error, carries `x-babelgate-attempts` in responseHeaders and
+ * is rethrown. `ctx.hops`, when given, is filled with every upstream
+ * hop (ok and failed) so the caller can emit the route log line even on
+ * failure; the same array is returned on success.
  */
 export async function attemptTargets<T>(
   plan: RoutePlan,
   registry: ProviderRegistry,
   attempt: (entry: ProviderEntry, target: RouteTarget) => Promise<T>,
-  ctx: { requestId: string; signal?: AbortSignal },
+  ctx: { requestId: string; signal?: AbortSignal; hops?: Hop[] },
 ): Promise<AttemptResult<T>> {
-  const target = plan.targets[0]!;
-  const entry = registry.get(target.provider);
-  const start = Date.now();
-  const value = await attempt(entry, target);
-  return {
-    value,
-    target,
-    entry,
-    hops: [
-      {
+  const hops = ctx.hops ?? [];
+
+  for (const [index, target] of plan.targets.entries()) {
+    const entry = registry.get(target.provider);
+    const start = Date.now();
+    try {
+      const value = await attempt(entry, target);
+      hops.push({
         provider: target.provider,
         model: target.model,
         outcome: "ok",
         ms: Date.now() - start,
-      },
-    ],
-  };
+      });
+      return { value, target, entry, hops };
+    } catch (err) {
+      // Client went away — stop; try no further target.
+      if (ctx.signal?.aborted) throw err;
+
+      // Only upstream failures are hops: an error raised before the
+      // request left (validation, transform) is no route outcome.
+      const outcome = hopOutcome(err);
+      if (outcome !== undefined) {
+        hops.push({
+          provider: target.provider,
+          model: target.model,
+          outcome,
+          ...(outcome === "http_error"
+            ? { status: (err as UpstreamError).upstreamStatus }
+            : {}),
+          ms: Date.now() - start,
+        });
+      }
+
+      if (
+        index < plan.targets.length - 1 &&
+        isFallbackEligible(err)
+      ) {
+        continue;
+      }
+      if (err instanceof ProxyError) {
+        err.responseHeaders = {
+          ...err.responseHeaders,
+          "x-babelgate-attempts": String(index + 1),
+        };
+      }
+      throw err;
+    }
+  }
+
+  // plan.targets is never empty (planRoute always returns ≥ 1 target).
+  throw new Error("attemptTargets: plan has no targets");
 }

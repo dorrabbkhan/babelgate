@@ -2,6 +2,13 @@ import type { CanonicalError } from "../types/canonical.types";
 import { kindFromStatus, makeCanonicalError } from "./canonical-error";
 
 export class ProxyError extends Error {
+  /**
+   * Extra response headers the error-handler sets before rendering —
+   * e.g. `x-babelgate-attempts` on errors after upstream attempts
+   * (spec §3.4).
+   */
+  public responseHeaders?: Record<string, string>;
+
   constructor(
     message: string,
     public readonly statusCode: number = 500,
