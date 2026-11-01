@@ -1,0 +1,5 @@
+default: openai
+providers:
+  openai:
+    type: openai
+    base_url: https://api.openai.com/v1

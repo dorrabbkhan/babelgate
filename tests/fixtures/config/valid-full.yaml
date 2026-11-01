@@ -1,0 +1,32 @@
+default: ollama
+providers:
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434/
+  openrouter:
+    type: openai
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    timeout_ms: 120000
+  anthropic:
+    type: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    context_window: 200000
+    stream_idle_ms: 60000
+aliases:
+  fast: openrouter/qwen/qwen3-coder
+  smart: anthropic/claude-sonnet-4-5
+routes:
+  - match: claude-*haiku*
+    to: ollama/qwen2.5-coder:7b
+  - match: claude-*
+    when:
+      min_input_tokens: 60000
+    to: openrouter/qwen/qwen3-coder
+    fallback:
+      - anthropic/claude-sonnet-4-5
+  - match: claude-*
+    to: ollama/qwen3-coder:30b
+    fallback:
+      - openrouter/qwen/qwen3-coder

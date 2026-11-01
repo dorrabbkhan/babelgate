@@ -6,6 +6,11 @@ import {
   type ProviderRegistry,
 } from "../routing/registry";
 import type { RoutingConfig } from "../routing/plan-route";
+import {
+  ignoredEnvKeys,
+  loadYamlConfig,
+  resolveConfigPath,
+} from "./yaml-config";
 import { ConfigurationError } from "../utils/errors";
 import { logger } from "../utils/logger";
 
@@ -168,15 +173,41 @@ function parseTargetContextWindow(): number | undefined {
 /**
  * Get the current configuration (lazy-loaded)
  */
-let _config: EnvConfig | null = null;
+let _config: GatewayConfig | null = null;
+let _configPath: string | undefined;
+
+/**
+ * Explicit config-file path for getConfig()'s discovery — set by the
+ * CLI's --config before getConfig() runs (spec §3.5). Cleared by
+ * resetConfig().
+ */
+export function setConfigPath(path: string | undefined): void {
+  _configPath = path;
+}
 
 export function getConfig(): GatewayConfig {
   if (!_config) {
-    _config = loadConfig();
-    if (_config.deprecatedEnv.length > 0) {
-      logger.warn(
-        "SOURCE_API is deprecated and ignored: the request path decides the client format. It will be removed in 2.0.",
-      );
+    const yamlPath = resolveConfigPath(
+      _configPath,
+      process.env,
+      process.cwd(),
+    );
+    if (yamlPath !== undefined) {
+      _config = loadYamlConfig(yamlPath, process.env);
+      const ignored = ignoredEnvKeys(process.env);
+      if (ignored.length > 0) {
+        logger.warn(
+          `Ignoring env vars set but defined by the config file: ${ignored.join(", ")}`,
+        );
+      }
+    } else {
+      const envConfig = loadConfig();
+      if (envConfig.deprecatedEnv.length > 0) {
+        logger.warn(
+          "SOURCE_API is deprecated and ignored: the request path decides the client format. It will be removed in 2.0.",
+        );
+      }
+      _config = envConfig;
     }
   }
   return _config;
@@ -187,4 +218,5 @@ export function getConfig(): GatewayConfig {
  */
 export function resetConfig(): void {
   _config = null;
+  _configPath = undefined;
 }

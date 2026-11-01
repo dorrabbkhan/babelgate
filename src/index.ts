@@ -1,6 +1,7 @@
 import type { Server } from "node:http";
 import { app } from "./app";
 import { getConfig } from "./config/env-config";
+import { formatRoutingTable } from "./routing/table";
 import { logger } from "./utils/logger";
 
 /**
@@ -41,6 +42,9 @@ export function startServer(): Promise<Server> {
         },
         "Server started",
       );
+      for (const line of formatRoutingTable(config)) {
+        logger.info(line);
+      }
       process.on("SIGTERM", () => shutdown("SIGTERM"));
       process.on("SIGINT", () => shutdown("SIGINT"));
       resolve(server);

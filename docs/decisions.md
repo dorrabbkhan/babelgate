@@ -1916,3 +1916,30 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   test needs the reply model, and `modelVersion` is the documented
   output field (Google `GenerateContentResponse`; recorded fixture
   `tests/fixtures/streams/gemini/max_tokens.nonstreaming.json`).
+
+## v1.2 Task 4: YAML config, schema, discovery, routing table
+
+- **`yaml@2.9.1`** added via `npm install yaml@^2` (latest 2.x, zero
+  dependencies — D6, owner gate). `package-lock.json` also records the
+  root `"bin": {"babelgate": "dist/cli.js"}` entry — npm's own
+  normalization of the existing package.json field, not a hand edit.
+- **`setConfigPath` lives in `env-config.ts`**, not `yaml-config.ts`:
+  the Produces block does not pin a file, it feeds `getConfig()`'s
+  discovery, and `resetConfig()` clears it alongside `_config` so tests
+  start clean. `resolveConfigPath`, `loadYamlConfig` and
+  `ignoredEnvKeys` are in `yaml-config.ts` per the file map.
+- **`getConfig()` warns only when `ignoredEnvKeys` is non-empty**
+  (spec: "one startup warn naming those that are set" — nothing set,
+  nothing to name), same pattern as the `deprecatedEnv` warn.
+- **Duplicate keys surface through `parseDocument({uniqueKeys: true})`**
+  `doc.errors`; the message embeds the offending line, so
+  `duplicate-map-key.yaml` and `duplicate-alias.yaml` both name their
+  key (`default`, `fast`). The spec's "duplicate alias" is therefore a
+  YAML-level error, not a separate registry check.
+- **Extra fixtures beyond the plan's pinned list** (new files only,
+  nothing existing touched): `missing-key-field.yaml` covers the spec
+  §3.5 schema rule "`api_key_env` required unless type is ollama" — the
+  plan's eight invalid files map the six named startup errors but not
+  this schema violation; `discovery/babelgate.yaml` gives the
+  `./babelgate.yaml` discovery step a `cwd` to find.
+- **Files outside the Files block:** none.

@@ -1,0 +1,5 @@
+default: OLLAMA
+providers:
+  OLLAMA:
+    type: ollama
+    base_url: http://localhost:11434

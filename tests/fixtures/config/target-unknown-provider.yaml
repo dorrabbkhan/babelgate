@@ -1,0 +1,8 @@
+default: ollama
+providers:
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434
+routes:
+  - match: claude-*
+    to: nosuchprovider/qwen3-coder:30b
