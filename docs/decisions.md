@@ -2125,3 +2125,51 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
 - **Not run locally**: no Ollama on this machine; per the plan the
   owner runs `npm run test:live` and pastes the summary in the PR.
 - **Files outside the Files block:** none.
+
+## v1.2 Task 10: Release gates · OWNER REVIEW
+
+- **`scripts/gates/claude-code-edit.sh` is outside the Files block**,
+  changed per the plan's Gate 2 instruction ("if the gate script cannot
+  pass `--config` through, extend it in this task"): it could not — the
+  CLI rejects `--target`/`--model`/`--base-url` with a config file — so
+  a `config <path-to-yaml> [model-label]` mode now runs
+  `node dist/cli.js --config <path> --preset claude-code --port <port>`.
+  The `ollama` and `openrouter` modes are unchanged; health wait,
+  export-line parsing, `claude` invocation, output lines and
+  `GATE PASS`/`GATE FAIL` are identical. Verified offline:
+  `--config examples/claude-code-hybrid.yaml --preset claude-code`
+  serves `/health` and prints the `export ANTHROPIC_BASE_URL=` /
+  `export ANTHROPIC_AUTH_TOKEN=` lines the script greps (dummy
+  `OPENROUTER_API_KEY`, 2026-11-02); `bash -n` clean, `shellcheck` not
+  installed in this environment. `CLAUDE_CODE_MAX_OUTPUT_TOKENS` is not
+  unset anywhere in the script and reaches `claude`.
+- **`docs/gates/gpu-ollama.md` corrections (static read):** the host
+  prep now pulls `qwen2.5-coder:7b` as well — Gate 2's
+  `claude-*haiku*` route targets it with **no fallback** — and disk
+  headroom is ~30 GB; a VRAM note covers both models staying resident.
+  New sections give the exact commands for Gate 2 (config mode; needs
+  Ollama at the YAML's hard-coded `http://localhost:11434` with both
+  models, plus `OPENROUTER_API_KEY`; provider per request visible via
+  `x-babelgate-provider` / the route log line) and Gate 3
+  (`GEMINI_API_KEY` + reachable Ollama).
+- **No gate has been run.** Gate runs are owner-only (Global
+  Constraints) and this environment has no GPU, no Ollama and no
+  OpenRouter/Gemini key — results below are placeholders for the owner
+  to fill in on this branch.
+- **Files outside the Files block:** `scripts/gates/claude-code-edit.sh`
+  (reason above). `docs/decisions.md` and `docs/gates/gpu-ollama.md` are
+  inside it.
+
+### Gate results — PENDING, owner runs
+
+- **Gate 1 (Claude Code ↔ Ollama GPU):** `PENDING — owner run` —
+  `scripts/gates/claude-code-edit.sh ollama qwen3-coder:30b`;
+  Claude Code version `<version>`, model `<model>`, GPU `<gpu>`,
+  duration `<duration>`, cost `<cost>`, date `<date>`.
+- **Gate 2 (Claude Code ↔ hybrid config):** `PENDING — owner run` —
+  `scripts/gates/claude-code-edit.sh config examples/claude-code-hybrid.yaml`;
+  Claude Code version `<version>`, providers used `<per x-babelgate-provider>`,
+  duration `<duration>`, cost `<cost>`, date `<date>`.
+- **Gate 3 (Gemini live):** `PENDING — owner run` —
+  `GEMINI_API_KEY=<key> npm run test:live`; `gemini`-target cases passed:
+  `<which cases / counts>`, date `<date>`.
