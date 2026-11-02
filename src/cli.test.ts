@@ -142,7 +142,7 @@ describe("cli", () => {
     expect(endpointLines(3000)).toEqual([
       "OpenAI     http://localhost:3000/v1",
       "Anthropic  http://localhost:3000",
-      "Gemini     http://localhost:3000/v1beta",
+      "Gemini     http://localhost:3000",
       "Ollama     http://localhost:3000",
     ]);
   });

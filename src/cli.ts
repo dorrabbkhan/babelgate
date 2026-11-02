@@ -209,7 +209,7 @@ export function endpointLines(port: number): string[] {
   return [
     `OpenAI     http://localhost:${port}/v1`,
     `Anthropic  http://localhost:${port}`,
-    `Gemini     http://localhost:${port}/v1beta`,
+    `Gemini     http://localhost:${port}`,
     `Ollama     http://localhost:${port}`,
   ];
 }
