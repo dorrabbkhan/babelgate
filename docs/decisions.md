@@ -2045,4 +2045,7 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   after start. Without a preset, `main` prints `endpointLines(port)` then
   `formatRoutingTable(getConfig())` on stdout — `index.ts` also logs the
   table via pino, so it appears twice; intentional per §3.5/§3.7.
-- **Files outside the Files block:** none.
+- **Files outside the Files block:** `docs/conductor/notes/v1.2/task8.md`
+  (conductor note, added at the owner's request on PR #50): the Gemini
+  endpoint line `…/v1beta` is checked against the Gemini SDK docs in
+  Task 8 and changed only if the SDKs append the API version themselves.
