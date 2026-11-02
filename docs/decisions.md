@@ -2024,3 +2024,28 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   block, needed no change**: `proxyModelList`'s signature and the
   dispatch were already what §3.6 requires.
 - **Files outside the Files block:** none.
+
+## v1.2 Task 7: CLI --config flag and endpoints block
+
+- **"With a config file loaded" (§3.7) means any resolved file, not only
+  `--config`**: `main` runs `resolveConfigPath(args.config, process.env,
+  process.cwd())` before `startServer`, so `--target`, `--model` and
+  `--base-url` also fail ("defined by the config file", exit 1) when the
+  file comes from `BABELGATE_CONFIG` or `./babelgate.yaml`. `parseCliArgs`
+  covers the explicit `--config` combination only, since it is pure.
+- **Config mode is a parameter, not a global**: `presetEnv` and
+  `overriddenKeys` take a third optional `configMode` argument (default
+  `false`, so every existing call keeps its signature and behaviour).
+  With `configMode` the only flag that maps to env is `--port` → `PORT`
+  (§3.5 applies `PORT` with YAML); presets set no routing env and the
+  "no --model given" hint is suppressed.
+- **With a config file, `--preset` only selects the export lines**
+  (§3.7): `clientInstructions` is unchanged; in config mode the preset
+  contributes no env values, and `main` still prints its `export` lines
+  after start. Without a preset, `main` prints `endpointLines(port)` then
+  `formatRoutingTable(getConfig())` on stdout — `index.ts` also logs the
+  table via pino, so it appears twice; intentional per §3.5/§3.7.
+- **Files outside the Files block:** `docs/conductor/notes/v1.2/task8.md`
+  (conductor note, added at the owner's request on PR #50): the Gemini
+  endpoint line `…/v1beta` is checked against the Gemini SDK docs in
+  Task 8 and changed only if the SDKs append the API version themselves.
