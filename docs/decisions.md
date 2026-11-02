@@ -1986,3 +1986,41 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   replaces; the assertion now checks the same metrics in the new
   shape. No expected value loosened — `inputTokens`/`outputTokens`/
   `finishReason` assertions are identical.
+
+## v1.2 Task 6: Merged model list and cache
+
+- **Merge order follows spec §3.6 verbatim:** aliases as bare names,
+  then the default provider's models bare, then every other
+  provider's models as `<provider>/<model>` — ids prefixed on the
+  canonical list before the single source-adapter encode, so Gemini
+  clients see `models/<provider>/<model>`. First occurrence wins on a
+  duplicate id (checked on the final emitted id). Glob routes are
+  never listed.
+- **`createModelListCache(ttlMs = 60_000, now = Date.now)`** returns a
+  `{get, set, clear}` cache keyed on provider name + base URL;
+  `proxyModelList` uses a module-level instance, `resetModelListCache()`
+  clears it for tests. Fresh strictly inside the TTL: an entry fetched
+  at t is served at t + 59 999 and refetched at t + 60 000. Successful
+  fetches only — a rejected fetch leaves no entry, so the next call
+  refetches. No `NODE_ENV` special-casing and no test bypass.
+- **All-providers-fail returns the default provider's error through
+  the same `toClientFacing` path as v1.1** — same status and dialect,
+  no `x-babelgate-partial` header. With one provider and no aliases
+  the merged list is byte-identical to the v1.1 list (verified by the
+  unchanged existing model-list tests).
+- **Failed-provider warn line** carries `{requestId, provider,
+  outcome, status?}` — `outcome` via `hopOutcome` ("http_error" /
+  "timeout" / "transport", "error" for a non-upstream failure) and
+  `status` only for HTTP errors. No keys, no body text.
+- **`tests/mocks/upstreams.ts` needed no changes**: Task 5 already
+  added `GET ${OPENAI2_BASE_URL}/v1/models`, which the merged-list
+  tests reuse as the second OpenAI-type provider.
+- **Existing test file change**: `tests/integration/gateway.test.ts`
+  (inside this task's Files block) gained a `resetModelListCache()`
+  call in its file-level `beforeEach` — the module-level cache would
+  otherwise let a list cached by one case mask a later case's dead
+  provider. No existing assertion or expected value changed.
+- **`src/services/proxy.service.ts`, listed under Modify in the Files
+  block, needed no change**: `proxyModelList`'s signature and the
+  dispatch were already what §3.6 requires.
+- **Files outside the Files block:** none.
