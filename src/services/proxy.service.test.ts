@@ -341,7 +341,14 @@ describe("proxyRequest", () => {
       inputTokens: 5,
       outputTokens: 1,
       finishReason: "stop",
-      hops: [{ provider: "ollama", model: "gpt-4", outcome: "ok" }],
+      hops: [
+        {
+          provider: "ollama",
+          model: "gpt-4",
+          outcome: "ok",
+          ms: expect.any(Number),
+        },
+      ],
     });
   });
 
