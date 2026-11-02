@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { parseArgs } from "node:util";
 import type { Provider } from "./transformers/adapters";
-import { getConfig } from "./config/env-config";
+import { getConfig, setConfigPath } from "./config/env-config";
+import { resolveConfigPath } from "./config/yaml-config";
+import { formatRoutingTable } from "./routing/table";
 import { startServer } from "./index";
 
 export interface CliArgs {
@@ -9,6 +11,7 @@ export interface CliArgs {
   target?: Provider;
   model?: string;
   baseUrl?: string;
+  config?: string;
   port?: number;
   help?: boolean;
 }
@@ -29,6 +32,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
       target: { type: "string" },
       model: { type: "string" },
       "base-url": { type: "string" },
+      config: { type: "string" },
       port: { type: "string" },
       help: { type: "boolean" },
     },
@@ -51,6 +55,17 @@ export function parseCliArgs(argv: string[]): CliArgs {
   }
   if (values.model !== undefined) args.model = values.model;
   if (values["base-url"] !== undefined) args.baseUrl = values["base-url"];
+  if (values.config !== undefined) args.config = values.config;
+  if (
+    args.config !== undefined &&
+    (args.target !== undefined ||
+      args.model !== undefined ||
+      args.baseUrl !== undefined)
+  ) {
+    throw new Error(
+      "--target, --model and --base-url are defined by the config file",
+    );
+  }
   if (values.port !== undefined) {
     const port = Number(values.port);
     if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -85,31 +100,37 @@ function effectiveTarget(
 function wantedEnv(
   args: CliArgs,
   env: NodeJS.ProcessEnv,
+  configMode = false,
 ): Record<string, string> {
   const wanted: Record<string, string> = {};
 
-  if (args.target !== undefined) {
-    wanted.TARGET_API = args.target;
-  }
+  // With a config file loaded, routing is defined by the file (spec §3.7):
+  // no flag or preset may set TARGET_API, MODEL_MAP, *_API_BASE_URL or
+  // TARGET_CONTEXT_WINDOW — only PORT still applies (§3.5).
+  if (!configMode) {
+    if (args.target !== undefined) {
+      wanted.TARGET_API = args.target;
+    }
 
-  if (args.preset === "claude-code") {
-    if (args.model !== undefined) {
-      wanted.MODEL_MAP = `claude-*=${args.model}`;
+    if (args.preset === "claude-code") {
+      if (args.model !== undefined) {
+        wanted.MODEL_MAP = `claude-*=${args.model}`;
+      }
+      wanted.TARGET_CONTEXT_WINDOW = "32768";
+      if (effectiveTarget(args, env) === "ollama") {
+        wanted.UPSTREAM_TIMEOUT_MS = "600000";
+      }
     }
-    wanted.TARGET_CONTEXT_WINDOW = "32768";
-    if (effectiveTarget(args, env) === "ollama") {
-      wanted.UPSTREAM_TIMEOUT_MS = "600000";
-    }
-  }
 
-  if (args.baseUrl !== undefined) {
-    const target = effectiveTarget(args, env);
-    if (target === undefined) {
-      throw new Error(
-        "--base-url requires --target or TARGET_API in the environment",
-      );
+    if (args.baseUrl !== undefined) {
+      const target = effectiveTarget(args, env);
+      if (target === undefined) {
+        throw new Error(
+          "--base-url requires --target or TARGET_API in the environment",
+        );
+      }
+      wanted[`${target.toUpperCase()}_API_BASE_URL`] = args.baseUrl;
     }
-    wanted[`${target.toUpperCase()}_API_BASE_URL`] = args.baseUrl;
   }
 
   if (args.port !== undefined) {
@@ -123,13 +144,18 @@ function wantedEnv(
  * Environment values implied by the flags. Keys the user's own env already
  * sets (a non-empty value) are not returned — user env always wins and
  * presets are only ever env values, never changes to config defaults.
+ * `configMode` (a config file was resolved) suppresses every routing env
+ * var; only `--port` still maps to PORT.
  */
 export function presetEnv(
   args: CliArgs,
   env: NodeJS.ProcessEnv,
+  configMode = false,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(wantedEnv(args, env)).filter(([key]) => !env[key]),
+    Object.entries(wantedEnv(args, env, configMode)).filter(
+      ([key]) => !env[key],
+    ),
   );
 }
 
@@ -141,9 +167,12 @@ export function presetEnv(
 export function overriddenKeys(
   args: CliArgs,
   env: NodeJS.ProcessEnv,
+  configMode = false,
 ): string[] {
-  const applied = presetEnv(args, env);
-  return Object.keys(wantedEnv(args, env)).filter((key) => !(key in applied));
+  const applied = presetEnv(args, env, configMode);
+  return Object.keys(wantedEnv(args, env, configMode)).filter(
+    (key) => !(key in applied),
+  );
 }
 
 /**
@@ -172,12 +201,27 @@ export function clientInstructions(
   return [];
 }
 
+/**
+ * The endpoints block printed at startup when no preset is given
+ * (spec §3.7): one URL per client dialect, column-aligned.
+ */
+export function endpointLines(port: number): string[] {
+  return [
+    `OpenAI     http://localhost:${port}/v1`,
+    `Anthropic  http://localhost:${port}`,
+    `Gemini     http://localhost:${port}/v1beta`,
+    `Ollama     http://localhost:${port}`,
+  ];
+}
+
 function usageLines(): string[] {
   return [
     "Usage: babelgate [--preset <claude-code|openai-apps>] [--target <provider>]",
-    "                 [--model <name>] [--base-url <url>] [--port <n>] [--help]",
+    "                 [--model <name>] [--base-url <url>] [--port <n>]",
+    "                 [--config <path>] [--help]",
     "",
-    "Upstream API keys come only from the environment",
+    "Config file discovery: --config, then BABELGATE_CONFIG,",
+    "then ./babelgate.yaml. Upstream API keys come only from the environment",
     "(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_API_KEY).",
   ];
 }
@@ -190,8 +234,29 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
 
-    const envValues = presetEnv(args, process.env);
-    const overridden = overriddenKeys(args, process.env);
+    // A config file resolves via --config, BABELGATE_CONFIG or
+    // ./babelgate.yaml (spec §3.5); with one loaded, the routing flags
+    // are errors (spec §3.7) — the parseCliArgs check only covers an
+    // explicit --config.
+    const configPath = resolveConfigPath(
+      args.config,
+      process.env,
+      process.cwd(),
+    );
+    const configMode = configPath !== undefined;
+    if (
+      configMode &&
+      (args.target !== undefined ||
+        args.model !== undefined ||
+        args.baseUrl !== undefined)
+    ) {
+      throw new Error(
+        "--target, --model and --base-url are defined by the config file",
+      );
+    }
+
+    const envValues = presetEnv(args, process.env, configMode);
+    const overridden = overriddenKeys(args, process.env, configMode);
     for (const [key, value] of Object.entries(envValues)) {
       process.env[key] = value;
     }
@@ -203,6 +268,7 @@ export async function main(argv: string[]): Promise<void> {
       );
     }
     if (
+      !configMode &&
       args.preset === "claude-code" &&
       args.model === undefined &&
       !process.env.MODEL_MAP
@@ -213,6 +279,7 @@ export async function main(argv: string[]): Promise<void> {
       );
     }
 
+    setConfigPath(args.config);
     await startServer();
     const config = getConfig();
     if (args.preset !== undefined) {
@@ -225,6 +292,13 @@ export async function main(argv: string[]): Promise<void> {
       )) {
         console.log(line);
       }
+    } else {
+      for (const line of endpointLines(config.port)) {
+        console.log(line);
+      }
+    }
+    for (const line of formatRoutingTable(config)) {
+      console.log(line);
     }
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));

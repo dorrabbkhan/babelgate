@@ -1,9 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   parseCliArgs,
   presetEnv,
   overriddenKeys,
   clientInstructions,
+  endpointLines,
+  main,
 } from "./cli";
 
 describe("cli", () => {
@@ -110,5 +112,66 @@ describe("cli", () => {
     expect(() => parseCliArgs(["--openai-api-key", "x"])).toThrow(
       /--openai-api-key/,
     );
+  });
+
+  it("--config is parsed", () => {
+    expect(parseCliArgs(["--config", "gw.yaml"])).toEqual({
+      config: "gw.yaml",
+    });
+    expect(
+      parseCliArgs(["--config", "gw.yaml", "--preset", "claude-code"]),
+    ).toEqual({ config: "gw.yaml", preset: "claude-code" });
+    expect(
+      parseCliArgs(["--config", "gw.yaml", "--port", "4000"]),
+    ).toEqual({ config: "gw.yaml", port: 4000 });
+  });
+
+  it("--config with --target, --model or --base-url throws", () => {
+    expect(() =>
+      parseCliArgs(["--config", "gw.yaml", "--target", "ollama"]),
+    ).toThrow(/defined by the config file/);
+    expect(() =>
+      parseCliArgs(["--config", "gw.yaml", "--model", "m"]),
+    ).toThrow(/defined by the config file/);
+    expect(() =>
+      parseCliArgs(["--config", "gw.yaml", "--base-url", "http://x"]),
+    ).toThrow(/defined by the config file/);
+  });
+
+  it("endpoint lines", () => {
+    expect(endpointLines(3000)).toEqual([
+      "OpenAI     http://localhost:3000/v1",
+      "Anthropic  http://localhost:3000",
+      "Gemini     http://localhost:3000/v1beta",
+      "Ollama     http://localhost:3000",
+    ]);
+  });
+
+  it("--help mentions --config and BABELGATE_CONFIG", async () => {
+    const lines: string[] = [];
+    const spy = vi
+      .spyOn(console, "log")
+      .mockImplementation((line?: unknown) => {
+        lines.push(String(line));
+      });
+    try {
+      await main(["--help"]);
+    } finally {
+      spy.mockRestore();
+    }
+    const help = lines.join("\n");
+    expect(help).toContain("--config");
+    expect(help).toContain("BABELGATE_CONFIG");
+    expect(help).toContain("./babelgate.yaml");
+  });
+
+  it("config mode + claude-code preset sets no routing env", () => {
+    expect(presetEnv({ preset: "claude-code" }, {}, true)).toEqual({});
+    expect(presetEnv({ preset: "claude-code", port: 4000 }, {}, true)).toEqual(
+      { PORT: "4000" },
+    );
+    expect(
+      overriddenKeys({ preset: "claude-code" }, { PORT: "1" }, true),
+    ).toEqual([]);
   });
 });
