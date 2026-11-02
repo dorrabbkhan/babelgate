@@ -89,6 +89,82 @@ with `MODEL_MAP`). Recipe: [docs/recipes/openai-sdk.md](docs/recipes/openai-sdk.
   needs serious RAM or a GPU. Smaller `qwen2.5-coder` sizes run on CPU but
   are slow and call tools less reliably.
 
+## One endpoint, many providers
+
+Everything above is one target behind one port. With a `babelgate.yaml`
+the same port serves **every client format at once** — OpenAI, Anthropic,
+Gemini and Ollama SDKs all work against it — and routes each request to
+one of several providers by model name, with aliases, a long-context
+condition, and fallbacks before the first byte:
+
+```bash
+OPENROUTER_API_KEY=<your key> \
+  npx babelgate --config examples/claude-code-hybrid.yaml --preset claude-code
+```
+
+[examples/claude-code-hybrid.yaml](examples/claude-code-hybrid.yaml)
+keeps Claude Code's cheap background calls on a small local model, runs
+routine turns on local `qwen3-coder:30b`, sends ≥ 60 000-token contexts
+to OpenRouter, and falls back to OpenRouter when Ollama is down:
+
+```yaml
+routes:
+  - match: claude-*haiku*
+    to: ollama/qwen2.5-coder:7b
+  - match: claude-*
+    when:
+      min_input_tokens: 60000
+    to: openrouter/qwen/qwen3-coder
+  - match: claude-*
+    to: ollama/qwen3-coder:30b
+    fallback:
+      - openrouter/qwen/qwen3-coder
+```
+
+Model resolution, in order: an explicit `<provider>/<model>` in the
+request, then aliases, then routes in file order, then the `default`
+provider with the model unchanged. Replies always keep the name the
+client asked for. Walkthrough:
+[docs/recipes/claude-code-hybrid.md](docs/recipes/claude-code-hybrid.md);
+a second example with three providers and aliases lives at
+[examples/multi-provider.yaml](examples/multi-provider.yaml).
+
+Started without `--preset`, babelgate prints a client-facing endpoint
+per dialect — each is the **base URL the SDK expects**, which differs
+from the raw request paths:
+
+```
+OpenAI     http://localhost:3000/v1
+Anthropic  http://localhost:3000
+Gemini     http://localhost:3000
+Ollama     http://localhost:3000
+```
+
+```python
+# OpenAI SDK (Python) — base_url includes /v1
+OpenAI(base_url="http://localhost:3000/v1", api_key="babelgate")
+
+# google-genai (Python) — http_options.base_url excludes it; the SDK
+# appends /v1beta itself (a /v1beta base URL double-appends and 404s)
+genai.Client(api_key="babelgate",
+             http_options={"base_url": "http://localhost:3000"})
+```
+
+```ts
+// @google/genai (JS) — same, via httpOptions.baseUrl
+new GoogleGenAI({ apiKey: "babelgate",
+                  httpOptions: { baseUrl: "http://localhost:3000" } })
+```
+
+Raw-HTTP callers use the real paths instead: `/v1/chat/completions`,
+`/v1/messages`, `/v1beta/models/<model>:generateContent`, `/api/chat`.
+Every proxied reply carries `x-babelgate-provider`, `x-babelgate-model`
+and `x-babelgate-attempts`, and `GET …/models` returns one merged list
+across all providers. Any OpenAI-compatible backend (Groq, DeepSeek,
+Together, LM Studio, vLLM, llama.cpp…) is a `type: openai` provider —
+base URLs and key handling are in
+[docs/recipes/openai-compatible-providers.md](docs/recipes/openai-compatible-providers.md).
+
 ## The `babelgate` CLI
 
 `npx babelgate` parses flags with `node:util`, sets environment defaults
@@ -99,18 +175,21 @@ paste. Upstream API keys come only from the environment — never from flags.
 
 ```
 Usage: babelgate [--preset <claude-code|openai-apps>] [--target <provider>]
-                 [--model <name>] [--base-url <url>] [--port <n>] [--help]
+                 [--model <name>] [--base-url <url>] [--port <n>]
+                 [--config <path>] [--help]
 
-Upstream API keys come only from the environment
+Config file discovery: --config, then BABELGATE_CONFIG,
+then ./babelgate.yaml. Upstream API keys come only from the environment
 (OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_API_KEY).
 ```
 
 | Flag          | Effect                                                                        |
 | ------------- | ----------------------------------------------------------------------------- |
-| `--preset`    | `claude-code` (source `anthropic`) or `openai-apps` (source `openai`)           |
-| `--target`    | `ollama`, `openai`, `anthropic` or `gemini` — sets `TARGET_API`                 |
+| `--preset`    | `claude-code` or `openai-apps` — picks which `export` lines to print; with no config file it also sets the v1.1 env routing |
+| `--target`    | `ollama`, `openai`, `anthropic` or `gemini` — sets `TARGET_API` (env-only mode) |
 | `--model`     | `claude-code` preset only: `MODEL_MAP=claude-*=<model>`                         |
 | `--base-url`  | Sets `{TARGET}_API_BASE_URL` (e.g. `https://openrouter.ai/api` for OpenRouter)  |
+| `--config`    | Path to a `babelgate.yaml` — `--target`, `--model` and `--base-url` are then defined by the file |
 | `--port`      | Listen port (default `3000`)                                                    |
 | `--help`      | Usage                                                                         |
 
@@ -141,12 +220,14 @@ pipeline doesn't care.
 The actual request flow:
 
 1. Request hits the Express app.
-2. If the path matches the configured source provider's API prefix
-   (e.g. `/v1/chat/completions` for OpenAI), the proxy takes it.
-   Otherwise it falls through to a 404.
-3. The body is converted to canonical, then from canonical to the target
-   format.
-4. It's forwarded upstream to `{TARGET}_API_BASE_URL` + the target's
+2. The request path decides the client's format (`/v1/chat/completions`
+   is OpenAI, `/v1/messages` Anthropic, `/v1beta/models` Gemini,
+   `/api/chat` Ollama); the route table picks it up. Unknown paths fall
+   through to a 404.
+3. The body is converted to canonical, routed to a provider (config
+   file, or the single `TARGET_API` in env-only mode), then encoded in
+   the target's format.
+4. It's forwarded upstream to the provider's `base_url` + the target's
    endpoint, with the right auth headers.
 5. The response comes back through the same path in reverse.
 
@@ -181,23 +262,27 @@ Every completed chat request logs token usage (`inputTokens`,
 
 ## Configuration
 
-Everything is environment variables. One instance serves one source→target
-pair; run multiple instances for more.
+Two modes. A **`babelgate.yaml`** (found via `--config`, `BABELGATE_CONFIG`
+or `./babelgate.yaml`) defines ≥ 1 providers, aliases and ordered routes —
+see the section above and [examples/](examples/). With no file,
+**env-only mode** is exactly the v1.1 setup: one provider named after
+`TARGET_API`, `MODEL_MAP` entries become its routes.
 
 | Variable                  | What it's for                                                                                |
 | ------------------------- | -------------------------------------------------------------------------------------------- |
-| `SOURCE_API`              | Format clients send to you — `openai`, `gemini`, `ollama`, or `anthropic`                    |
-| `TARGET_API`              | Format to translate to upstream — same options                                               |
+| `BABELGATE_CONFIG`        | Path to a `babelgate.yaml` (same as `--config`)                                               |
+| `SOURCE_API`              | **Deprecated** — ignored in 1.2 (the request path decides the client format); removed in 2.0  |
+| `TARGET_API`              | Format to translate to upstream — same options (env-only mode; ignored when a YAML file is loaded) |
 | `PORT`                    | Listen port (default `3000`)                                                                 |
-| `{PROVIDER}_API_BASE_URL` | Upstream base URL for the target provider, e.g. `OLLAMA_API_BASE_URL=http://localhost:11434` |
-| `{PROVIDER}_API_KEY`      | API key for the target provider (Ollama doesn't need one)                                    |
+| `{PROVIDER}_API_BASE_URL` | Upstream base URL for the target provider, e.g. `OLLAMA_API_BASE_URL=http://localhost:11434` (env-only; YAML providers use `base_url`) |
+| `{PROVIDER}_API_KEY`      | API key for the target provider (Ollama doesn't need one). With YAML, keys are whichever env vars `api_key_env` names |
 | `UPSTREAM_TIMEOUT_MS`     | Per-request upstream timeout (default `30000`)                                               |
 | `UPSTREAM_RETRIES`        | Retries for transport failures / 429 / 503 (default `1`)                                     |
 | `UPSTREAM_STREAM_IDLE_MS` | Longest gap allowed between chunks mid-stream (default `300000`)                             |
 | `MAX_BODY_SIZE`           | JSON body limit (default `10mb` — base64 images need it)                                     |
 | `PROXY_API_KEY`           | Optional client auth — when set, callers send the key in their provider's native auth header (see Authentication) |
-| `MODEL_MAP`               | Ordered `glob=model` rules, comma-separated — e.g. `claude-*haiku*=qwen2.5-coder:7b,claude-*=qwen3-coder:30b`. First match wins; replies still carry the name the client asked for |
-| `TARGET_CONTEXT_WINDOW`   | Minimum context window the target should allocate (Ollama `options.num_ctx`)                  |
+| `MODEL_MAP`               | Ordered `glob=model` rules, comma-separated — e.g. `claude-*haiku*=qwen2.5-coder:7b,claude-*=qwen3-coder:30b`. First match wins; replies still carry the name the client asked for (env-only; YAML has `routes`) |
+| `TARGET_CONTEXT_WINDOW`   | Minimum context window the target should allocate (Ollama `options.num_ctx`; env-only — YAML has per-provider `context_window`) |
 
 Routing and upstream endpoints are conventions, not configuration: each
 provider's routes (`kind`, `method`, `pathPrefix`, `requestPath`) live in
@@ -269,10 +354,9 @@ npm ci
 cp .env.example .env
 ```
 
-For a local Ollama target, `.env` needs three lines:
+For a local Ollama target, `.env` needs two lines:
 
 ```bash
-SOURCE_API=openai
 TARGET_API=ollama
 OLLAMA_API_BASE_URL=http://localhost:11434
 ```
@@ -425,8 +509,9 @@ fixtures/tests — see
 - Some provider-specific features (citations, extra usage fields) map to
   canonical best-effort — the format only keeps what's expressible
   across providers.
-- One source→target pair per instance. That's a deliberate simplification,
-  not an oversight.
+- **No config hot reload and no overall request deadline** — a
+  `babelgate.yaml` change needs a restart, and worst-case latency is the
+  sum of per-attempt timeouts across a fallback chain.
 
 ## Roadmap
 

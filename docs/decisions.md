@@ -2049,3 +2049,55 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   (conductor note, added at the owner's request on PR #50): the Gemini
   endpoint line `…/v1beta` is checked against the Gemini SDK docs in
   Task 8 and changed only if the SDKs append the API version themselves.
+
+## v1.2 Task 8: Examples, recipes, README, GPU runbook
+
+- **Gemini endpoint line changed to `http://localhost:<port>`** (owner
+  decision, 2026-11-02, PR #50 / `docs/conductor/notes/v1.2/task8.md`):
+  the check confirmed every current Gemini SDK appends the API version
+  to its base URL itself, so the §3.7 `…/v1beta` line would produce
+  `…/v1beta/v1beta/…` → 404 when pasted into an SDK. Evidence (checked
+  2026-11-02):
+  - `@google/genai` JS (SDK_VERSION 2.32.0):
+    `src/_api_client.ts` `getRequestUrlInternal` builds
+    `[baseUrl, apiVersion].join('/')` and `constructUrl` appends the
+    path — `apiVersion` defaults to `v1beta` for the Gemini API
+    (`GOOGLE_AI_API_DEFAULT_VERSION`), so `httpOptions.baseUrl` must be
+    the bare host. `models.generateContent` then calls
+    `POST <baseUrl>/v1beta/models/<model>:generateContent`.
+    <https://github.com/googleapis/js-genai/blob/main/src/_api_client.ts>
+  - `@google/generative-ai` 0.24.x (the older SDK, in
+    `node_modules`): `url = ${baseUrl}/${apiVersion}/${model}:${task}`,
+    same composition.
+  - `google-genai` Python: `_api_client.py::_build_request` joins
+    `base_url` with `f'{api_version}/{path}'` (`api_version='v1beta'`
+    for the Gemini API) whenever `api_key` is set. Caveat: a custom
+    `base_url` *without* `api_key` is used verbatim (no path appended —
+    the documented gateway-proxy mode; `force_append_path` in
+    python-genai PR #1701). babelgate docs always show a key, so the
+    versioned path is appended.
+    <https://github.com/googleapis/python-genai/blob/main/google/genai/_api_client.py>
+- **`src/cli.ts` and `src/cli.test.ts` are outside Task 8's Files
+  block**, changed per that owner decision: `endpointLines` Gemini line
+  `…/v1beta` → bare port, and the `"endpoint lines"` test's expected
+  string updated (still an exact `toEqual` match). This departs from
+  spec §3.7's literal `Gemini …/v1beta` wording; the spec itself is
+  unchanged per the owner's instruction.
+- **`examples/multi-provider.yaml` is the spec §3.9 "Ollama + OpenRouter
+  + Anthropic + aliases" shape** — two aliases (`fast`, `smart`) and
+  three routes so each provider is reachable by glob as well as
+  explicitly. `openrouter` `base_url` is `https://openrouter.ai/api`
+  (not `/api/v1`): babelgate joins `base_url` + `/v1/…`, matching the
+  gate script's comment and `docs/recipes/claude-code.md`.
+- **Provider table rows labelled "live-tested"** are OpenRouter (the
+  v1.1/v1.2 release gate ran `qwen/qwen3-coder` through it) and Ollama
+  (launch target, nightly live suite); all others are "from provider
+  docs" with the doc URL and the 2026-11-02 check date, per the plan.
+- **README edits beyond the new section** are the lines the v1.2
+  behaviour made false: `SOURCE_API` marked deprecated, env-only rows
+  tagged "env-only", the "one pair per instance" bullet replaced by the
+  §2.2 limitations (no hot reload, no overall deadline), the
+  source-detection step rewritten, and the CLI usage block synced to
+  `--help`.
+- **Files outside the Files block:** `src/cli.ts`, `src/cli.test.ts`
+  (owner decision above). Everything else is inside it.
