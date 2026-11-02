@@ -1,39 +1,53 @@
 #!/usr/bin/env bash
-# Claude Code edit gate (spec §4.7, D3): copies the failing edit-task
-# fixture to a temp dir, starts babelgate with the claude-code preset,
-# lets Claude Code fix the bug through the proxy, then runs npm test
+# Claude Code edit gate (spec §4.7, D3; the `config` mode was added for
+# the v1.2 gates, spec §4.5, D4): copies the failing edit-task fixture
+# to a temp dir, starts babelgate with the claude-code preset, lets
+# Claude Code fix the bug through the proxy, then runs npm test
 # itself. Pass = the fixture's test passes afterwards.
 #
 #   scripts/gates/claude-code-edit.sh <ollama|openrouter> [model]
+#   scripts/gates/claude-code-edit.sh config <path-to-yaml> [model-label]
 #
 # Real upstreams only — this script makes network calls. ollama needs a
 # reachable OLLAMA_API_BASE_URL (default http://localhost:11434);
-# openrouter needs OPENROUTER_API_KEY. The API key is never printed.
+# openrouter needs OPENROUTER_API_KEY; config mode takes whatever env the
+# YAML file's api_key_env entries name (e.g. OPENROUTER_API_KEY for
+# examples/claude-code-hybrid.yaml). The API key is never printed.
 set -euo pipefail
 
+# Caller's cwd, captured before the cd: `config` resolves a relative
+# YAML path against it.
+caller_pwd="$PWD"
 cd "$(dirname "$0")/../.."
 FIXTURE="scripts/gates/fixtures/edit-task"
 
 usage() {
   echo "usage: $0 <ollama|openrouter> [model]" >&2
+  echo "       $0 config <path-to-yaml> [model-label]" >&2
 }
 
 target="${1:-}"
 [ $# -gt 0 ] && shift
-model="${1:-}"
-[ $# -gt 0 ] && shift || true
-if [ $# -gt 0 ]; then
-  usage
-  exit 2
-fi
 
+# Argument-count validation (usage, exit 2) runs inside each branch
+# before any key or file check, so a bad invocation never exits 1.
 case "$target" in
   ollama)
-    model="${model:-qwen3-coder:30b}"
+    model="${1:-qwen3-coder:30b}"
+    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+      usage
+      exit 2
+    fi
     cli_args=(--preset claude-code --target ollama --model "$model")
     ;;
   openrouter)
-    model="${model:-qwen/qwen3-coder}"
+    model="${1:-qwen/qwen3-coder}"
+    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+      usage
+      exit 2
+    fi
     if [ -z "${OPENROUTER_API_KEY:-}" ]; then
       echo "GATE FAIL: OPENROUTER_API_KEY is not set" >&2
       exit 1
@@ -46,6 +60,29 @@ case "$target" in
       --preset claude-code --target openai --model "$model"
       --base-url https://openrouter.ai/api
     )
+    ;;
+  config)
+    config_path="${1:-}"
+    [ $# -gt 0 ] && shift || true
+    model="${1:-per-config}"
+    [ $# -gt 0 ] && shift || true
+    if [ -z "$config_path" ] || [ $# -gt 0 ]; then
+      usage
+      exit 2
+    fi
+    # The script cd'd to the repo root above; anchor a relative path to
+    # the caller's working directory (portable — no realpath).
+    case "$config_path" in
+      /*) ;;
+      *) config_path="$caller_pwd/$config_path" ;;
+    esac
+    if [ ! -f "$config_path" ]; then
+      echo "GATE FAIL: config file not found: $config_path" >&2
+      exit 1
+    fi
+    # The CLI rejects --target/--model/--base-url with a config file; the
+    # preset only selects which client export lines to print.
+    cli_args=(--preset claude-code --config "$config_path")
     ;;
   *)
     usage
@@ -81,6 +118,16 @@ port="$(node -e 'const s=require("net").createServer();s.listen(0,()=>{console.l
 
 if [ "$target" = "openrouter" ]; then
   OPENAI_API_KEY="$OPENROUTER_API_KEY" \
+    node dist/cli.js "${cli_args[@]}" --port "$port" \
+    >"$work/babelgate.log" 2>&1 &
+elif [ "$target" = "config" ]; then
+  # Config file defines every provider; the YAML's api_key_env names are
+  # read from this process's environment (spec §3.5 — *_API_BASE_URL env
+  # vars are ignored in config mode). NODE_ENV=production: the routing
+  # summary below parses the route log lines as JSON (pino-pretty is
+  # dev-only), and production also keeps upstream body previews out of
+  # the log.
+  NODE_ENV=production \
     node dist/cli.js "${cli_args[@]}" --port "$port" \
     >"$work/babelgate.log" 2>&1 &
 else
@@ -146,6 +193,41 @@ elapsed="$(( $(date +%s) - started ))"
 echo "claude version: $(claude --version 2>&1 | head -1)"
 echo "model: $model (target: $target)"
 echo "duration: ${elapsed}s"
+if [ "$target" = "config" ]; then
+  # Routing summary for the decisions record: count the "Request
+  # completed" route log lines (src/routing/route-log.ts) by winner and
+  # by reason, plus the multi-hop (fallback) count. The log is JSON in
+  # config mode (NODE_ENV=production above); non-JSON lines — the client
+  # exports and the routing table — are skipped. Only these aggregate
+  # fields are printed: no prompt text, model output or keys.
+  node -e '
+    const fs = require("fs");
+    const byWinner = {};
+    const byReason = {};
+    let total = 0;
+    let fallbacks = 0;
+    for (const line of fs.readFileSync(process.argv[1], "utf8").split("\n")) {
+      let rec;
+      try {
+        rec = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (rec.msg !== "Request completed") continue;
+      total += 1;
+      const winner = rec.winner === undefined ? "none" : String(rec.winner);
+      byWinner[winner] = (byWinner[winner] || 0) + 1;
+      const reason = rec.reason === undefined ? "unknown" : String(rec.reason);
+      byReason[reason] = (byReason[reason] || 0) + 1;
+      if (Array.isArray(rec.hops) && rec.hops.length > 1) fallbacks += 1;
+    }
+    const fmt = (o) =>
+      Object.keys(o).sort().map((k) => `${k}=${o[k]}`).join(" ") || "-";
+    console.log(`routing summary: ${total} requests, ${fallbacks} fallbacks (>1 hop)`);
+    console.log(`  by winner: ${fmt(byWinner)}`);
+    console.log(`  by reason: ${fmt(byReason)}`);
+  ' "$work/babelgate.log"
+fi
 if [ -n "$pass" ]; then
   echo "GATE PASS"
 else
