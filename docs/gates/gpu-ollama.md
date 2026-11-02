@@ -108,12 +108,16 @@ OPENROUTER_API_KEY=<key> CLAUDE_CODE_MAX_OUTPUT_TOKENS=1024 \
 ```
 
 **Seeing which provider served the requests:** every proxied response
-carries `x-babelgate-provider` (and `x-babelgate-attempts` when a
+carries `x-babelgate-provider` and `x-babelgate-attempts` (> 1 means a
 fallback fired), and babelgate logs one route log line per request
-(`"Request completed"` with `reason`, `hops` and `winner`). The gate
-script keeps babelgate's log in its temp dir and tails it on
-`GATE FAIL`; to watch routing live, start babelgate in a second
-terminal — `OPENROUTER_API_KEY=<key> node dist/cli.js --config
+(`"Request completed"` with `reason`, `hops` and `winner`). After the
+Claude Code run the script prints a routing summary — request counts by
+`winner` and by `reason`, plus the count of multi-hop (fallback)
+requests — take the providers-used numbers for the record below from
+it. The full log lives only in the script's temp dir and is deleted on
+exit (it is tailed to stderr only when babelgate itself fails to
+start); to watch routing live, start babelgate in a second terminal —
+`OPENROUTER_API_KEY=<key> node dist/cli.js --config
 examples/claude-code-hybrid.yaml --preset claude-code --port <port>` —
 and read the route lines there.
 
@@ -144,8 +148,8 @@ line per gate:
   <version>, `qwen3-coder:30b` on <GPU, e.g. RTX 4090 24 GB>, <duration>,
   <cost>. <date>
 - **Gate 2 (Claude Code ↔ hybrid config):** `GATE PASS` — Claude Code
-  <version>, providers used <ollama/openrouter per x-babelgate-provider
-  or the route log>, <duration>, <cost>. <date>
+  <version>, providers used <winner counts from the script's routing
+  summary, e.g. `ollama=10 openrouter=2`>, <duration>, <cost>. <date>
 - **Gate 3 (Gemini live):** all `gemini`-target cases passed —
   <N passed>/<N total>, <date>
 ```

@@ -2159,6 +2159,20 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
 - **Files outside the Files block:** `scripts/gates/claude-code-edit.sh`
   (reason above). `docs/decisions.md` and `docs/gates/gpu-ollama.md` are
   inside it.
+- **Fix round 1:** `config` mode now prints a routing summary after the
+  Claude Code run — request counts by `winner` and `reason`, plus the
+  multi-hop (fallback) count, parsed from the JSON route log lines
+  (`NODE_ENV=production` on the spawned babelgate; `ollama`/`openrouter`
+  modes unchanged). It replaces the runbook's tail-the-log recipe: the
+  temp dir is deleted on exit. Arg validation order was also restored
+  (usage/exit 2 before key and file checks) and `config` resolves a
+  relative YAML path against the caller's cwd. `NODE_ENV=production` in
+  config mode also turns off the dev-only canonical schema validation
+  (src/services/chat.service.ts:115, models.service.ts:212) and enables
+  production error-detail hiding (error-handler.ts:107), so config-mode
+  gate runs use production behaviour while the `ollama`/`openrouter`
+  modes keep the default — accepted because the route log must be JSON
+  to summarise.
 
 ### Gate results — PENDING, owner runs
 
@@ -2168,8 +2182,9 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   duration `<duration>`, cost `<cost>`, date `<date>`.
 - **Gate 2 (Claude Code ↔ hybrid config):** `PENDING — owner run` —
   `scripts/gates/claude-code-edit.sh config examples/claude-code-hybrid.yaml`;
-  Claude Code version `<version>`, providers used `<per x-babelgate-provider>`,
+  Claude Code version `<version>`, providers used `<winner counts from
+  the script's routing summary>`,
   duration `<duration>`, cost `<cost>`, date `<date>`.
 - **Gate 3 (Gemini live):** `PENDING — owner run` —
-  `GEMINI_API_KEY=<key> npm run test:live`; `gemini`-target cases passed:
-  `<which cases / counts>`, date `<date>`.
+  `GEMINI_API_KEY=<key> OLLAMA_API_BASE_URL=<url> npm run test:live`;
+  `gemini`-target cases passed: `<which cases / counts>`, date `<date>`.
