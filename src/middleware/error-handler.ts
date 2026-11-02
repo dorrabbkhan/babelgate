@@ -108,6 +108,15 @@ export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
   const requestId = req.id;
   const sourceApi = res.locals.sourceApi as Provider | undefined;
 
+  // §3.4: errors after upstream attempts carry x-babelgate-attempts
+  // (and any other responseHeaders the pipeline attached) — set them
+  // before the dialect rendering below writes the body.
+  if (err instanceof ProxyError && err.responseHeaders !== undefined) {
+    for (const [name, value] of Object.entries(err.responseHeaders)) {
+      res.setHeader(name, value);
+    }
+  }
+
   if (err instanceof UpstreamError) {
     logUpstreamError(err, requestId);
   } else if (err instanceof ProxyError) {

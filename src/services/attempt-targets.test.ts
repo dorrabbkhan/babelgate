@@ -1,14 +1,33 @@
 import { describe, it, expect, vi } from "vitest";
-import { attemptTargets, canonicalForTarget } from "./attempt-targets";
+import {
+  attemptTargets,
+  canonicalForTarget,
+  type Hop,
+} from "./attempt-targets";
 import { createRegistry } from "../routing/registry";
 import type { ProviderEntry } from "../routing/registry";
 import type { RoutePlan } from "../routing/plan-route";
 import type { CanonicalRequest } from "../types/canonical.types";
+import { UpstreamError } from "../utils/errors";
 
 const registry = () =>
   createRegistry([
     { name: "ollama", type: "ollama", baseUrl: "http://ollama.test" },
   ]);
+
+const registry2 = () =>
+  createRegistry([
+    { name: "primary", type: "ollama", baseUrl: "http://primary.test" },
+    { name: "second", type: "openai", baseUrl: "http://second.test" },
+  ]);
+
+const plan2: RoutePlan = {
+  targets: [
+    { provider: "primary", model: "m1" },
+    { provider: "second", model: "m2" },
+  ],
+  reason: "rule:0",
+};
 
 describe("attemptTargets", () => {
   it("single target success records one ok hop", async () => {
@@ -49,6 +68,94 @@ describe("attemptTargets", () => {
 
     expect(err).toBe(boom);
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back on eligible errors and records hops", async () => {
+    const attempt = vi
+      .fn()
+      .mockRejectedValueOnce(new UpstreamError("down", 503, {}))
+      .mockResolvedValueOnce("done");
+
+    const result = await attemptTargets(plan2, registry2(), attempt, {
+      requestId: "r1",
+    });
+
+    expect(result.value).toBe("done");
+    expect(result.target).toEqual({ provider: "second", model: "m2" });
+    expect(result.entry.name).toBe("second");
+    expect(result.hops).toHaveLength(2);
+    expect(result.hops[0]).toMatchObject({
+      provider: "primary",
+      model: "m1",
+      outcome: "http_error",
+      status: 503,
+    });
+    expect(result.hops[1]).toMatchObject({
+      provider: "second",
+      model: "m2",
+      outcome: "ok",
+    });
+    expect(attempt).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops on a non-eligible error", async () => {
+    const err400 = new UpstreamError("bad request", 400, {});
+    const attempt = vi.fn().mockRejectedValue(err400);
+
+    const err = await attemptTargets(plan2, registry2(), attempt, {
+      requestId: "r1",
+    }).catch((e) => e);
+
+    expect(err).toBe(err400);
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(err.responseHeaders?.["x-babelgate-attempts"]).toBe("1");
+  });
+
+  // Review Focus 2: a client disconnect mid-attempt ends the loop —
+  // the signal check runs before eligibility, so the second attempt is
+  // never made.
+  it("client abort stops the fallback loop", async () => {
+    const ac = new AbortController();
+    const timeout = new UpstreamError(
+      "Upstream timed out after 50ms",
+      undefined,
+      undefined,
+      {},
+      504,
+    );
+    const attempt = vi.fn().mockImplementation(() => {
+      ac.abort();
+      return Promise.reject(timeout);
+    });
+
+    const err = await attemptTargets(plan2, registry2(), attempt, {
+      requestId: "r1",
+      signal: ac.signal,
+    }).catch((e) => e);
+
+    expect(err).toBe(timeout);
+    expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("last error carries x-babelgate-attempts", async () => {
+    const last = new UpstreamError("last", 500, {});
+    const attempt = vi
+      .fn()
+      .mockRejectedValueOnce(new UpstreamError("first", 503, {}))
+      .mockRejectedValueOnce(last);
+    const hops: Hop[] = [];
+
+    const err = await attemptTargets(plan2, registry2(), attempt, {
+      requestId: "r1",
+      hops,
+    }).catch((e) => e);
+
+    expect(err).toBe(last);
+    expect(err.responseHeaders?.["x-babelgate-attempts"]).toBe("2");
+    expect(attempt).toHaveBeenCalledTimes(2);
+    expect(hops).toHaveLength(2);
+    expect(hops[0]!.outcome).toBe("http_error");
+    expect(hops[1]!.outcome).toBe("http_error");
   });
 });
 

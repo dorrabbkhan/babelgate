@@ -330,15 +330,25 @@ describe("proxyRequest", () => {
       ([_fields, msg]) => msg === "Request completed",
     );
     expect(completed).toBeDefined();
+    // spec §3.4 route log record
     expect(completed![0]).toMatchObject({
       requestId: "r1",
       sourceApi: "openai",
-      targetApi: "ollama",
-      model: "gpt-4",
+      requestedModel: "gpt-4",
+      reason: "default",
+      winner: "ollama",
+      stream: false,
       inputTokens: 5,
       outputTokens: 1,
       finishReason: "stop",
-      upstreamDurationMs: 10,
+      hops: [
+        {
+          provider: "ollama",
+          model: "gpt-4",
+          outcome: "ok",
+          ms: expect.any(Number),
+        },
+      ],
     });
   });
 

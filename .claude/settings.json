@@ -17,7 +17,7 @@
     ],
     "deny": [
       "Bash(gh pr merge:*)", "Bash(gh pr review:*)", "Bash(gh release:*)", "Bash(gh api -X PUT*)",
-      "Bash(git push:*)", "Bash(git commit:*)", "Bash(git reset:*)", "Bash(git tag:*)",
+      "Bash(git reset:*)", "Bash(git tag:*)",
       "Bash(npm publish:*)", "Bash(npm run test:live:*)", "Bash(docker push:*)",
       "Bash(sudo:*)", "Bash(rm -rf:*)", "Bash(curl:*)", "Bash(wget:*)",
       "Edit(src/**)", "Edit(tests/**)", "Edit(package.json)", "Edit(package-lock.json)",

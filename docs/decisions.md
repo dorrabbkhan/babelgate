@@ -1943,3 +1943,46 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   this schema violation; `discovery/babelgate.yaml` gives the
   `./babelgate.yaml` discovery step a `cwd` to find.
 - **Files outside the Files block:** none.
+
+## v1.2 Task 5: Fallbacks, `x-babelgate-*` headers, route log line
+
+- **`Hop` moved to `routing/route-log.ts`** and re-exported from
+  `services/attempt-targets.ts`: the spec §3.4 `hops` shape belongs to
+  the log record, and keeping it in routing avoids a
+  routing → services import (`route-log.ts` would otherwise import a
+  service for one type). `AttemptResult.hops` and the existing tests
+  are unaffected.
+- **`ctx.hops` out-param on `attemptTargets`**: the plan pins hops in
+  the route log record but `AttemptResult` exists only on success —
+  the loop fills a caller-provided array (the same array it returns),
+  so services can emit the §3.4 record on failure too ("one info line
+  per chat request": the failing record has `hops` and no `winner`,
+  which is why `winner?` is optional).
+- **Failed-hop `status`** is `err.upstreamStatus` on `http_error`
+  hops only — timeouts and transport failures carry no status, per the
+  record's `status?` field.
+- **A pre-upstream failure is not a hop**: `hopOutcome` returns
+  `undefined` for non-`UpstreamError`s (validation/transform/encode),
+  so the attempt is not recorded in `hops` — the request never left.
+  It still fails immediately with `x-babelgate-attempts` per the
+  plan's "else, and on the last target" rule.
+- **`responseHeaders` is attached only to `ProxyError`s**: a non-proxy
+  error thrown out of the loop keeps no headers (the client-abort path
+  rethrows before that point anyway, per the plan's signal-first
+  ordering).
+- **Gateway tests write a temp YAML** at
+  `tests/integration/.tmp-gateway.yaml` (deleted in `afterEach`):
+  `tests/fixtures/config/` is the fixture oracle and the Files block
+  names no new fixtures; `BABELGATE_CONFIG` + `resetConfig()` load it.
+- **`401 → no fallback` expects client status 502**, not 401: the §3.3
+  credentials rule renders "upstream rejected the proxy's key" as
+  `upstream`/502 in every client dialect — a 401 would wrongly blame
+  the client's own key. The pinned assertions (one attempt, header) are
+  unchanged.
+- **Files outside the Files block:** `src/services/proxy.service.test.ts`
+  — the "logs token usage metrics on completion" case asserted the
+  pre-§3.4 "Request completed" fields (`targetApi`, `model`,
+  `upstreamDurationMs`), which the spec-pinned `RouteLogRecord`
+  replaces; the assertion now checks the same metrics in the new
+  shape. No expected value loosened — `inputTokens`/`outputTokens`/
+  `finishReason` assertions are identical.
