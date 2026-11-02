@@ -15,6 +15,7 @@ import { setupServer } from "msw/node";
 import request from "supertest";
 import { app } from "../../src/app";
 import { loadConfig, resetConfig } from "../../src/config/env-config";
+import { resetModelListCache } from "../../src/services/models.service";
 import { presetEnv } from "../../src/cli";
 import { adapters } from "../../src/transformers";
 import { makeCanonicalError } from "../../src/utils/canonical-error";
@@ -63,6 +64,7 @@ beforeEach(() => {
   process.env.UPSTREAM_RETRIES = "0";
   delete process.env.SOURCE_API;
   process.env.TARGET_API = "ollama";
+  resetModelListCache();
   resetConfig();
 });
 
@@ -603,5 +605,138 @@ describe("gateway: fallbacks and routing headers (spec §3.4)", () => {
     expect(
       (record.hops as { provider?: string; outcome?: string }[])[0],
     ).toMatchObject({ provider: "main", outcome: "ok" });
+  });
+});
+
+/**
+ * The merged model list (spec §3.6): aliases as bare names, the
+ * default provider's models bare, every other provider's models as
+ * <provider>/<model> — in the client's own dialect. A failed provider
+ * is omitted with x-babelgate-partial: true; when every provider
+ * fails, the default provider's error comes back as in v1.1.
+ */
+const MERGED_YAML = `default: main
+providers:
+  main:
+    type: ollama
+    base_url: ${MOCK_BASE_URLS.ollama}
+  second:
+    type: openai
+    base_url: ${OPENAI2_BASE_URL}
+    api_key_env: OPENAI2_API_KEY
+aliases:
+  fast: second/gpt-4o
+`;
+
+const MERGED_DEAD_YAML = `default: main
+providers:
+  main:
+    type: ollama
+    base_url: ${MOCK_BASE_URLS.ollama}
+  second:
+    type: openai
+    base_url: ${OPENAI2_BASE_URL}
+    api_key_env: OPENAI2_API_KEY
+  dead:
+    type: ollama
+    base_url: ${DEAD_BASE_URL}
+aliases:
+  fast: second/gpt-4o
+`;
+
+const ALL_DEAD_YAML = `default: main
+providers:
+  main:
+    type: ollama
+    base_url: ${DEAD_BASE_URL}
+  other:
+    type: ollama
+    base_url: ${DEAD_BASE_URL}
+`;
+
+// alias `fast`, ollama's two fixture models bare, openai's two prefixed.
+const MERGED_IDS = [
+  "fast",
+  "llama3:latest",
+  "mistral:latest",
+  "second/gpt-4o",
+  "second/gpt-4o-mini",
+];
+
+describe("gateway: merged model list (spec §3.6)", () => {
+  const useConfig = (yaml: string) => {
+    writeFileSync(TMP_CONFIG, yaml);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+  };
+
+  it("merged list in every source format", async () => {
+    useConfig(MERGED_YAML);
+
+    const openai = await request(app).get("/v1/models");
+    expect(openai.status, JSON.stringify(openai.body)).toBe(200);
+    expect(
+      (openai.body.data as { id: string }[]).map((m) => m.id),
+    ).toEqual(MERGED_IDS);
+    expect(openai.headers["x-babelgate-partial"]).toBeUndefined();
+
+    const anthropic = await request(app)
+      .get("/v1/models")
+      .set("anthropic-version", "2023-06-01");
+    expect(anthropic.status, JSON.stringify(anthropic.body)).toBe(200);
+    expect(
+      (anthropic.body.data as { id: string; type: string }[]).map(
+        (m) => m.id,
+      ),
+    ).toEqual(MERGED_IDS);
+    for (const m of anthropic.body.data as { type: string }[]) {
+      expect(m.type).toBe("model");
+    }
+
+    const gemini = await request(app).get("/v1beta/models");
+    expect(gemini.status, JSON.stringify(gemini.body)).toBe(200);
+    expect(
+      (gemini.body.models as { name: string }[]).map((m) => m.name),
+    ).toEqual(MERGED_IDS.map((id) => `models/${id}`));
+
+    const ollama = await request(app).get("/api/tags");
+    expect(ollama.status, JSON.stringify(ollama.body)).toBe(200);
+    expect(
+      (ollama.body.models as { name: string }[]).map((m) => m.name),
+    ).toEqual(MERGED_IDS);
+  });
+
+  it("one provider fails → 200 with x-babelgate-partial: true", async () => {
+    useConfig(MERGED_DEAD_YAML);
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const res = await request(app).get("/v1/models");
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.headers["x-babelgate-partial"]).toBe("true");
+    expect((res.body.data as { id: string }[]).map((m) => m.id)).toEqual(
+      MERGED_IDS,
+    );
+    // The failed provider is omitted with one warn line naming it —
+    // no keys, no body text.
+    const warn = warnSpy.mock.calls.find(
+      ([fields]) => (fields as { provider?: string }).provider === "dead",
+    );
+    expect(warn).toBeDefined();
+  });
+
+  it("every provider fails → the default provider's error, as today", async () => {
+    useConfig(ALL_DEAD_YAML);
+
+    const res = await request(app).get("/v1/models");
+
+    // A transport failure on the default provider renders as 502 in
+    // the client's (OpenAI) dialect — the v1.1 error path unchanged.
+    expect(res.status, JSON.stringify(res.body)).toBe(502);
+    expect(
+      (res.body as { error?: unknown }).error,
+      JSON.stringify(res.body),
+    ).toBeDefined();
+    expect(res.headers["x-babelgate-partial"]).toBeUndefined();
   });
 });
