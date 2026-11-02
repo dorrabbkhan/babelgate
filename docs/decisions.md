@@ -2157,8 +2157,10 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   OpenRouter/Gemini key — results below are placeholders for the owner
   to fill in on this branch.
 - **Files outside the Files block:** `scripts/gates/claude-code-edit.sh`
-  (reason above). `docs/decisions.md` and `docs/gates/gpu-ollama.md` are
-  inside it.
+  (reason above) and `docs/conductor/notes/v1.2/task11.md` — the
+  conductor note telling Task 11 to flag the pending gates in its PR
+  body (owner decision above). `docs/decisions.md` and
+  `docs/gates/gpu-ollama.md` are inside it.
 - **Fix round 1:** `config` mode now prints a routing summary after the
   Claude Code run — request counts by `winner` and `reason`, plus the
   multi-hop (fallback) count, parsed from the JSON route log lines
@@ -2175,6 +2177,10 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   to summarise.
 
 ### Gate results — PENDING, owner runs
+
+The owner deferred the gate runs to release time (2026-11-02, PR #53,
+no GPU host yet): the gates block the `v1.2.0` tag, not this PR, and
+the results below are recorded before tagging.
 
 - **Gate 1 (Claude Code ↔ Ollama GPU):** `PENDING — owner run` —
   `scripts/gates/claude-code-edit.sh ollama qwen3-coder:30b`;
