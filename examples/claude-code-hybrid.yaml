@@ -1,8 +1,12 @@
 # Claude Code on local Ollama, with long contexts and outages on OpenRouter.
 # Recipe: docs/recipes/claude-code-hybrid.md
 #
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo claude-code-hybrid.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/claude-code-hybrid.yaml
 #   OPENROUTER_API_KEY=<key> \
-#     npx babelgate --config examples/claude-code-hybrid.yaml --preset claude-code
+#     npx babelgate --config claude-code-hybrid.yaml --preset claude-code
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
 #
 # Routing (first match wins; anything unmatched goes to the default):
 #   claude-*haiku*                    -> ollama/qwen2.5-coder:7b

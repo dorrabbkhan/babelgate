@@ -64,9 +64,15 @@ babelgate appends `/v1/chat/completions` itself.
 
 ## Run it
 
+The npm package doesn't ship `examples/`, so download the file linked
+above first (saving it as `babelgate.yaml` also works —
+`./babelgate.yaml` is auto-discovered):
+
 ```bash
+curl -fsSLo claude-code-hybrid.yaml \
+  https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/claude-code-hybrid.yaml
 OPENROUTER_API_KEY=<your key> \
-  npx babelgate --config examples/claude-code-hybrid.yaml --preset claude-code
+  npx babelgate --config claude-code-hybrid.yaml --preset claude-code
 ```
 
 With `--preset`, babelgate prints Claude Code's two lines (the preset
@@ -77,9 +83,10 @@ export ANTHROPIC_BASE_URL=http://localhost:3000
 export ANTHROPIC_AUTH_TOKEN=babelgate
 ```
 
-then the endpoints block and the routing table. Export the two lines in
-the shell you'll run `claude` in (and unset `ANTHROPIC_API_KEY` /
-`ANTHROPIC_MODEL` there), then start Claude Code.
+then the routing table (the endpoints block prints only without
+`--preset`). Export the two lines in the shell you'll run `claude` in
+(and unset `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` there), then start
+Claude Code.
 
 ## Seeing the routing work
 

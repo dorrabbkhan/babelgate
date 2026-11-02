@@ -1,8 +1,12 @@
 # One endpoint, three providers: local Ollama by default, OpenRouter and
 # Anthropic by model name, plus short aliases.
 #
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo multi-provider.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/multi-provider.yaml
 #   OPENROUTER_API_KEY=<key> ANTHROPIC_API_KEY=<key> \
-#     npx babelgate --config examples/multi-provider.yaml
+#     npx babelgate --config multi-provider.yaml
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
 #
 # Model resolution order: explicit <provider>/<model> in the request,
 # then aliases, then routes in order, then the default provider

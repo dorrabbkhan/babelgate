@@ -97,9 +97,15 @@ Gemini and Ollama SDKs all work against it — and routes each request to
 one of several providers by model name, with aliases, a long-context
 condition, and fallbacks before the first byte:
 
+The npm package doesn't ship `examples/` — fetch the file first (saving
+it as `babelgate.yaml` also works, since `./babelgate.yaml` is
+auto-discovered):
+
 ```bash
+curl -fsSLo claude-code-hybrid.yaml \
+  https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/claude-code-hybrid.yaml
 OPENROUTER_API_KEY=<your key> \
-  npx babelgate --config examples/claude-code-hybrid.yaml --preset claude-code
+  npx babelgate --config claude-code-hybrid.yaml --preset claude-code
 ```
 
 [examples/claude-code-hybrid.yaml](examples/claude-code-hybrid.yaml)
@@ -127,7 +133,8 @@ provider with the model unchanged. Replies always keep the name the
 client asked for. Walkthrough:
 [docs/recipes/claude-code-hybrid.md](docs/recipes/claude-code-hybrid.md);
 a second example with three providers and aliases lives at
-[examples/multi-provider.yaml](examples/multi-provider.yaml).
+[examples/multi-provider.yaml](examples/multi-provider.yaml) — fetch it
+the same way.
 
 Started without `--preset`, babelgate prints a client-facing endpoint
 per dialect — each is the **base URL the SDK expects**, which differs
