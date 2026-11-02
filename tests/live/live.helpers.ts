@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { expect } from 'vitest';
 import { resetConfig } from '../../src/config/env-config';
 import type { Provider } from '../../src/transformers';
@@ -235,6 +238,28 @@ export function useTarget(source: Provider, target: LiveTarget): void {
     process.env[baseUrlVar] = process.env[baseUrlVar] || LIVE_BASE_URLS[target];
   }
   resetConfig();
+}
+
+/**
+ * Write `yaml` to a temp file and point the in-process app at it:
+ * BABELGATE_CONFIG wins config discovery (spec §3.5), so the next
+ * request after resetConfig() loads the file. Returns a cleanup that
+ * restores the env, resets the config cache again and removes the temp
+ * dir — always call it, or every later test in the worker inherits the
+ * YAML config and useTarget() env is ignored.
+ */
+export function useYamlConfig(yaml: string): () => void {
+  const dir = mkdtempSync(join(tmpdir(), 'babelgate-live-'));
+  writeFileSync(join(dir, 'babelgate.yaml'), yaml);
+  const previous = process.env.BABELGATE_CONFIG;
+  process.env.BABELGATE_CONFIG = join(dir, 'babelgate.yaml');
+  resetConfig();
+  return () => {
+    if (previous === undefined) delete process.env.BABELGATE_CONFIG;
+    else process.env.BABELGATE_CONFIG = previous;
+    resetConfig();
+    rmSync(dir, { recursive: true, force: true });
+  };
 }
 
 // Shape assertions that prove the response came back in SOURCE format.

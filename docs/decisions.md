@@ -2101,3 +2101,27 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   `--help`.
 - **Files outside the Files block:** `src/cli.ts`, `src/cli.test.ts`
   (owner decision above). Everything else is inside it.
+
+## v1.2 Task 9: Live-suite gateway cases
+
+- **`useYamlConfig(yaml)` in `tests/live/live.helpers.ts`** writes the
+  YAML to a `mkdtemp` dir, sets `BABELGATE_CONFIG` and calls
+  `resetConfig()`; the returned cleanup restores the previous
+  `BABELGATE_CONFIG`, resets the config cache again and removes the
+  temp dir. `BABELGATE_CONFIG` (not `--config`/`setConfigPath`) drives
+  discovery so the in-process `app` picks the file up on the next
+  request — a live YAML overrides every `useTarget()` env.
+- **The OpenRouter case is wrapped in
+  `if (process.env.OPENROUTER_API_KEY)`**, matching the live suite's
+  conditional-inclusion convention (`liveTargets()`) — no `.skip`,
+  `skipIf` or `runIf` anywhere, and a console line reports the skip.
+- **Catch-all rule `*` → `ollama/<LIVE_OLLAMA_MODEL>`** (not the bare
+  `default:`) answers the short-prompt half of the long-context case,
+  so the requested model name never has to exist on the Ollama host.
+- **The dead provider is `type: openai` on `http://127.0.0.1:9`** with
+  a dummy `api_key_env` (`BABELGATE_LIVE_DEAD_KEY`) — connection
+  refused is a transport failure, fallback-eligible; `x-babelgate-*`
+  headers assert provider `ollama` and `attempts: 2`.
+- **Not run locally**: no Ollama on this machine; per the plan the
+  owner runs `npm run test:live` and pastes the summary in the PR.
+- **Files outside the Files block:** none.
