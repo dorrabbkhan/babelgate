@@ -2202,7 +2202,11 @@ the results below are recorded before tagging.
   openrouter.ai returned HTTP 504 "The operation was aborted" and 429
   "Provider returned error" for `qwen/qwen3-coder` (the owner's
   OpenRouter account has no paid credits); babelgate rendered them
-  correctly in each source dialect. Earlier attempts not counted as
+  correctly in each source dialect.
+  Confirmed upstream: after the owner added OpenRouter credit (account was `is_free_tier: true`), an
+  OpenRouter-only re-run on `main` (`npx vitest run --config vitest.live.config.ts -t "openrouter"`,
+  2026-11-03) passed 44 / 44 openrouter cases (57 others skipped by the filter).
+  Earlier attempts not counted as
   gate runs: free-tier key rate-limited (5 RPM, 504s); run 1 on the
   paid key 91 / 10 — two stale live tests (anthropic-source model list
   without `anthropic-version`; 16-token budget spent on thinking by
