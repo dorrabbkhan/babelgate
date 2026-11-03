@@ -204,6 +204,25 @@ export function chatCall(
   }
 }
 
+/**
+ * Output cap in the source's own dialect — each provider names it
+ * differently (`max_tokens`, `generationConfig.maxOutputTokens`,
+ * `options.num_predict`). Pass the result through `chatCall`'s
+ * `extra`, which merges it over the 16-token defaults.
+ */
+export function tokenBudget(
+  source: Provider,
+  tokens: number,
+): Record<string, unknown> {
+  if (source === 'gemini') {
+    return { generationConfig: { maxOutputTokens: tokens } };
+  }
+  if (source === 'ollama') {
+    return { options: { num_predict: tokens } };
+  }
+  return { max_tokens: tokens };
+}
+
 // Captured before any openrouter case runs so the OpenRouter key/URL
 // borrowed through the OpenAI env can't leak into a later real
 // "openai" target in the same process.
