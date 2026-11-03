@@ -2220,3 +2220,58 @@ the results below are recorded before tagging.
 - **Roadmap status line** per the plan: "v1.2 released … Next: v1.3",
   Last revised 2026-11-03.
 - **Files outside the Files block:** none.
+
+## v1.2 follow-ups
+
+### Live suite: gate 3 fixes (2026-11-03)
+
+Owner-approved 2026-11-03 (conductor conversation). Fixes found by
+Release Gate 3 (v1.2 plan Tasks 10/11): the owner's paid-Gemini live
+run scored 91 pass / 10 fail. Two causes, both fixed under
+`tests/live/` only — no `src/` changes, no fixture or snapshot
+changes, no assertion removed or weakened.
+
+- **A — the anthropic-source model list must identify itself as
+  Anthropic.** All five `'anthropic' → <target> model list` cases
+  failed with `expected undefined to be 'model'` at
+  `tests/live/live.helpers.ts:315` (`body.data[0].type`). Since v1.2
+  Task 2, `src/routing/detect-source.ts` treats `GET /v1/models` as
+  anthropic only when the request carries `anthropic-version` or
+  `x-api-key` (spec §3.2); the live case sent a bare GET, which is
+  answered in OpenAI format (in v1.1 `SOURCE_API` decided the format,
+  so the case passed then). Real Anthropic clients always send one of
+  those headers (Anthropic SDK: `anthropic-version`; Claude Code:
+  `x-api-key`), so the `chat.live.test.ts` model-list case now sets
+  `anthropic-version: 2023-06-01` when `source === 'anthropic'`.
+  Other sources are unchanged.
+- **B — 512-token budget for the `gemini` target (thinking model).**
+  Five gemini-target cases failed: `openai`/`gemini`/`ollama → gemini`
+  chat round trip (`expected '' to be truthy`,
+  `chat.live.test.ts:59`) and `gemini`/`ollama → gemini`
+  `stream:true → 200 stream in source dialect`
+  (`expected 'MAX_TOKENS' to be 'STOP'`, `errors.live.test.ts:119`;
+  `expected 1 to be greater than 1`, `errors.live.test.ts:124`). The
+  owner confirmed the upstream behaviour directly against Google:
+  `POST …/v1beta/models/gemini-3.8-flash:generateContent` with
+  `maxOutputTokens: 16` → `finishReason: MAX_TOKENS`,
+  `thoughtsTokenCount: 11`, `candidatesTokenCount: 1` — the model
+  spends the 16-token budget on thinking. Same failure mode and fix
+  as commit 87c45df (anthropic source 16 → 512, owner-approved
+  2026-10-29) and the existing 512 carve-outs for thinking-model
+  targets. The `chat round trip` case in `chat.live.test.ts` and the
+  `stream:true` case in `errors.live.test.ts` now send a 512-token
+  budget in each source's own dialect
+  (`max_tokens` / `generationConfig.maxOutputTokens` /
+  `options.num_predict`) when `target === 'gemini'`; every other
+  target keeps 16, and the STOP/MAX_TOKENS expectations are
+  unchanged.
+- **`tokenBudget` moved** from `stream.live.test.ts` to
+  `tests/live/live.helpers.ts` and exported so all three live files
+  share one implementation (the gemini-source stream case builds its
+  body from `chatCall('gemini', …)` directly, so the budget is passed
+  there too).
+- **Not run locally:** `npm run test:live` needs the owner's keys;
+  the live files typecheck and the full `./scripts/check.sh` gate
+  passes.
+- **Files outside the Files block:** none — `tests/live/*` and
+  `docs/decisions.md` only.
