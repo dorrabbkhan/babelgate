@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-03
+
+"One endpoint, many providers": one babelgate instance serves every client
+format on one port and routes each request to one of several configured
+providers by model name — with aliases, a long-context condition, fallbacks
+before the first byte and a merged model list.
+
+### Added
+
+- **All four client formats on one port.** OpenAI, Anthropic, Gemini and
+  Ollama paths are all live at once; the request itself decides the source
+  format (the path, plus the `anthropic-version` header on `GET /v1/models`).
+  A Gemini URL-path model — including percent-encoded names like
+  `/v1beta/models/openrouter%2Fqwen%2Fqwen3-coder:generateContent` —
+  resolves exactly like a body model.
+- **Model-name routing.** Resolution order: explicit `provider/model` →
+  exact, case-sensitive alias → ordered glob `routes` → `default`
+  provider. Model names keep `/` and `:` (`openrouter/qwen/qwen3-coder`,
+  `ollama/qwen3-coder:30b`), and replies keep the name the client asked
+  for. `MODEL_MAP` in env-only mode builds the equivalent routes against
+  the default provider, identical to v1.1.
+- **Long-context rule.** `when: { min_input_tokens: N }` on a route holds
+  when the `ceil(chars/4)` input-token estimate reaches N — short prompts
+  can go to a small local model and long ones to a bigger context.
+- **Fallback chains.** A route's `fallback` list is tried in order on
+  transport failure, connect/response-header timeout, or upstream `429`,
+  `500`, `502`, `503`, `504` or `529` — only before the first byte; once
+  2xx headers arrive the target is committed. If every target fails, the
+  last target's error is rendered in the client's dialect; a client
+  disconnect ends the loop.
+- **Routing response headers.** Every proxied chat reply carries
+  `x-babelgate-provider`, `x-babelgate-model` and `x-babelgate-attempts`;
+  an error reply after one or more attempts carries
+  `x-babelgate-attempts`; a partial model list carries
+  `x-babelgate-partial: true`.
+- **Merged model list.** `GET /v1/models`, `GET /v1beta/models` and
+  `GET /api/tags` return, in the client's format: aliases as bare names,
+  then the default provider's models bare, then every other provider's
+  models as `<provider>/<model>`. Provider lists are fetched in parallel
+  and cached in memory for 60 s (successful fetches only); a provider
+  whose list fails is omitted with a `warn` and
+  `x-babelgate-partial: true`.
+- **`babelgate.yaml` for multiple providers.** Discovery:
+  `--config <path>` → `BABELGATE_CONFIG` → `./babelgate.yaml` → env-only
+  mode. Providers declare `type`, `base_url`, `api_key_env` (env var
+  names only — keys never live in the file) and optional
+  `context_window`, `timeout_ms` and `stream_idle_ms`; plus `aliases`,
+  ordered `routes` with `when` and `fallback`, and a required `default`.
+  The schema is strict: an unknown key, a `default` that is not a
+  provider, a target without a registered provider prefix, an unset or
+  empty `api_key_env` variable, a duplicate alias, or an alias that is
+  also a provider name is a startup error naming the YAML path.
+  OpenAI-compatible backends (Groq, Together, DeepSeek, OpenRouter,
+  LM Studio, vLLM, llama.cpp) are `type: openai` with their own
+  `base_url`.
+- **CLI `--config` and endpoints block.** `babelgate --config <path>`
+  loads a YAML file; with a config file loaded, `--target`, `--model` and
+  `--base-url` are errors ("defined by the config file"). Without a
+  preset, startup prints the four client endpoints (OpenAI `…/v1`,
+  Anthropic, Gemini, Ollama) and the routing table.
+- **Route log line.** One `info` record per chat request replaces
+  "Forwarding request to upstream": requestId, source format, requested
+  model, route reason, per-hop outcome (`ok | http_error | timeout |
+  transport`), winner and token counts — never prompt bodies, completions
+  or keys.
+- **Examples, recipes and a GPU gate runbook.**
+  `examples/claude-code-hybrid.yaml` (Claude Code on a GPU Ollama host
+  with an OpenRouter long-context fallback),
+  `examples/multi-provider.yaml`, `docs/recipes/claude-code-hybrid.md`,
+  `docs/recipes/openai-compatible-providers.md` and
+  `docs/gates/gpu-ollama.md`.
+
+### Changed
+
+- **The other three formats' paths now answer instead of returning 404** —
+  the only wire-visible change for an existing env-only setup. An env-only
+  `TARGET_API=ollama` proxy that used to 404 `POST /v1/chat/completions`
+  now answers it in OpenAI format, and likewise for every other format.
+- **`POST /v1/messages/count_tokens` is answered whatever the configured
+  target** — the local `ceil(chars/4)` estimate marked
+  `x-babelgate-token-estimate: true`. Previously it was 404 unless the
+  target was anthropic.
+- The new `x-babelgate-*` response headers above are additive.
+
+### Deprecated
+
+- **`SOURCE_API`** is ignored — the request path decides the client
+  format. Setting it still starts the proxy but logs one startup warning;
+  it will be removed in 2.0.
+
+### Known limitations
+
+- **No config hot reload** — restart to pick up `babelgate.yaml` changes.
+- **No overall request deadline across fallback hops** — the worst case is
+  the sum of per-attempt timeouts.
+- **Ollama endpoints other than `/api/chat` and `/api/tags` are not
+  served** (`/api/version`, `/api/show`, `/api/generate`).
+
 ## [1.1.2] - 2026-10-29
 
 Milestone 2: the full streaming × tools matrix and live coverage for the
@@ -206,7 +304,8 @@ gets the repository ready for outside contributors.
 - **Ollama `thinking` output is dropped** by the proxy (the canonical
   format has no field for it); planned for v1.1.
 
-[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.2...HEAD
+[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.0.1...v1.1.0

@@ -2194,3 +2194,29 @@ the results below are recorded before tagging.
 - **Gate 3 (Gemini live):** `PENDING — owner run` —
   `GEMINI_API_KEY=<key> OLLAMA_API_BASE_URL=<url> npm run test:live`;
   `gemini`-target cases passed: `<which cases / counts>`, date `<date>`.
+
+## v1.2 Task 11: CHANGELOG, roadmap, 1.2.0 · OWNER GATE
+
+- **Release gates still `PENDING — owner run`.** The Task 10 entry above
+  records all three gates (Claude Code ↔ Ollama GPU, Claude Code ↔
+  hybrid config, Gemini live) as `PENDING` — deferred to release time by
+  the owner (2026-11-02, PR #53, no GPU host yet). They block the
+  `v1.2.0` tag, not this PR: the PR body lists each pending gate with
+  its runbook command under "Release gates pending — tag blocked", and
+  the PENDING lines, CHANGELOG and roadmap are left factual — no gate
+  results claimed, nothing removed or reworded.
+- **Version `1.2.0`** set in `package.json` and the two root
+  `"version"` entries of `package-lock.json` only (per the Files block);
+  dependency versions untouched.
+- **CHANGELOG `## [1.2.0] - 2026-11-03`** with the plan's sections —
+  Added (one port for all formats, routing, aliases, `min_input_tokens`,
+  fallbacks, merged model list, `babelgate.yaml`, `--config`,
+  `x-babelgate-*` headers), Changed (other formats' paths answer instead
+  of 404; `count_tokens` answered whatever the target), Deprecated
+  (`SOURCE_API`, removed in 2.0), Known limitations (spec §2.2: no hot
+  reload, no overall deadline, no `/api/show`/`/api/version`/
+  `/api/generate`). The date is the PR date; the tag lands after the
+  owner records the gate results.
+- **Roadmap status line** per the plan: "v1.2 released … Next: v1.3",
+  Last revised 2026-11-03.
+- **Files outside the Files block:** none.

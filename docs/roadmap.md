@@ -1,8 +1,8 @@
 # babelgate roadmap
 
-**Status:** v1.1.2 released — milestone 2 complete: all 16 source × target pairs pass the
-streaming × tools matrix and the live suite covers Gemini and Ollama sources.
-**Next:** v1.2. Last revised 2026-10-29. Reasoning behind this roadmap: the
+**Status:** v1.2 released — one endpoint, many providers: all four client formats on one
+port, model-name routing with aliases and fallbacks, a merged model list and `babelgate.yaml`.
+**Next:** v1.3. Last revised 2026-11-03. Reasoning behind this roadmap: the
 2026-10-26 roadmap design spec in `docs/superpowers/specs/`.
 
 **Positioning:** a small, typed, contract-tested gateway that translates **any client format to any
