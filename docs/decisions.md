@@ -2248,6 +2248,13 @@ the results below are recorded before tagging.
   tag is no longer blocked by gates. Runbook for the next release:
   `docs/gates/gpu-ollama.md` (rented GPU host, ≥ 24 GB VRAM — ≥ 32 GB
   recommended for Gate 2 — over an SSH tunnel).
+- **Extra end-to-end evidence (not a release gate).** Owner run,
+  2026-11-03, on this branch: `scripts/gates/claude-code-edit.sh
+  openrouter` → `GATE PASS` — Claude Code 2.1.317, `qwen/qwen3-coder`
+  on OpenRouter, duration 19 s. Claude Code fixed the edit-task
+  fixture through babelgate 1.2.0 and the fixture's `npm test` passed.
+  This is the v1.1 OpenRouter edit gate, not Gate 1 or 2 (both remain
+  deferred to v1.3).
 
 ## v1.2 follow-ups
 
