@@ -83,8 +83,9 @@ before the first byte and a merged model list.
 
 - **The other three formats' paths now answer instead of returning 404** —
   the only wire-visible change for an existing env-only setup. An env-only
-  `TARGET_API=ollama` proxy that used to 404 `POST /v1/chat/completions`
-  now answers it in OpenAI format, and likewise for every other format.
+  proxy started with `SOURCE_API=anthropic` that used to 404
+  `POST /v1/chat/completions` now answers it in OpenAI format, and
+  likewise for every other format.
 - **`POST /v1/messages/count_tokens` is answered on every instance,
   whatever the configured target** — the local `ceil(chars/4)` estimate
   marked `x-babelgate-token-estimate: true`. Previously it was served
