@@ -7,6 +7,7 @@ import {
   liveTargets,
   liveModel,
   chatCall,
+  tokenBudget,
   useTarget,
   type LiveTarget,
 } from './live.helpers';
@@ -181,21 +182,6 @@ function postRaw(path: string, body: unknown): request.Test {
       res.on('data', (chunk: string) => (text += chunk));
       res.on('end', () => cb(null, text));
     });
-}
-
-/** Output cap in the source's own dialect — each provider names it
- * differently. */
-function tokenBudget(
-  source: StreamSource,
-  tokens: number,
-): Record<string, unknown> {
-  if (source === 'gemini') {
-    return { generationConfig: { maxOutputTokens: tokens } };
-  }
-  if (source === 'ollama') {
-    return { options: { num_predict: tokens } };
-  }
-  return { max_tokens: tokens };
 }
 
 /** Replace the request's prompt in the source's own dialect. */

@@ -7,6 +7,7 @@ import {
   liveTargets,
   liveModel,
   chatCall,
+  tokenBudget,
   useTarget,
 } from './live.helpers';
 
@@ -155,15 +156,25 @@ describe.each(liveTargets().map((target) => ({ target })))(
       async ({ source, target }) => {
         useTarget(source, target);
 
-        // Gemini signals streaming in the path, not the body.
+        // Gemini signals streaming in the path, not the body. The
+        // gemini target runs a thinking model: the default 16-token
+        // budget is spent on reasoning, so the stream ends at
+        // MAX_TOKENS with no text — give it 512 tokens in the source's
+        // own dialect (owner's Gate 3 run; same carve-out as the
+        // chat round trip in chat.live.test.ts).
+        const extra: Record<string, unknown> =
+          target === 'gemini' ? tokenBudget(source, 512) : {};
         const call =
           source === 'gemini'
             ? {
                 method: 'POST' as const,
                 path: `/v1beta/models/${liveModel(target)}:streamGenerateContent?alt=sse`,
-                body: chatCall('gemini', liveModel(target)).body,
+                body: chatCall('gemini', liveModel(target), extra).body,
               }
-            : chatCall(source, liveModel(target), { stream: true });
+            : chatCall(source, liveModel(target), {
+                stream: true,
+                ...extra,
+              });
         const res = await postStream(call.path, call.body);
         const body = res.body as string;
 
