@@ -85,10 +85,10 @@ before the first byte and a merged model list.
   the only wire-visible change for an existing env-only setup. An env-only
   `TARGET_API=ollama` proxy that used to 404 `POST /v1/chat/completions`
   now answers it in OpenAI format, and likewise for every other format.
-- **`POST /v1/messages/count_tokens` is answered whatever the configured
-  target** — the local `ceil(chars/4)` estimate marked
-  `x-babelgate-token-estimate: true`. Previously it was 404 unless the
-  target was anthropic.
+- **`POST /v1/messages/count_tokens` is answered on every instance,
+  whatever the configured target** — the local `ceil(chars/4)` estimate
+  marked `x-babelgate-token-estimate: true`. Previously it was served
+  only when `SOURCE_API` was `anthropic` (404 otherwise).
 - The new `x-babelgate-*` response headers above are additive.
 
 ### Deprecated
