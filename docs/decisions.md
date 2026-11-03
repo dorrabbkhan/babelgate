@@ -2176,7 +2176,7 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   modes keep the default — accepted because the route log must be JSON
   to summarise.
 
-### Gate results — PENDING, owner runs
+### Gate results — Gate 3 PASS; Gates 1–2 PENDING, owner runs
 
 The owner deferred the gate runs to release time (2026-11-02, PR #53,
 no GPU host yet): the gates block the `v1.2.0` tag, not this PR, and
@@ -2191,9 +2191,23 @@ the results below are recorded before tagging.
   Claude Code version `<version>`, providers used `<winner counts from
   the script's routing summary>`,
   duration `<duration>`, cost `<cost>`, date `<date>`.
-- **Gate 3 (Gemini live):** `PENDING — owner run` —
-  `GEMINI_API_KEY=<key> OLLAMA_API_BASE_URL=<url> npm run test:live`;
-  `gemini`-target cases passed: `<which cases / counts>`, date `<date>`.
+- **Gate 3 (Gemini live):** `PASS` (owner run, 2026-11-03) —
+  `GEMINI_API_KEY=<key> OLLAMA_API_BASE_URL=<url> npm run test:live`,
+  on `main` at `519f8e0`, Gemini paid tier, model `gemini-3.8-flash`,
+  local CPU Ollama (Docker) `qwen2.5:0.5b`. `gemini`-target cases
+  passed: 16 / 16, 0 failed — chat round trip ×4, `stream:true` → 200
+  stream ×4, model list ×4, unknown model → 404 ×4 (sources openai,
+  anthropic, gemini, ollama). Whole suite: 90 passed / 11 failed; all
+  11 failures are on the `openrouter` target (not part of this gate):
+  openrouter.ai returned HTTP 504 "The operation was aborted" and 429
+  "Provider returned error" for `qwen/qwen3-coder` (the owner's
+  OpenRouter account has no paid credits); babelgate rendered them
+  correctly in each source dialect. Earlier attempts not counted as
+  gate runs: free-tier key rate-limited (5 RPM, 504s); run 1 on the
+  paid key 91 / 10 — two stale live tests (anthropic-source model list
+  without `anthropic-version`; 16-token budget spent on thinking by
+  `gemini-3.8-flash`, confirmed directly against Google: `MAX_TOKENS`,
+  `thoughtsTokenCount 11`), fixed in PR #55.
 
 ## v1.2 Task 11: CHANGELOG, roadmap, 1.2.0 · OWNER GATE
 
