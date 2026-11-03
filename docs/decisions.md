@@ -2176,17 +2176,19 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   modes keep the default — accepted because the route log must be JSON
   to summarise.
 
-### Gate results — Gate 3 PASS; Gates 1–2 PENDING, owner runs
+### Gate results — Gate 3 PASS; Gates 1–2 deferred to v1.3
 
 The owner deferred the gate runs to release time (2026-11-02, PR #53,
 no GPU host yet): the gates block the `v1.2.0` tag, not this PR, and
 the results below are recorded before tagging.
 
-- **Gate 1 (Claude Code ↔ Ollama GPU):** `PENDING — owner run` —
+- **Gate 1 (Claude Code ↔ Ollama GPU):** `DEFERRED to v1.3` (owner
+  decision, 2026-11-03 — no GPU host; not run for v1.2.0) —
   `scripts/gates/claude-code-edit.sh ollama qwen3-coder:30b`;
   Claude Code version `<version>`, model `<model>`, GPU `<gpu>`,
   duration `<duration>`, cost `<cost>`, date `<date>`.
-- **Gate 2 (Claude Code ↔ hybrid config):** `PENDING — owner run` —
+- **Gate 2 (Claude Code ↔ hybrid config):** `DEFERRED to v1.3` (owner
+  decision, 2026-11-03 — no GPU host; not run for v1.2.0) —
   `scripts/gates/claude-code-edit.sh config examples/claude-code-hybrid.yaml`;
   Claude Code version `<version>`, providers used `<winner counts from
   the script's routing summary>`,
@@ -2238,6 +2240,14 @@ the results below are recorded before tagging.
 - **Roadmap status line** per the plan: "v1.2 released … Next: v1.3",
   Last revised 2026-11-03.
 - **Files outside the Files block:** none.
+- **Release gates at tag time (owner decision, 2026-11-03).** Gate 3
+  PASS (recorded in the Task 10 entry). Gates 1 and 2 (Claude Code ↔
+  GPU Ollama `qwen3-coder:30b`; Claude Code ↔
+  `examples/claude-code-hybrid.yaml`) were not run: the owner deferred
+  them to v1.3 (no GPU host) and releases `1.2.0` without them. The
+  tag is no longer blocked by gates. Runbook for the next release:
+  `docs/gates/gpu-ollama.md` (rented GPU host, ≥ 24 GB VRAM — ≥ 32 GB
+  recommended for Gate 2 — over an SSH tunnel).
 
 ## v1.2 follow-ups
 

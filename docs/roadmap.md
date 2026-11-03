@@ -98,6 +98,8 @@ across every source × target, and a live smoke run against real upstreams befor
   routing-table viewer, and a playground that sends one prompt to N models side by side.
 - **`/metrics`** (Prometheus) and OpenTelemetry traces.
 - **Privacy by default.** Prompt bodies are not stored unless `LOG_BODIES=true`; redaction hooks.
+- **Carried over from v1.2: release Gates 1–2.** Claude Code ↔ GPU Ollama (`qwen3-coder:30b`) and Claude Code ↔
+  the hybrid YAML config, per `docs/gates/gpu-ollama.md`, run before the v1.3 tag.
 
 ### v1.4 API breadth (M)
 - **Embeddings.** OpenAI ↔ Gemini ↔ Ollama; `501` in the source's dialect for Anthropic.
