@@ -2176,24 +2176,85 @@ every failure a live-suite defect, not a babelgate defect — fixed as:
   modes keep the default — accepted because the route log must be JSON
   to summarise.
 
-### Gate results — PENDING, owner runs
+### Gate results — Gate 3 PASS; Gates 1–2 deferred to v1.3
 
 The owner deferred the gate runs to release time (2026-11-02, PR #53,
 no GPU host yet): the gates block the `v1.2.0` tag, not this PR, and
 the results below are recorded before tagging.
 
-- **Gate 1 (Claude Code ↔ Ollama GPU):** `PENDING — owner run` —
+- **Gate 1 (Claude Code ↔ Ollama GPU):** `DEFERRED to v1.3` (owner
+  decision, 2026-11-03 — no GPU host; not run for v1.2.0) —
   `scripts/gates/claude-code-edit.sh ollama qwen3-coder:30b`;
   Claude Code version `<version>`, model `<model>`, GPU `<gpu>`,
   duration `<duration>`, cost `<cost>`, date `<date>`.
-- **Gate 2 (Claude Code ↔ hybrid config):** `PENDING — owner run` —
+- **Gate 2 (Claude Code ↔ hybrid config):** `DEFERRED to v1.3` (owner
+  decision, 2026-11-03 — no GPU host; not run for v1.2.0) —
   `scripts/gates/claude-code-edit.sh config examples/claude-code-hybrid.yaml`;
   Claude Code version `<version>`, providers used `<winner counts from
   the script's routing summary>`,
   duration `<duration>`, cost `<cost>`, date `<date>`.
-- **Gate 3 (Gemini live):** `PENDING — owner run` —
-  `GEMINI_API_KEY=<key> OLLAMA_API_BASE_URL=<url> npm run test:live`;
-  `gemini`-target cases passed: `<which cases / counts>`, date `<date>`.
+- **Gate 3 (Gemini live):** `PASS` (owner run, 2026-11-03) —
+  `GEMINI_API_KEY=<key> OLLAMA_API_BASE_URL=<url> npm run test:live`,
+  on `main` at `519f8e0`, Gemini paid tier, model `gemini-3.8-flash`,
+  local CPU Ollama (Docker) `qwen2.5:0.5b`. `gemini`-target cases
+  passed: 16 / 16, 0 failed — chat round trip ×4, `stream:true` → 200
+  stream ×4, model list ×4, unknown model → 404 ×4 (sources openai,
+  anthropic, gemini, ollama). Whole suite: 90 passed / 11 failed; all
+  11 failures are on the `openrouter` target (not part of this gate):
+  openrouter.ai returned HTTP 504 "The operation was aborted" and 429
+  "Provider returned error" for `qwen/qwen3-coder` (the owner's
+  OpenRouter account has no paid credits); babelgate rendered them
+  correctly in each source dialect.
+  Confirmed upstream: after the owner added OpenRouter credit (account was `is_free_tier: true`), an
+  OpenRouter-only re-run on `main` (`npx vitest run --config vitest.live.config.ts -t "openrouter"`,
+  2026-11-03) passed 44 / 44 openrouter cases (57 others skipped by the filter).
+  Earlier attempts not counted as
+  gate runs: free-tier key rate-limited (5 RPM, 504s); run 1 on the
+  paid key 91 / 10 — two stale live tests (anthropic-source model list
+  without `anthropic-version`; 16-token budget spent on thinking by
+  `gemini-3.8-flash`, confirmed directly against Google: `MAX_TOKENS`,
+  `thoughtsTokenCount 11`), fixed in PR #55.
+
+## v1.2 Task 11: CHANGELOG, roadmap, 1.2.0 · OWNER GATE
+
+- **Release gates still `PENDING — owner run`.** The Task 10 entry above
+  records all three gates (Claude Code ↔ Ollama GPU, Claude Code ↔
+  hybrid config, Gemini live) as `PENDING` — deferred to release time by
+  the owner (2026-11-02, PR #53, no GPU host yet). They block the
+  `v1.2.0` tag, not this PR: the PR body lists each pending gate with
+  its runbook command under "Release gates pending — tag blocked", and
+  the PENDING lines, CHANGELOG and roadmap are left factual — no gate
+  results claimed, nothing removed or reworded.
+- **Version `1.2.0`** set in `package.json` and the two root
+  `"version"` entries of `package-lock.json` only (per the Files block);
+  dependency versions untouched.
+- **CHANGELOG `## [1.2.0] - 2026-11-03`** with the plan's sections —
+  Added (one port for all formats, routing, aliases, `min_input_tokens`,
+  fallbacks, merged model list, `babelgate.yaml`, `--config`,
+  `x-babelgate-*` headers), Changed (other formats' paths answer instead
+  of 404; `count_tokens` answered whatever the target), Deprecated
+  (`SOURCE_API`, removed in 2.0), Known limitations (spec §2.2: no hot
+  reload, no overall deadline, no `/api/show`/`/api/version`/
+  `/api/generate`). The date is the PR date; the tag lands after the
+  owner records the gate results.
+- **Roadmap status line** per the plan: "v1.2 released … Next: v1.3",
+  Last revised 2026-11-03.
+- **Files outside the Files block:** none.
+- **Release gates at tag time (owner decision, 2026-11-03).** Gate 3
+  PASS (recorded in the Task 10 entry). Gates 1 and 2 (Claude Code ↔
+  GPU Ollama `qwen3-coder:30b`; Claude Code ↔
+  `examples/claude-code-hybrid.yaml`) were not run: the owner deferred
+  them to v1.3 (no GPU host) and releases `1.2.0` without them. The
+  tag is no longer blocked by gates. Runbook for the next release:
+  `docs/gates/gpu-ollama.md` (rented GPU host, ≥ 24 GB VRAM — ≥ 32 GB
+  recommended for Gate 2 — over an SSH tunnel).
+- **Extra end-to-end evidence (not a release gate).** Owner run,
+  2026-11-03, on this branch: `scripts/gates/claude-code-edit.sh
+  openrouter` → `GATE PASS` — Claude Code 2.1.317, `qwen/qwen3-coder`
+  on OpenRouter, duration 19 s. Claude Code fixed the edit-task
+  fixture through babelgate 1.2.0 and the fixture's `npm test` passed.
+  This is the v1.1 OpenRouter edit gate, not Gate 1 or 2 (both remain
+  deferred to v1.3).
 
 ## v1.2 follow-ups
 

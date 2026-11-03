@@ -1,8 +1,8 @@
 # babelgate roadmap
 
-**Status:** v1.1.2 released — milestone 2 complete: all 16 source × target pairs pass the
-streaming × tools matrix and the live suite covers Gemini and Ollama sources.
-**Next:** v1.2. Last revised 2026-10-29. Reasoning behind this roadmap: the
+**Status:** v1.2 released — one endpoint, many providers: all four client formats on one
+port, model-name routing with aliases and fallbacks, a merged model list and `babelgate.yaml`.
+**Next:** v1.3. Last revised 2026-11-03. Reasoning behind this roadmap: the
 2026-10-26 roadmap design spec in `docs/superpowers/specs/`.
 
 **Positioning:** a small, typed, contract-tested gateway that translates **any client format to any
@@ -98,6 +98,8 @@ across every source × target, and a live smoke run against real upstreams befor
   routing-table viewer, and a playground that sends one prompt to N models side by side.
 - **`/metrics`** (Prometheus) and OpenTelemetry traces.
 - **Privacy by default.** Prompt bodies are not stored unless `LOG_BODIES=true`; redaction hooks.
+- **Carried over from v1.2: release Gates 1–2.** Claude Code ↔ GPU Ollama (`qwen3-coder:30b`) and Claude Code ↔
+  the hybrid YAML config, per `docs/gates/gpu-ollama.md`, run before the v1.3 tag.
 
 ### v1.4 API breadth (M)
 - **Embeddings.** OpenAI ↔ Gemini ↔ Ollama; `501` in the source's dialect for Anthropic.
