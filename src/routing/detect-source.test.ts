@@ -40,6 +40,16 @@ describe("detectSource", () => {
     ).toBe("gemini");
   });
 
+  it("gemini countTokens path is gemini", () => {
+    expect(
+      detectSource(
+        "POST",
+        "/v1beta/models/gemini-2.5-pro:countTokens",
+        noHeaders,
+      ),
+    ).toBe("gemini");
+  });
+
   it("POST /api/chat → ollama", () => {
     expect(detectSource("POST", "/api/chat", noHeaders)).toBe("ollama");
   });

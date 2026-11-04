@@ -2397,3 +2397,49 @@ google-genai-sdk/<v> gl-node/<v>`; key travels in `x-goog-api-key`
 state until the owner decides on gap 2. Steps 4–7 (countTokens,
 `parametersJsonSchema`, `engines`, tests) pause at the Step-3 scope
 check pending that decision.
+
+**Continuation (2026-11-04, owner decisions on PR #58):** the owner
+chose (a) for both escalations — the gemini request encoder emits
+`thoughtSignature: "skip_thought_signature_validator"` on every
+outgoing `functionCall` part (documented placeholder, part-level
+sibling of `functionCall`,
+https://ai.google.dev/gemini-api/docs/thought-signatures — field name
+and exact value confirmed against the recorded wire shape), and
+`:countTokens` is implemented per the plan's Interfaces with an
+expected-value change approved for
+`tests/integration/errors.test.ts:728-766` only (decision 2a).
+
+**Blocked on further expected-value approvals** (STOP reported, not
+implemented): the thoughtSignature placeholder changes the gemini
+request encoder's output shape, so `gemini.adapter.test.ts`
+"gemini functionResponse finds the name from history" (the
+`contents[1].parts[0]` `toEqual`) and "gemini request encoder still
+omits functionCall.id" (the `contents[0].parts[0]` `toEqual`) need
+`thoughtSignature` added to their expected parts; and `:countTokens`
+makes `proxy.service.test.ts` "gemini :countTokens → NotSupportedError
+'countTokens is not supported'" obsolete (the call now returns 200
+`{totalTokens}` locally). Both are outside the approved
+errors.test.ts scope, so they wait for the owner. The approved
+errors.test.ts edits (countTokens dropped from the `it.each`,
+tunedModels case → `embedContent`) land with the implementation.
+
+**Landed this round:** the `parametersJsonSchema` alias in
+`toCanonicalTools` (decoder only — `parameters` wins when both are
+present, matching what the encoder writes), `engines.node` `>=22.13`
+(owner-gated `package.json` change, flagged in the PR),
+`tests/integration/gemini-cli.test.ts` (embedContent → 501 case and
+the recorded-shape `parametersJsonSchema` case; the countTokens and
+placeholder cases were written, shown failing for the expected
+reasons — 501 UNIMPLEMENTED and no field — and removed pending the
+approvals above), and the `detect-source` countTokens guard.
+
+- **Files outside the Files block:** `src/transformers/adapters/
+  gemini.tools.ts` — the Step-3-approved `parametersJsonSchema` alias
+  lives in the tool-declaration decoder; the Files block names no
+  adapter file. `tests/integration/errors.test.ts` and
+  `src/services/proxy.service.test.ts` are also outside the block;
+  their changes are deferred to the approved implementation commit.
+- **Follow-ups:** Carry real `thoughtSignature` through canonical
+  (owner decision 1b, follow-up task in the Task 3 window).
+  `thinkingConfig`/`responseJsonSchema` passthrough (needs canonical
+  fields — owner-decision bucket, lower stakes).

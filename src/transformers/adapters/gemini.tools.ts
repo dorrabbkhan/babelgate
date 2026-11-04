@@ -150,21 +150,25 @@ export function toCanonicalTools(
     }
   }
   if (declarations.length === 0) return undefined;
-  return declarations.map((decl) => ({
-    type: "function" as const,
-    function: {
-      name: decl.name,
-      ...(decl.description !== undefined && {
-        description: decl.description,
-      }),
-      ...(decl.parameters !== undefined && {
-        parameters: decl.parameters as unknown as Record<
-          string,
-          unknown
-        >,
-      }),
-    },
-  }));
+  return declarations.map((decl) => {
+    // Gemini CLI sends parametersJsonSchema (full JSON Schema) rather
+    // than parameters (the documented subset) — evidence E11. The
+    // documented field wins when both are present, matching what the
+    // encoder writes back.
+    const parameters = (decl.parameters ??
+      (decl as { parametersJsonSchema?: unknown })
+        .parametersJsonSchema) as Record<string, unknown> | undefined;
+    return {
+      type: "function" as const,
+      function: {
+        name: decl.name,
+        ...(decl.description !== undefined && {
+          description: decl.description,
+        }),
+        ...(parameters !== undefined && { parameters }),
+      },
+    };
+  });
 }
 
 /** Gemini `toolConfig.functionCallingConfig` → canonical toolChoice. */
