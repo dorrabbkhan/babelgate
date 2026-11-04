@@ -138,6 +138,29 @@ describe("Gemini CLI essentials (spec §3.10)", () => {
     expect(capturedRequests.ollama).toHaveLength(0);
   });
 
+  it("countTokens accepts the generateContentRequest form", async () => {
+    // models.countTokens bodies take either `contents[]` or a full
+    // GenerateContentRequest under `generateContentRequest`
+    // (https://ai.google.dev/api/tokens) — the estimate counts the
+    // same input the same body sent to :generateContent would.
+    setPair("gemini", "ollama");
+
+    const res = await request(app)
+      .post("/v1beta/models/gemini-2.5-pro:countTokens")
+      .send({
+        generateContentRequest: {
+          contents: [
+            { role: "user", parts: [{ text: "count my tokens" }] },
+          ],
+        },
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.headers["x-babelgate-token-estimate"]).toBe("true");
+    expect(res.body.totalTokens).toBeGreaterThan(0);
+    expect(capturedRequests.ollama).toHaveLength(0);
+  });
+
   it("unsupported gemini method is a gemini 501", async () => {
     setPair("gemini", "ollama");
 

@@ -15,9 +15,8 @@ export const adapters: Record<Provider, ProviderAdapter<unknown, unknown>> = {
 
 export type RouteKind = "chat" | "models" | "count_tokens";
 
-export interface ProviderRoute {
-  /** Which canonical flow this route takes */
-  kind: RouteKind;
+/** Fields shared by every route kind. */
+interface ProviderRouteBase {
   /** HTTP method on the incoming request */
   method: "GET" | "POST";
   /** Incoming request path prefix */
@@ -34,9 +33,34 @@ export interface ProviderRoute {
   isSupportedPath?: (path: string) => boolean;
   /** Claim test when the prefix alone is ambiguous (gemini count_tokens shares the chat prefix) */
   matchesPath?: (path: string) => boolean;
-  /** Local count_tokens reply in this provider's dialect */
-  countTokensBody?: (estimate: number) => unknown;
 }
+
+/**
+ * A route is a discriminated union on `kind`: only `count_tokens`
+ * carries the reply/input shapes of the locally answered endpoint,
+ * and on it `countTokensBody` is required — the local answer can't
+ * exist without it.
+ */
+export type ProviderRoute = ProviderRouteBase &
+  (
+    | { kind: "chat" | "models" }
+    | {
+        kind: "count_tokens";
+        /** Local count_tokens reply in this provider's dialect */
+        countTokensBody: (estimate: number) => unknown;
+        /**
+         * Unwraps the provider's count-tokens request body into the
+         * chat-request shape the source adapter decodes. Gemini's
+         * `models.countTokens` takes either `contents[]` or a full
+         * `GenerateContentRequest` under `generateContentRequest`
+         * (googleapis proto google/ai/generativelanguage/v1beta/
+         * generative_service.proto, `CountTokensRequest` — `contents`
+         * is ignored when it is set); absent on providers whose
+         * count-tokens body already is the chat request (Anthropic).
+         */
+        countTokensRequest?: (body: unknown) => unknown;
+      }
+  );
 
 /**
  * The "<model>:<method>" pair carried in a gemini chat path
@@ -92,6 +116,15 @@ export const PROVIDER_ROUTES: Record<Provider, ProviderRoute[]> = {
       matchesPath: (path) =>
         geminiPathParts(path)?.method === "countTokens",
       countTokensBody: (estimate) => ({ totalTokens: estimate }),
+      // googleapis proto google/ai/generativelanguage/v1beta/
+      // generative_service.proto, `CountTokensRequest`: the body
+      // takes `contents[]` or a full GenerateContentRequest under
+      // `generateContentRequest`; `contents` is ignored when it is
+      // set. Unwrapping makes the estimate count the same input the
+      // same body sent to :generateContent would.
+      countTokensRequest: (body) =>
+        (body as { generateContentRequest?: unknown } | null)
+          ?.generateContentRequest ?? body,
     },
     {
       kind: "chat",

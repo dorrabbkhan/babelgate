@@ -2482,3 +2482,31 @@ lacks. Live check: `POST /v1beta/models/gemini-3.8-flash:countTokens`
   (owner decision 1b, follow-up task in the Task 3 window).
   `thinkingConfig`/`responseJsonSchema` passthrough (needs canonical
   fields — owner-decision bucket, lower stakes).
+
+**v1.3 Task 1 follow-ups (after PR #58)** — the owner's three
+non-blocking review notes, landed on `v1.3/task-1-followups`
+(2026-11-04):
+
+- **Lockfile engines sync** — `package-lock.json`'s root
+  `packages[""].engines.node` now reads `>=22.13` to match
+  `package.json`. The line is the owner's own commit `09c56dd`
+  ("Update package-lock.json"), cherry-picked onto this branch so
+  the owner stays its author; `git diff origin/main --
+  package-lock.json` is that one line.
+- **`:countTokens` accepts the `generateContentRequest` form** —
+  `models.countTokens` bodies take either `contents[]` or a full
+  `GenerateContentRequest` under `generateContentRequest`, with
+  `contents` ignored when it is set (googleapis proto
+  `google/ai/generativelanguage/v1beta/generative_service.proto`,
+  `CountTokensRequest`; REST doc https://ai.google.dev/api/tokens).
+  The gemini `count_tokens` route gained `countTokensRequest`,
+  which unwraps `generateContentRequest` before decode so the
+  estimate counts the same input the same body sent to
+  `:generateContent` would — route-level, no provider-pair branch
+  in `proxy.service.ts`, no canonical change.
+- **`countTokensBody` is now a type-level requirement** —
+  `ProviderRoute` is a discriminated union on `kind`; only the
+  `count_tokens` variant carries `countTokensBody` (required) and
+  `countTokensRequest` (optional). The non-null assertion in
+  `proxy.service.ts` is gone; a `count_tokens` route without
+  `countTokensBody` no longer typechecks.

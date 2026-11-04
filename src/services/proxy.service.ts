@@ -99,11 +99,17 @@ export async function proxyRequest(
     throw new NotSupportedError(`${methodFromPath(path)} is not supported`);
   }
 
-  // Source → Canonical. The adapter may throw on malformed input —
-  // that's a client error (400), not a server error (500).
+  // Source → Canonical. A count_tokens body may wrap the real chat
+  // request (Gemini's `generateContentRequest` form) — the route
+  // unwraps it before decode. The adapter may throw on malformed
+  // input — that's a client error (400), not a server error (500).
+  const decodeBody =
+    route.kind === "count_tokens"
+      ? (route.countTokensRequest?.(body) ?? body)
+      : body;
   let canonical: ReturnType<(typeof adapters)[Provider]["toCanonicalRequest"]>;
   try {
-    canonical = adapters[sourceApi].toCanonicalRequest(body);
+    canonical = adapters[sourceApi].toCanonicalRequest(decodeBody);
   } catch (err) {
     throw new ValidationError(
       `Malformed ${sourceApi} request: ${err instanceof Error ? err.message : "invalid body"}`,
@@ -145,7 +151,7 @@ export async function proxyRequest(
   if (route.kind === "count_tokens") {
     logger.info({ requestId, sourceApi }, "count_tokens answered locally");
     return {
-      body: route.countTokensBody!(estimatedInputTokens),
+      body: route.countTokensBody(estimatedInputTokens),
       headers: { "x-babelgate-token-estimate": "true" },
     };
   }
