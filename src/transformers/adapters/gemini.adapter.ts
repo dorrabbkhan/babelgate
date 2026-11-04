@@ -258,7 +258,20 @@ export function fromCanonicalRequest(
         parts = parts.filter(
           (p) => !("text" in p && p.text === ""),
         );
-        parts.push(...calls.map((call) => functionCallPart(call)));
+        // Gemini 3.x upstreams 400 unsigned history functionCall
+        // parts ("Function call is missing a thought_signature").
+        // Canonical can't carry real signatures yet (Task-3-window
+        // follow-up), so every outgoing functionCall part gets the
+        // documented placeholder — a part-level sibling, not a field
+        // of functionCall.
+        // https://ai.google.dev/gemini-api/docs/thought-signatures
+        parts.push(
+          ...calls.map((call) =>
+            functionCallPart(call, {
+              thoughtSignature: "skip_thought_signature_validator",
+            }),
+          ),
+        );
       }
       contents.push({ role: "model", parts });
     } else if (m.role === "tool") {

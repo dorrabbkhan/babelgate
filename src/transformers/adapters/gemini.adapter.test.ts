@@ -433,6 +433,7 @@ describe('Gemini Adapter', () => {
       });
       expect(result.contents[1].parts[0]).toEqual({
         functionCall: { name: 'get_weather', args: { city: 'Paris' } },
+        thoughtSignature: 'skip_thought_signature_validator',
       });
     });
 
@@ -458,6 +459,7 @@ describe('Gemini Adapter', () => {
 
       expect(result.contents[0].parts[0]).toEqual({
         functionCall: { name: 'f', args: { x: 1 } },
+        thoughtSignature: 'skip_thought_signature_validator',
       });
     });
 

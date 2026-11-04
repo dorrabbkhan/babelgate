@@ -728,7 +728,7 @@ describe("client auth in native headers (spec §3.4)", () => {
 describe("unsupported gemini methods (spec §3.2)", () => {
   it.each(
     providers.flatMap((target) =>
-      ["countTokens", "embedContent"].map((method) => ({ target, method })),
+      ["embedContent"].map((method) => ({ target, method })),
     ),
   )(
     "gemini non-chat method :$method → 501 in gemini dialect ($target)",
@@ -753,13 +753,13 @@ describe("unsupported gemini methods (spec §3.2)", () => {
     setPair("gemini", "ollama");
 
     const res = await request(app)
-      .post("/v1beta/models/tunedModels/my-model:countTokens")
+      .post("/v1beta/models/tunedModels/my-model:embedContent")
       .send(geminiFixtures.requests.basic as object);
 
     expect(res.status, JSON.stringify(res.body)).toBe(501);
     expect(res.body).toEqual(
       adapters.gemini.fromCanonicalError(
-        makeCanonicalError("unsupported", "countTokens is not supported"),
+        makeCanonicalError("unsupported", "embedContent is not supported"),
       ),
     );
     expect(capturedRequests.ollama).toHaveLength(0);

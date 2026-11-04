@@ -24,6 +24,7 @@ import type {
   FunctionResponsePart,
   GenerateContentRequest,
   GeminiFunctionCall,
+  GeminiFunctionCallPart,
   GeminiFunctionResponse,
   GeminiToolConfig,
   Part,
@@ -150,21 +151,25 @@ export function toCanonicalTools(
     }
   }
   if (declarations.length === 0) return undefined;
-  return declarations.map((decl) => ({
-    type: "function" as const,
-    function: {
-      name: decl.name,
-      ...(decl.description !== undefined && {
-        description: decl.description,
-      }),
-      ...(decl.parameters !== undefined && {
-        parameters: decl.parameters as unknown as Record<
-          string,
-          unknown
-        >,
-      }),
-    },
-  }));
+  return declarations.map((decl) => {
+    // Gemini CLI sends parametersJsonSchema (full JSON Schema) rather
+    // than parameters (the documented subset) — evidence E11. The
+    // documented field wins when both are present, matching what the
+    // encoder writes back.
+    const parameters = (decl.parameters ??
+      (decl as { parametersJsonSchema?: unknown })
+        .parametersJsonSchema) as Record<string, unknown> | undefined;
+    return {
+      type: "function" as const,
+      function: {
+        name: decl.name,
+        ...(decl.description !== undefined && {
+          description: decl.description,
+        }),
+        ...(parameters !== undefined && { parameters }),
+      },
+    };
+  });
 }
 
 /** Gemini `toolConfig.functionCallingConfig` → canonical toolChoice. */
@@ -232,11 +237,14 @@ export function functionResponseContent(
  * (default — requests stay byte-identical), while the response
  * encoder passes `includeId` so the client can echo
  * `functionResponse.id` back, matching the stream encoder's shape.
+ * `thoughtSignature` sets the part-level sibling — only the request
+ * encoder passes it (the `skip_thought_signature_validator`
+ * placeholder; responses and streams keep the wire signatures out).
  */
 export function functionCallPart(
   call: CanonicalToolCall,
-  opts: { includeId?: boolean } = {},
-): Part {
+  opts: { includeId?: boolean; thoughtSignature?: string } = {},
+): GeminiFunctionCallPart {
   const parsed = parseToolArguments(call.function.arguments);
   if (!parsed.valid) {
     logger.warn(
@@ -249,6 +257,9 @@ export function functionCallPart(
       name: call.function.name,
       args: parsed.args,
     },
+    ...(opts.thoughtSignature !== undefined && {
+      thoughtSignature: opts.thoughtSignature,
+    }),
   };
 }
 
