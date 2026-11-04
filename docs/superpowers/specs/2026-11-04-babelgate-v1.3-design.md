@@ -35,6 +35,9 @@ inspector is the differentiator and gets the most design care.
 | E7 | `engines` is `>=20`; CI, release and Docker run Node 22; Node 20 reached end of life in April 2026 | `package.json`, `.github/workflows`, `Dockerfile` | `node:sqlite` (unflagged from 22.13) is available without a native dependency |
 | E8 | v1.2 Gate 3 passed with Claude Code on OpenRouter `qwen/qwen3-coder`; users set `CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000` by hand | `docs/decisions.md` (v1.2 Task 10) | The output cap and cloud-model gates follow from real use |
 | E9 | Gemini CLI applies `GOOGLE_GEMINI_BASE_URL` only with `GEMINI_API_KEY` auth, sends the key in `x-goog-api-key`, and requires HTTPS unless the host is localhost | gemini-cli PR #25357 (merged 2026-04-15) and follow-up #26234 | Recipe constraints; the endpoint list must be recorded, not assumed |
+| E10 | Gemini CLI 0.66.0 calls only `:generateContent` (non-streaming router/helper calls) and `:streamGenerateContent?alt=sse` (every chat turn); no `:countTokens` and no `embedContent` observed | `record-gemini-cli.sh` recording, 2026-11-04 | `:countTokens` stays implemented per plan pre-approval; `embedContent` stays 501 |
+| E11 | The CLI's `functionDeclarations[]` use `parametersJsonSchema` (never `parameters`); history `functionCall` parts carry `id` + `thoughtSignature` (first parallel call only); `generationConfig` carries `thinkingConfig` | same recording | `parametersJsonSchema` alias decoded in Task 1; `thoughtSignature` needs a canonical slot → owner decision (see decisions.md v1.3 Task 1) |
+| E12 | User-Agent is `GeminiCLI-tui/<version>/<model> (<os>; <arch>; terminal)` plus `x-goog-api-client: google-genai-sdk/<v>`; key travels in `x-goog-api-key` | same recording | §3.4's `GeminiCLI` pattern matches; recipe header list |
 
 ### 1.3 Success criteria
 - Every chat request (streaming and not, success and failure) produces one trace that reaches the log,

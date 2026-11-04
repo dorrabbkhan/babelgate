@@ -2310,3 +2310,90 @@ changes, no assertion removed or weakened.
   passes.
 - **Files outside the Files block:** none — `tests/live/*` and
   `docs/decisions.md` only.
+
+## v1.3 Task 1 — Gemini CLI shape recording (2026-11-04)
+
+`scripts/gates/record-gemini-cli.sh` ran Gemini CLI **0.66.0**
+(google-genai-sdk 1.30.0, `npx @google/gemini-cli`) against
+`record-shapes.ts` in front of babelgate, in a temp copy of the
+edit-task fixture with `GEMINI_API_KEY=dummy`,
+`GOOGLE_GEMINI_BASE_URL=http://localhost:<recorderPort>`, a scratch
+`HOME` (selectedType `gemini-api-key`) and
+`GEMINI_CLI_TRUST_WORKSPACE=true`. Recorded JSONL:
+`tmp/gemini-cli-records/20261104-161147.jsonl` (+ `-162127`,
+`-160551` runs and a plain-prompt session against a stub).
+
+**Target deviation:** the plan names `ollama`/`openrouter` targets;
+neither was available on the conductor machine (no ollama, no
+`OPENROUTER_API_KEY`). A real Gemini upstream was — `GEMINI_API_KEY`
+in `.env` works, so the script gained a third mode
+`gemini [model]` (`--target gemini --base-url
+https://generativelanguage.googleapis.com`, `MODEL_MAP="*=<model>"`).
+Node fetch honours env proxies only with `NODE_USE_ENV_PROXY=1`
+behind this sandbox's egress proxy; the script makes no network
+assumptions itself.
+
+**Recorded endpoints (every distinct method path):**
+
+- `POST /v1beta/models/gemini-3.5-flash-lite:generateContent` —
+  non-streaming helper calls (model router), no query params.
+- `POST /v1beta/models/gemini-3.1-pro-preview:streamGenerateContent`
+  and `…/gemini-3.8-flash:streamGenerateContent` — every chat turn,
+  always `?alt=sse` (server-sent events), `Accept` streaming.
+- **No `:countTokens` and no `embedContent`** in v0.66.0 — neither the
+  edit task (which died early, see below) nor a completed
+  plain-prompt session called them. `:countTokens` is still
+  implemented per the plan's pre-approval.
+
+**Chat body shape:** top-level `contents`, `systemInstruction`
+(`{parts:[{text}], role:"user"}`), `tools[].functionDeclarations[]`,
+`generationConfig`. generationConfig carries `temperature`, `topP`,
+`topK`, `thinkingConfig {includeThoughts, thinkingLevel}`; the router
+call adds `responseMimeType` + `responseJsonSchema`.
+`thinkingConfig` has no canonical slot — silently dropped today
+(lossy but non-fatal; noted as a limitation, not fixed here).
+
+**User-Agent:** `GeminiCLI-tui/0.66.0/<model> (<os>; <arch>;
+terminal)` — spec §3.4's `GeminiCLI` substring matches it as
+`gemini-cli`. Companion header `x-goog-api-client:
+google-genai-sdk/<v> gl-node/<v>`; key travels in `x-goog-api-key`
+(E9 confirmed).
+
+**Proven gaps:**
+
+1. **`parametersJsonSchema` (in scope per Step 3 — alias decode).**
+   Every `functionDeclarations[]` entry uses `parametersJsonSchema`,
+   never `parameters`. The decoder read only `parameters` → all
+   tool schemas were dropped upstream-side; the model then emitted
+   an `update_topic` call missing the required `strategic_intent`
+   argument ("Error executing tool update_topic"). Decode alias only,
+   no canonical type touched — the plan's own Step-3 example.
+2. **`thoughtSignature` (out of scope — owner decision).** History
+   `functionCall` parts carry `id` and a sibling `thoughtSignature`
+   (first call of a parallel batch only, matching Google's docs);
+   `functionResponse` parts carry `id`. The adapter drops
+   `thoughtSignature`; Gemini-3.x upstreams then 400 the first
+   tool-history turn: "Function call is missing a thought_signature
+   in functionCall parts" (seen on `gemini-3.8-flash` and
+   `gemini-3.5-flash-lite`; `gemini-2.5-flash(-lite)` are retired on
+   this API key). `CanonicalToolCall` has no slot for it — a
+   canonical change, reserved for Task 3. Options for the owner:
+   (a) emit Google's documented `skip_thought_signature_validator`
+   placeholder on unsigned `functionCall` parts in the gemini
+   request encoder — encoder-only, no canonical change, unblocks
+   the CLI now at documented quality cost ("last resort" per
+   ai.google.dev/gemini-api/docs/thought-signatures); (b) carry real
+   signatures in a separate task (canonical change, e.g. inside the
+   Task-3 window); (c) document as a limitation. Recommended: (a)
+   now + (b) as a follow-up — Gemini→Gemini tool use is broken on
+   every 3.x model until one of them lands.
+3. **`thinkingConfig` / `responseJsonSchema` passthrough** — dropped
+   like every unknown `generationConfig` key; lossy, not fatal.
+   Needs canonical fields to fix → same owner-decision bucket, but
+   lower stakes (requests still 200).
+
+**Run did not complete:** the edit task died on the thoughtSignature
+400 at its second turn — `gemini edit task: FAIL` is the expected
+state until the owner decides on gap 2. Steps 4–7 (countTokens,
+`parametersJsonSchema`, `engines`, tests) pause at the Step-3 scope
+check pending that decision.
