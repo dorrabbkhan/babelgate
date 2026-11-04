@@ -2,11 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { proxyRequest } from "./proxy.service";
 import { resetConfig } from "../config/env-config";
-import {
-  NotSupportedError,
-  UpstreamError,
-  ValidationError,
-} from "../utils/errors";
+import { UpstreamError, ValidationError } from "../utils/errors";
 import { logger } from "../utils/logger";
 
 vi.mock("./http-client", () => ({
@@ -259,20 +255,21 @@ describe("proxyRequest", () => {
     expect(elements.at(-1)!.candidates?.[0]?.finishReason).toBe("STOP");
   });
 
-  it("gemini :countTokens → NotSupportedError 'countTokens is not supported'", async () => {
+  it("gemini :countTokens is answered locally with {totalTokens}", async () => {
     resetConfig();
 
-    const err = await proxyRequest(
+    const result = await proxyRequest(
       "/v1beta/models/llama3:countTokens",
       "POST",
       { contents: [{ role: "user", parts: [{ text: "Hello" }] }] },
       "r1",
       { source: "gemini" },
-    ).catch((e) => e);
+    );
 
-    expect(err).toBeInstanceOf(NotSupportedError);
-    expect(err.statusCode).toBe(501);
-    expect(err.message).toBe("countTokens is not supported");
+    expect(result).not.toBeNull();
+    const body = result!.body as { totalTokens?: number };
+    expect(body.totalTokens).toBeGreaterThan(0);
+    expect(result!.headers?.["x-babelgate-token-estimate"]).toBe("true");
     expect(mockPostJson).not.toHaveBeenCalled();
   });
 

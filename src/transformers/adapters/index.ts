@@ -32,6 +32,10 @@ export interface ProviderRoute {
   isStreamPath?: (path: string) => boolean;
   /** Path names a method this route serves (gemini chat only) */
   isSupportedPath?: (path: string) => boolean;
+  /** Claim test when the prefix alone is ambiguous (gemini count_tokens shares the chat prefix) */
+  matchesPath?: (path: string) => boolean;
+  /** Local count_tokens reply in this provider's dialect */
+  countTokensBody?: (estimate: number) => unknown;
 }
 
 /**
@@ -77,6 +81,18 @@ export const PROVIDER_ROUTES: Record<Provider, ProviderRoute[]> = {
     },
   ],
   gemini: [
+    {
+      // Answered locally (spec §3.10, E4) — must precede the
+      // /v1beta/models chat route: it shares that prefix and routes
+      // match in order. Claims only "<model>:countTokens" paths.
+      kind: "count_tokens",
+      method: "POST",
+      pathPrefix: "/v1beta/models",
+      requestPath: () => "/v1beta/models",
+      matchesPath: (path) =>
+        geminiPathParts(path)?.method === "countTokens",
+      countTokensBody: (estimate) => ({ totalTokens: estimate }),
+    },
     {
       kind: "chat",
       method: "POST",
@@ -127,6 +143,7 @@ export const PROVIDER_ROUTES: Record<Provider, ProviderRoute[]> = {
       method: "POST",
       pathPrefix: "/v1/messages/count_tokens",
       requestPath: () => "/v1/messages",
+      countTokensBody: (estimate) => ({ input_tokens: estimate }),
     },
     {
       kind: "chat",
@@ -153,7 +170,10 @@ export function findSourceRoute(
   path: string,
 ): ProviderRoute | undefined {
   return PROVIDER_ROUTES[source].find(
-    (r) => r.method === method && path.startsWith(r.pathPrefix),
+    (r) =>
+      r.method === method &&
+      path.startsWith(r.pathPrefix) &&
+      (r.matchesPath?.(path) ?? true),
   );
 }
 

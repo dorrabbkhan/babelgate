@@ -2433,12 +2433,51 @@ placeholder cases were written, shown failing for the expected
 reasons — 501 UNIMPLEMENTED and no field — and removed pending the
 approvals above), and the `detect-source` countTokens guard.
 
+**Continuation 2 (2026-11-04, approvals on PR #58):** the expected-
+value changes blocked above were approved by the owner on PR #58 and
+landed with the implementation:
+
+- `tests/integration/errors.test.ts` — `countTokens` dropped from the
+  `:method → 501` `it.each` (`embedContent` stays); the tunedModels
+  case now uses `:embedContent` (still 501).
+- `src/services/proxy.service.test.ts` — rewritten as "gemini
+  :countTokens is answered locally with {totalTokens}": 200
+  `{totalTokens: n}` (n > 0), the estimate header, no upstream call.
+- `src/transformers/adapters/gemini.adapter.test.ts` — the two
+  encoded `functionCall` parts gain
+  `thoughtSignature: "skip_thought_signature_validator"`;
+  `functionCall.id` stays omitted.
+
+No other existing expectation, fixture or contract snapshot changed.
+`record-gemini-cli.sh gemini gemini-3.8-flash` re-ran the edit task
+end-to-end: **PASS** (spec E13), where the earlier run died on the
+thought_signature 400.
+
+**Implementation notes:** `ProviderRoute` gained `matchesPath` (a
+claim test beyond the prefix — the gemini `count_tokens` route
+shares the chat route's `/v1beta/models` prefix, precedes it, and
+claims only `<model>:countTokens`) and `countTokensBody` (the
+dialect reply: `{totalTokens}` for gemini, `{input_tokens}` for
+anthropic). `functionCallPart` gained a `thoughtSignature` option;
+only `fromCanonicalRequest` passes the placeholder — the response
+and stream encoders are unchanged. `GeminiFunctionCallPart` was
+added to `gemini.types.ts` next to the other REST shapes the SDK
+lacks. Live check: `POST /v1beta/models/gemini-3.8-flash:countTokens`
+→ `200 {"totalTokens":63}` with `x-babelgate-token-estimate: true`;
+`:embedContent` still 501.
+
 - **Files outside the Files block:** `src/transformers/adapters/
   gemini.tools.ts` — the Step-3-approved `parametersJsonSchema` alias
-  lives in the tool-declaration decoder; the Files block names no
-  adapter file. `tests/integration/errors.test.ts` and
-  `src/services/proxy.service.test.ts` are also outside the block;
-  their changes are deferred to the approved implementation commit.
+  lives in the tool-declaration decoder, and `functionCallPart`'s
+  `thoughtSignature` option sits beside it; the Files block names no
+  adapter tool file. `src/transformers/adapters/gemini.adapter.ts`
+  (the request-encoder call site that passes the placeholder) and
+  `src/types/gemini.types.ts` (the `GeminiFunctionCallPart` wire
+  type) carry the rest of decision 1a.
+  `tests/integration/errors.test.ts`,
+  `src/services/proxy.service.test.ts` and
+  `src/transformers/adapters/gemini.adapter.test.ts` hold the
+  expected-value changes approved by the owner on PR #58.
 - **Follow-ups:** Carry real `thoughtSignature` through canonical
   (owner decision 1b, follow-up task in the Task 3 window).
   `thinkingConfig`/`responseJsonSchema` passthrough (needs canonical

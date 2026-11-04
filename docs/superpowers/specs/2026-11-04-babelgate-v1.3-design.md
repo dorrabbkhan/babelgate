@@ -38,6 +38,7 @@ inspector is the differentiator and gets the most design care.
 | E10 | Gemini CLI 0.66.0 calls only `:generateContent` (non-streaming router/helper calls) and `:streamGenerateContent?alt=sse` (every chat turn); no `:countTokens` and no `embedContent` observed | `record-gemini-cli.sh` recording, 2026-11-04 | `:countTokens` stays implemented per plan pre-approval; `embedContent` stays 501 |
 | E11 | The CLI's `functionDeclarations[]` use `parametersJsonSchema` (never `parameters`); history `functionCall` parts carry `id` + `thoughtSignature` (first parallel call only); `generationConfig` carries `thinkingConfig` | same recording | `parametersJsonSchema` alias decoded in Task 1; `thoughtSignature` needs a canonical slot → owner decision (see decisions.md v1.3 Task 1) |
 | E12 | User-Agent is `GeminiCLI-tui/<version>/<model> (<os>; <arch>; terminal)` plus `x-goog-api-client: google-genai-sdk/<v>`; key travels in `x-goog-api-key` | same recording | §3.4's `GeminiCLI` pattern matches; recipe header list |
+| E13 | With `thoughtSignature: "skip_thought_signature_validator"` on history `functionCall` parts, the same CLI run completes the edit task end-to-end against `gemini-3.8-flash` (the earlier run died on the first tool-history turn's 400) | `record-gemini-cli.sh` re-run, 2026-11-04 (`tmp/gemini-cli-records/20261104-165419.jsonl`) | Decision 1a validated live; real signature carry-through remains the follow-up |
 
 ### 1.3 Success criteria
 - Every chat request (streaming and not, success and failure) produces one trace that reaches the log,

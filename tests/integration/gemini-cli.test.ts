@@ -123,6 +123,21 @@ const RECORDED_HISTORY_BODY = {
 };
 
 describe("Gemini CLI essentials (spec §3.10)", () => {
+  it("countTokens answered locally", async () => {
+    setPair("gemini", "ollama");
+
+    const res = await request(app)
+      .post("/v1beta/models/gemini-2.5-pro:countTokens")
+      .send({
+        contents: [{ role: "user", parts: [{ text: "count my tokens" }] }],
+      });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.headers["x-babelgate-token-estimate"]).toBe("true");
+    expect(res.body.totalTokens).toBeGreaterThan(0);
+    expect(capturedRequests.ollama).toHaveLength(0);
+  });
+
   it("unsupported gemini method is a gemini 501", async () => {
     setPair("gemini", "ollama");
 
@@ -137,6 +152,36 @@ describe("Gemini CLI essentials (spec §3.10)", () => {
       ),
     );
     expect(capturedRequests.ollama).toHaveLength(0);
+  });
+
+  it("history functionCall parts send the thoughtSignature placeholder", async () => {
+    // The canonical format can't carry thoughtSignatures yet (v1.3
+    // owner decision 1a; real carry-through is a Task-3-window
+    // follow-up), so the request encoder emits Google's documented
+    // `skip_thought_signature_validator` placeholder on every outgoing
+    // functionCall part — without it Gemini 3.x upstreams 400 the
+    // first tool-history turn.
+    setPair("gemini", "gemini");
+
+    const res = await request(app)
+      .post("/v1beta/models/gemini-2.5-pro:generateContent")
+      .send(RECORDED_HISTORY_BODY);
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(capturedRequests.gemini).toHaveLength(1);
+    const upstream = capturedRequests.gemini[0] as {
+      contents?: { parts?: Record<string, unknown>[] }[];
+    };
+    const callPart = upstream.contents
+      ?.flatMap((c) => c.parts ?? [])
+      .find((p) => p.functionCall !== undefined);
+    expect(callPart).toEqual({
+      functionCall: {
+        name: "update_topic",
+        args: { title: "t", summary: "s" },
+      },
+      thoughtSignature: "skip_thought_signature_validator",
+    });
   });
 
   it("parametersJsonSchema decodes to tool parameters (recorded shape)", async () => {

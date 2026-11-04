@@ -66,6 +66,17 @@ export interface GeminiFunctionResponse {
   response: Record<string, unknown>;
 }
 
+/**
+ * A functionCall part may carry a part-level `thoughtSignature`
+ * sibling on the wire (real signatures from the model, or the
+ * documented `skip_thought_signature_validator` placeholder —
+ * https://ai.google.dev/gemini-api/docs/thought-signatures); the
+ * SDK's FunctionCallPart has no field for it.
+ */
+export interface GeminiFunctionCallPart extends FunctionCallPart {
+  thoughtSignature?: string;
+}
+
 /** toolConfig as sent on the wire; `mode` includes values newer than the SDK enum (e.g. VALIDATED). */
 export interface GeminiToolConfig {
   functionCallingConfig?: {

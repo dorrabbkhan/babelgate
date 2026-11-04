@@ -140,11 +140,12 @@ export async function proxyRequest(
   const estimatedInputTokens = estimateInputTokens(parsed.data);
 
   // §3.5: count_tokens is answered locally — a chars/4 estimate with the
-  // estimate header, never an upstream call.
+  // estimate header, never an upstream call. The reply shape is the
+  // source provider's (Anthropic input_tokens, Gemini totalTokens).
   if (route.kind === "count_tokens") {
     logger.info({ requestId, sourceApi }, "count_tokens answered locally");
     return {
-      body: { input_tokens: estimatedInputTokens },
+      body: route.countTokensBody!(estimatedInputTokens),
       headers: { "x-babelgate-token-estimate": "true" },
     };
   }

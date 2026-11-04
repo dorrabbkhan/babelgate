@@ -24,6 +24,7 @@ import type {
   FunctionResponsePart,
   GenerateContentRequest,
   GeminiFunctionCall,
+  GeminiFunctionCallPart,
   GeminiFunctionResponse,
   GeminiToolConfig,
   Part,
@@ -236,11 +237,14 @@ export function functionResponseContent(
  * (default — requests stay byte-identical), while the response
  * encoder passes `includeId` so the client can echo
  * `functionResponse.id` back, matching the stream encoder's shape.
+ * `thoughtSignature` sets the part-level sibling — only the request
+ * encoder passes it (the `skip_thought_signature_validator`
+ * placeholder; responses and streams keep the wire signatures out).
  */
 export function functionCallPart(
   call: CanonicalToolCall,
-  opts: { includeId?: boolean } = {},
-): Part {
+  opts: { includeId?: boolean; thoughtSignature?: string } = {},
+): GeminiFunctionCallPart {
   const parsed = parseToolArguments(call.function.arguments);
   if (!parsed.valid) {
     logger.warn(
@@ -253,6 +257,9 @@ export function functionCallPart(
       name: call.function.name,
       args: parsed.args,
     },
+    ...(opts.thoughtSignature !== undefined && {
+      thoughtSignature: opts.thoughtSignature,
+    }),
   };
 }
 
