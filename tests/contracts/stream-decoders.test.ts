@@ -468,4 +468,137 @@ describe("stream decoders", () => {
       { type: "message_end", finishReason: "stop" },
     ]);
   });
+
+  it("anthropic decoder carries message_start cache usage", () => {
+    // docs.claude.com/en/api/messages-streaming: input_tokens excludes
+    // cached tokens; the canonical inputTokens sums all three fields.
+    const sse = [
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_t1","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"cache_read_input_tokens":900,"cache_creation_input_tokens":90,"output_tokens":1}}}',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}',
+      'event: message_stop\ndata: {"type":"message_stop"}',
+      "",
+    ].join("\n\n");
+
+    const events = decode("anthropic", "claude-opus-5-5", [
+      new TextEncoder().encode(sse),
+    ]);
+    expect(events).toEqual([
+      {
+        type: "message_start",
+        id: "msg_t1",
+        model: "claude-opus-5-5",
+      },
+      { type: "text_delta", text: "Hi" },
+      {
+        type: "usage",
+        usage: {
+          inputTokens: 1000,
+          cacheReadTokens: 900,
+          cacheWriteTokens: 90,
+          outputTokens: 5,
+          totalTokens: 1005,
+        },
+      },
+      { type: "message_end", finishReason: "stop" },
+    ]);
+  });
+
+  it("openai decoder carries cached usage", () => {
+    // prompt_tokens_details.cached_tokens and cache_write_tokens map to
+    // canonical read/write; DeepSeek's prompt_cache_hit_tokens maps to
+    // read when prompt_tokens_details is absent.
+    const cached =
+      'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":1,"model":"gpt-4o","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_tokens_details":{"cached_tokens":40,"cache_write_tokens":8}}}\n' +
+      "data: [DONE]\n";
+    const deepseek =
+      'data: {"id":"chatcmpl-2","object":"chat.completion.chunk","created":1,"model":"deepseek-chat","choices":[],"usage":{"prompt_tokens":100,"completion_tokens":5,"total_tokens":105,"prompt_cache_hit_tokens":30,"prompt_cache_miss_tokens":70}}\n' +
+      "data: [DONE]\n";
+
+    expect(
+      decode("openai", "gpt-4o", [new TextEncoder().encode(cached)]),
+    ).toEqual([
+      { type: "message_start", id: "chatcmpl-1", model: "gpt-4o" },
+      {
+        type: "usage",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 5,
+          totalTokens: 105,
+          cacheReadTokens: 40,
+          cacheWriteTokens: 8,
+        },
+      },
+      { type: "message_end", finishReason: "unknown" },
+    ]);
+
+    expect(
+      decode("openai", "deepseek-chat", [
+        new TextEncoder().encode(deepseek),
+      ]),
+    ).toEqual([
+      { type: "message_start", id: "chatcmpl-2", model: "deepseek-chat" },
+      {
+        type: "usage",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 5,
+          totalTokens: 105,
+          cacheReadTokens: 30,
+        },
+      },
+      { type: "message_end", finishReason: "unknown" },
+    ]);
+  });
+
+  it("gemini decoder carries cachedContentTokenCount", () => {
+    // ai.google.dev/api/generate-content#UsageMetadata.
+    const sse =
+      'data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"Hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":100,"candidatesTokenCount":5,"totalTokenCount":105,"cachedContentTokenCount":60}}\n\n';
+
+    const events = decode("gemini", "gemini-2.5-flash", [
+      new TextEncoder().encode(sse),
+    ]);
+    expect(events).toEqual([
+      {
+        type: "message_start",
+        id: "call_0",
+        model: "gemini-2.5-flash",
+      },
+      { type: "text_delta", text: "Hi" },
+      {
+        type: "usage",
+        usage: {
+          inputTokens: 100,
+          outputTokens: 5,
+          totalTokens: 105,
+          cacheReadTokens: 60,
+        },
+      },
+      { type: "message_end", finishReason: "stop" },
+    ]);
+  });
+
+  it("ollama decoder emits no cache fields", () => {
+    // prompt_eval_cached_count is Ollama's own KV-cache reuse (spec §3.2:
+    // no cache fields are ever decoded or emitted for Ollama).
+    const ndjson =
+      '{"model":"qwen2.5:0.5b","message":{"role":"assistant","content":"Hi"},"done":false}\n' +
+      '{"model":"qwen2.5:0.5b","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":36,"prompt_eval_cached_count":35,"eval_count":10}\n';
+
+    const events = decode("ollama", "qwen2.5:0.5b", [
+      new TextEncoder().encode(ndjson),
+    ]);
+    expect(events).toEqual([
+      { type: "message_start", id: "call_0", model: "qwen2.5:0.5b" },
+      { type: "text_delta", text: "Hi" },
+      {
+        type: "usage",
+        usage: { inputTokens: 36, outputTokens: 10, totalTokens: 46 },
+      },
+      { type: "message_end", finishReason: "stop" },
+    ]);
+  });
 });

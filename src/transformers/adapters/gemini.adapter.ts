@@ -10,6 +10,7 @@ import type {
   CanonicalFinishReason,
   ProviderAdapter,
   CanonicalModelList,
+  CanonicalUsage,
   IdGenerator,
 } from "../../types/canonical.types";
 import {
@@ -18,6 +19,7 @@ import {
 } from "../../utils/canonical-error";
 import { ValidationError } from "../../utils/errors";
 import { createIdGenerator } from "../../utils/ids";
+import { systemText } from "../system-text";
 import type {
   Content,
   GenerateContentRequest,
@@ -312,18 +314,15 @@ export function fromCanonicalRequest(
     result.toolConfig = toolConfig;
   }
 
-  // Add system instruction
+  // Add system instruction — systemText flattens a parts prompt (§3.2)
   const systemMsg = request.messages.find((m) => m.role === "system");
-  if (systemMsg || request.systemPrompt) {
-    const systemText =
-      request.systemPrompt ||
-      (typeof systemMsg?.content === "string" ? systemMsg.content : "");
-    if (systemText) {
-      result.systemInstruction = {
-        role: "user" as GeminiRole,
-        parts: [{ text: systemText }],
-      };
-    }
+  const systemContent = systemText(request.systemPrompt) ??
+    (typeof systemMsg?.content === "string" ? systemMsg.content : "");
+  if (systemContent) {
+    result.systemInstruction = {
+      role: "user" as GeminiRole,
+      parts: [{ text: systemContent }],
+    };
   }
 
   // Add generation config
@@ -399,12 +398,50 @@ export function toCanonicalResponse(
         ? "tool_call"
         : mapFinishReason(candidate?.finishReason),
     usage: response.usageMetadata
-      ? {
-          inputTokens: response.usageMetadata.promptTokenCount ?? 0,
-          outputTokens: response.usageMetadata.candidatesTokenCount ?? 0,
-          totalTokens: response.usageMetadata.totalTokenCount ?? 0,
-        }
+      ? geminiUsageToCanonical(response.usageMetadata)
       : undefined,
+  };
+}
+
+/**
+ * usageMetadata → canonical (spec §3.2): `cachedContentTokenCount` maps to
+ * cacheReadTokens; `promptTokenCount` already includes cached tokens.
+ * Emitted only when non-zero (ai.google.dev/api/generate-content#UsageMetadata).
+ */
+export function geminiUsageToCanonical(usage: {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+  cachedContentTokenCount?: number;
+}): CanonicalUsage {
+  const read = usage.cachedContentTokenCount ?? 0;
+  const input = usage.promptTokenCount ?? 0;
+  const output = usage.candidatesTokenCount ?? 0;
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: usage.totalTokenCount ?? input + output,
+    ...(read > 0 && { cacheReadTokens: read }),
+  };
+}
+
+/** Canonical → usageMetadata; `cachedContentTokenCount` appears only when non-zero. */
+export function geminiUsageFromCanonical(
+  usage: NonNullable<CanonicalResponse["usage"]>,
+): {
+  promptTokenCount: number;
+  candidatesTokenCount: number;
+  totalTokenCount: number;
+  cachedContentTokenCount?: number;
+} {
+  return {
+    promptTokenCount: usage.inputTokens,
+    candidatesTokenCount: usage.outputTokens,
+    totalTokenCount: usage.totalTokens,
+    ...(usage.cacheReadTokens !== undefined &&
+      usage.cacheReadTokens > 0 && {
+        cachedContentTokenCount: usage.cacheReadTokens,
+      }),
   };
 }
 
@@ -470,11 +507,7 @@ export function fromCanonicalResponse(
     // modelVersion, matching the stream encoder.
     modelVersion: response.model,
     usageMetadata: response.usage
-      ? {
-          promptTokenCount: response.usage.inputTokens,
-          candidatesTokenCount: response.usage.outputTokens,
-          totalTokenCount: response.usage.totalTokens,
-        }
+      ? geminiUsageFromCanonical(response.usage)
       : undefined,
   };
 }

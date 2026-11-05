@@ -39,3 +39,14 @@ export type ChatCompletionChunkChoice =
 
 // Usage
 export type CompletionUsage = OpenAI.Completions.CompletionUsage;
+
+/**
+ * DeepSeek-style usage extension: OpenAI-compatible upstreams that report
+ * prompt-cache hits as top-level fields instead of `prompt_tokens_details`
+ * (https://api-docs.deepseek.com "KV Cache"). Only the hit count is mapped
+ * into canonical usage; `prompt_cache_miss_tokens` stays a wire field.
+ */
+export interface OpenAICompatibleUsage extends CompletionUsage {
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
+}

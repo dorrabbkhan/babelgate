@@ -14,6 +14,8 @@ import { createSseParser, createUtf8Decoder } from "../../utils/sse";
 import { logger } from "../../utils/logger";
 import {
   fromCanonicalError,
+  geminiUsageFromCanonical,
+  geminiUsageToCanonical,
   mapFinishReason,
   mapToGeminiFinishReason,
   toCanonicalError,
@@ -137,16 +139,7 @@ export function createStreamDecoder(
     const finishReason = candidate?.finishReason;
     if (typeof finishReason === "string") {
       if (usage != null) {
-        const input = usage.promptTokenCount ?? 0;
-        const output = usage.candidatesTokenCount ?? 0;
-        out.push({
-          type: "usage",
-          usage: {
-            inputTokens: input,
-            outputTokens: output,
-            totalTokens: usage.totalTokenCount ?? input + output,
-          },
-        });
+        out.push({ type: "usage", usage: geminiUsageToCanonical(usage) });
       }
       out.push({
         type: "message_end",
@@ -361,11 +354,7 @@ export function createStreamEncoder(
                 },
               ],
               ...(usage !== undefined && {
-                usageMetadata: {
-                  promptTokenCount: usage.inputTokens,
-                  candidatesTokenCount: usage.outputTokens,
-                  totalTokenCount: usage.totalTokens,
-                },
+                usageMetadata: geminiUsageFromCanonical(usage),
               }),
               ...(responseId !== undefined && { responseId }),
               modelVersion: ctx.requestedModel,

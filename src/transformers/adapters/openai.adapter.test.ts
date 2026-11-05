@@ -217,6 +217,117 @@ describe('OpenAI Adapter', () => {
     });
   });
 
+  describe('cached usage (spec §3.2)', () => {
+    it('cached_tokens decoded', () => {
+      const input = {
+        id: 'chatcmpl-123',
+        object: 'chat.completion',
+        created: 1700000000,
+        model: 'gpt-4',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'Hi', refusal: null },
+            finish_reason: 'stop',
+            logprobs: null,
+          },
+        ],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 5,
+          total_tokens: 105,
+          prompt_tokens_details: {
+            cached_tokens: 512,
+            cache_write_tokens: 64,
+          },
+        },
+      } as unknown as ChatCompletionResponse;
+
+      const result = toCanonicalResponse(input, 'gpt-4');
+
+      expect(result.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 5,
+        totalTokens: 105,
+        cacheReadTokens: 512,
+        cacheWriteTokens: 64,
+      });
+    });
+
+    it('deepseek hit tokens decoded', () => {
+      // DeepSeek reports prompt_cache_hit_tokens instead of
+      // prompt_tokens_details (api-docs.deepseek.com "KV Cache").
+      const input = {
+        id: 'chatcmpl-123',
+        object: 'chat.completion',
+        created: 1700000000,
+        model: 'deepseek-chat',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'Hi', refusal: null },
+            finish_reason: 'stop',
+            logprobs: null,
+          },
+        ],
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 5,
+          total_tokens: 105,
+          prompt_cache_hit_tokens: 300,
+          prompt_cache_miss_tokens: 20,
+        },
+      } as unknown as ChatCompletionResponse;
+
+      const result = toCanonicalResponse(input, 'deepseek-chat');
+
+      expect(result.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 5,
+        totalTokens: 105,
+        cacheReadTokens: 300,
+      });
+    });
+
+    it('cached usage encoded only when non-zero', () => {
+      const make = (usage: CanonicalResponse['usage']): CanonicalResponse => ({
+        id: 'chatcmpl-1',
+        model: 'gpt-4',
+        message: { role: 'assistant', content: 'Hi' },
+        finishReason: 'stop',
+        usage,
+      });
+
+      const plain = fromCanonicalResponse(
+        make({ inputTokens: 100, outputTokens: 5, totalTokens: 105 }),
+      );
+      expect(plain.usage).toStrictEqual({
+        prompt_tokens: 100,
+        completion_tokens: 5,
+        total_tokens: 105,
+      });
+
+      const cached = fromCanonicalResponse(
+        make({
+          inputTokens: 100,
+          outputTokens: 5,
+          totalTokens: 105,
+          cacheReadTokens: 512,
+          cacheWriteTokens: 64,
+        }),
+      );
+      expect(cached.usage).toStrictEqual({
+        prompt_tokens: 100,
+        completion_tokens: 5,
+        total_tokens: 105,
+        prompt_tokens_details: {
+          cached_tokens: 512,
+          cache_write_tokens: 64,
+        },
+      });
+    });
+  });
+
   describe('roundtrip', () => {
     it('should preserve data through request roundtrip', () => {
       const original: ChatCompletionRequest = {

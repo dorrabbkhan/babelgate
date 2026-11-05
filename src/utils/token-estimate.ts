@@ -1,4 +1,5 @@
 import type { CanonicalRequest } from "../types/canonical.types";
+import { systemText } from "../transformers/system-text";
 
 /**
  * Local input-token estimate (spec §3.5): ceil(chars / 4) over the system
@@ -10,7 +11,7 @@ import type { CanonicalRequest } from "../types/canonical.types";
 export function estimateInputTokens(req: CanonicalRequest): number {
   // Adapters keep the system text in BOTH systemPrompt and a system-role
   // message — count it once, via whichever field carries it.
-  let chars = req.systemPrompt?.length ?? 0;
+  let chars = systemText(req.systemPrompt)?.length ?? 0;
   const systemInPrompt = req.systemPrompt !== undefined;
 
   for (const message of req.messages) {

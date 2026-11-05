@@ -2535,3 +2535,107 @@ non-blocking review notes, landed on `v1.3/task-1-followups`
   task's Files block and the fixture tree untouched (the guard allows
   new files, but the plan names only the three test files).
 - **Files outside the Files block:** none.
+
+## v1.3 Task 3 — Canonical cache hints, system parts, cached usage (2026-11-05)
+
+Spec §3.2 (interface change), E2, E3, D9. `canonical.types.ts` and
+`canonical.schema.ts` changed together.
+
+**Type diff:**
+- `CanonicalCacheHint { ttl?: "5m" | "1h" }` added; `cache?` on
+  `CanonicalContentPart` and `CanonicalTool`.
+- `CanonicalRequest.systemPrompt?: string | CanonicalContentPart[]`
+  (was `string`); parts are text-only, enforced by
+  `canonicalRequestSchema` via an array refine (`"system prompt parts
+  must be text"`).
+- `CanonicalUsage` gains optional `cacheReadTokens` / `cacheWriteTokens`
+  (int, nonnegative); `inputTokens` is ALL input, cached included.
+- `src/transformers/system-text.ts` (new): `systemText(system)` flattens
+  `string | CanonicalContentPart[] | undefined` → `string | undefined`.
+
+**Wire fields (checked against provider docs, 2026-11-05):**
+- Anthropic `cache_control: {type:"ephemeral", ttl?:"5m"|"1h"}` on
+  content blocks, tools and system blocks, and usage fields
+  `cache_creation_input_tokens` / `cache_read_input_tokens` —
+  https://platform.claude.com/docs/en/build-with-claude/prompt-caching and
+  https://docs.claude.com/en/api/messages (also confirmed in
+  @anthropic-ai/sdk@0.132.1 types: `CacheControlEphemeral`,
+  `Usage.cache_*_input_tokens: number | null`).
+- OpenAI `usage.prompt_tokens_details.cached_tokens` /
+  `cache_write_tokens` — https://platform.openai.com/docs/guides/prompt-caching
+  and https://openrouter.ai/docs/guides/best-practices/prompt-caching
+  (confirmed in openai@7.30.1 `CompletionUsage.PromptTokensDetails`).
+- DeepSeek `usage.prompt_cache_hit_tokens` → `cacheReadTokens` when
+  `prompt_tokens_details` is absent —
+  https://api-docs.deepseek.com/guides/kv_cache (not in the OpenAI SDK
+  type; added as `OpenAICompatibleUsage` in `src/types/openai.types.ts`).
+- Gemini `usageMetadata.cachedContentTokenCount` → `cacheReadTokens` —
+  https://ai.google.dev/api/generate-content#UsageMetadata. Confirmed by
+  the field's presence in @google/generative-ai@0.24.1 `UsageMetadata`
+  and in recorded stream fixtures (a doc check; no live Gemini key
+  available for a live-response check).
+- Ollama: no cache mapping (`prompt_eval_cached_count` deliberately not
+  decoded — spec §3.2, Ollama reuses its KV cache itself).
+
+**Semantics implemented:**
+- Decode: `cache_control` on text/image parts, custom tools and system
+  blocks → `cache` (absent ttl → `{}`, the wire default 5m). Any system
+  block with `cache_control` turns `systemPrompt` into parts (the system
+  message gets the same parts value); without hints the joined string is
+  produced exactly as before. `cache_control` on spots canonical still
+  can't carry (tool_use/tool_result blocks and their nested content,
+  server-side tools, non-text system blocks) keeps the 'Dropping
+  "cache_control" fields' debug line — the generic `hasCacheControl`
+  scan was narrowed to `hasUncarriedCacheControl` so carried spots no
+  longer log.
+- Encode: `cache` → `cache_control: {type:"ephemeral", ttl?}` on
+  Anthropic text/image blocks, tools and system blocks; a parts
+  `systemPrompt` emits a `TextBlockParam[]`, a string stays a string.
+  The single-text-block collapse to a string is skipped when the block
+  carries a hint. The 4-breakpoint cap is Task 4's scope, not this one.
+- Usage: Anthropic decodes `inputTokens = input_tokens + read + write`
+  and encodes `input_tokens = max(0, inputTokens − read − write)` plus
+  both cache fields; OpenAI/Gemini `prompt_tokens`/`promptTokenCount`
+  already include cached tokens so `inputTokens` passes through.
+  Cache fields are emitted only when present and non-zero — no-hint
+  traffic produces byte-identical usage objects.
+- Streams: Anthropic `message_start`/`message_delta` cache fields are
+  carried into the canonical `usage` event; the OpenAI `choices:[]`
+  usage chunk and Gemini `usageMetadata` gain/keep the same fields; the
+  Anthropic stream encoder splits them back in `message_delta`.
+
+**Resolved ambiguity:** the plan writes `systemText` joins parts with
+`"\n"` but parenthetically says it is "the same separator the Anthropic
+decoder uses for system arrays today; confirm and keep" — and spec §3.2
+says "no other system-prompt behaviour changes". Today's decoder joins
+with `"\n\n"` (`anthropic.adapter.ts`, 'system array joins with blank
+line'), so `systemText` keeps `"\n\n"`.
+
+**Fixture change (owner-approved 2026-11-05, option A):**
+`tests/fixtures/streams/openai/tool_call.json` `expectedEvents` gained
+`"cacheReadTokens": 20` on its one `usage` event — the `.sse` wire bytes
+are unchanged (the recorded usage chunk's synthetic
+`prompt_tokens_details.cached_tokens: 20` now decodes per spec §3.2).
+Nothing else in the file changed; no other fixture or snapshot was
+touched. `scripts/ci/fixture-guard.sh` flags this file by design; the PR
+is titled `[OWNER REVIEW]`.
+
+**Files outside the Files block:**
+- `src/transformers/adapters/anthropic.cache.ts` (new) — AGENTS.md
+  rule 7: the §3.2 helpers (`toCacheHint`, `toCacheControl`,
+  `AnthropicWireUsage`, `anthropicUsageToCanonical`,
+  `canonicalUsageToAnthropic`, `toCanonicalSystem`, `toAnthropicSystem`,
+  `hasUncarriedCacheControl`) live here so `anthropic.adapter.ts` (385)
+  and `anthropic.messages.ts` (372) stay under ~400 lines.
+- `src/utils/token-estimate.ts` — `req.systemPrompt?.length` no longer
+  compiles against the `string | CanonicalContentPart[]` union; it now
+  reads `systemText(req.systemPrompt)?.length` (no behaviour change).
+- `tests/fixtures/streams/openai/tool_call.json` — the owner-approved
+  fixture change above.
+
+**Files block entries that needed no change:** `ollama.adapter.ts` and
+`ollama.stream.ts` (no cache fields are ever decoded or emitted for
+Ollama — asserted by the new "no cache fields ever emitted" tests),
+`src/utils/stream-reassemble.ts` (usage passes through by reference, so
+the new fields ride along), `src/types/gemini.types.ts` (the SDK
+`UsageMetadata` already declares `cachedContentTokenCount`).

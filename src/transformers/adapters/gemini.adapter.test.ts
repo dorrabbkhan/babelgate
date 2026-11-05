@@ -681,6 +681,56 @@ describe('Gemini Adapter', () => {
     });
   });
 
+  describe('cached usage (spec §3.2)', () => {
+    it('cachedContentTokenCount decoded and encoded', () => {
+      const decoded = toCanonicalResponse(
+        {
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 'Hi' }] },
+              finishReason: FinishReason.STOP,
+              index: 0,
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 100,
+            candidatesTokenCount: 5,
+            totalTokenCount: 105,
+            cachedContentTokenCount: 60,
+          },
+        },
+        'gemini-pro'
+      );
+
+      expect(decoded.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 5,
+        totalTokens: 105,
+        cacheReadTokens: 60,
+      });
+
+      const encoded = fromCanonicalResponse({
+        id: 'gemini-1',
+        model: 'gemini-pro',
+        message: { role: 'assistant', content: 'Hi' },
+        finishReason: 'stop',
+        usage: {
+          inputTokens: 100,
+          outputTokens: 5,
+          totalTokens: 105,
+          cacheReadTokens: 60,
+        },
+      });
+
+      expect(encoded.usageMetadata).toStrictEqual({
+        promptTokenCount: 100,
+        candidatesTokenCount: 5,
+        totalTokenCount: 105,
+        cachedContentTokenCount: 60,
+      });
+    });
+  });
+
   describe('roundtrip', () => {
     it('should preserve data through request roundtrip', () => {
       const original: GenerateContentRequest = {

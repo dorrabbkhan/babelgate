@@ -329,6 +329,51 @@ describe("Ollama Adapter", () => {
     });
   });
 
+  describe("cached usage (spec §3.2)", () => {
+    it("no cache fields ever emitted", () => {
+      // Ollama reuses its KV cache by itself: prompt_eval_cached_count
+      // is not decoded and cache hints are never encoded.
+      const decoded = toCanonicalResponse(
+        {
+          model: "llama2",
+          created_at: new Date(),
+          message: { role: "assistant", content: "Hi" },
+          done: true,
+          prompt_eval_count: 36,
+          prompt_eval_cached_count: 35,
+          eval_count: 10,
+        } as unknown as OllamaChatResponse,
+        "llama2"
+      );
+
+      expect(decoded.usage).toEqual({
+        inputTokens: 36,
+        outputTokens: 10,
+        totalTokens: 46,
+      });
+
+      const encoded = fromCanonicalResponse({
+        id: "ollama-1",
+        model: "llama2",
+        message: { role: "assistant", content: "Hi" },
+        finishReason: "stop",
+        usage: {
+          inputTokens: 36,
+          outputTokens: 10,
+          totalTokens: 46,
+          cacheReadTokens: 35,
+          cacheWriteTokens: 4,
+        },
+      });
+
+      expect(encoded.prompt_eval_count).toBe(36);
+      expect(encoded.eval_count).toBe(10);
+      expect(
+        Object.keys(encoded).every((k) => !k.includes("cache"))
+      ).toBe(true);
+    });
+  });
+
   describe("roundtrip", () => {
     it("should preserve data through request roundtrip", () => {
       const original: OllamaChatRequest = {
