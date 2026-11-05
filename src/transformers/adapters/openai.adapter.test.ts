@@ -133,7 +133,7 @@ describe('OpenAI Adapter', () => {
       { type: 'text' as const, text: 'B' },
     ];
 
-    it('flattens hinted system parts to one string', () => {
+    it('emits hinted system parts as one cache_control part', () => {
       const input: CanonicalRequest = {
         model: 'gpt-4',
         systemPrompt: hinted,
