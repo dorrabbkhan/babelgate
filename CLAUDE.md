@@ -25,17 +25,21 @@ a human decision is needed. The owner reviews PRs on GitHub and talks to you thr
 ## How to talk to Devin
 - Always a FRESH non-interactive session per task, review or fix round:
   `devin -p --prompt-file <file>` (the exact flags are in scripts/conductor/devin.sh; use that wrapper).
-- Every prompt = the task line or the instruction + standing notes + the per-task notes file (if present) +
-  the footer from scripts/conductor/footer.md (PR_URL / STOP line contract).
+- Every prompt is built by scripts/conductor/build-prompt.sh: the skill named by its path (never a leading
+  "/babelgate-…" line: Devin then ignores what follows it) + the per-task notes file first (owner decisions) +
+  extra instructions + standing notes + the footer from scripts/conductor/footer.md (PR_URL / STOP line contract).
+- devin.sh puts the shared checkout back on its starting branch after each session (if no tracked changes).
 - Save every prompt and output under ~/babelgate-conductor/<version>-task<N>/ (the wrapper does this).
 
 ## The loop for one task (/conduct <version> <N>)
 1. Preconditions: clean tree; main up to date; previous dependencies merged (check the plan's Task Index).
 2. Task session → parse `PR_URL:` or `STOP:`. STOP → escalate (step 7) and end.
-3. Start the review session immediately (in parallel with CI): /babelgate-review skill for that PR.
+3. Start the review session immediately (in parallel with CI): the babelgate-review skill for that PR (build-prompt.sh review).
 4. Judge (see "Judgment rules"). If REQUIRED fixes exist (from the review or your own checks) → a fix
    session on the same branch, listing them precisely. Max 2 fix rounds; then escalate.
-5. Wait for CI green (`gh pr checks <PR> --watch`). Red CI → a fix round (counts toward the max).
+5. Wait for CI green (`gh pr checks <PR> --watch`). Red CI → a fix round (counts toward the max). check.sh runs
+   every step even when the fixture guard fails; on an owner-approved fixture change, CI red with "FIXTURE GUARD
+   FAILED … all other checks passed" and nothing else failing is the expected state (the owner sets ALLOW_FIXTURE_CHANGE).
 6. Post/update ONE sticky status comment on the PR (scripts/conductor/status-comment.sh) and notify the owner.
 7. Escalation: a PR comment starting "**Owner decision needed:**" with the question, 2–3 options, and your
    recommendation; then notify and stop.

@@ -8,6 +8,10 @@
 #
 # BASE overrides the comparison commit (default: merge-base with
 # origin/main); ALLOW_FIXTURE_CHANGE=1 skips the fixture guard (human only).
+#
+# A fixture-guard failure no longer stops the run: the other checks still
+# run, so a PR with an owner-approved fixture change shows whether typecheck,
+# tests and build pass. The script still exits non-zero at the end.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -19,19 +23,29 @@ esac
 
 [ -d node_modules ] || npm ci
 
+guard_failed=0
+run_guard() { scripts/ci/fixture-guard.sh || guard_failed=1; }
+finish() {
+  if [ "$guard_failed" = 1 ]; then
+    printf '\nFIXTURE GUARD FAILED (see above); all other checks passed\n' >&2
+    exit 1
+  fi
+  printf '\n%s\n' "$1"
+}
+
 if [ "$mode" = "quick" ]; then
-  scripts/ci/fixture-guard.sh
+  run_guard
   npm run --silent typecheck
   base="${BASE:-$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD)}"
   npx vitest run --changed "$base" --passWithNoTests
-  printf '\nQUICK CHECKS PASSED (run ./scripts/check.sh before pushing)\n'
+  finish 'QUICK CHECKS PASSED (run ./scripts/check.sh before pushing)'
   exit 0
 fi
 
-scripts/ci/fixture-guard.sh
+run_guard
 npm run --silent typecheck
 npm test
 npm run --silent build
 scripts/ci/smoke-pack.sh
 
-printf '\nALL CHECKS PASSED\n'
+finish 'ALL CHECKS PASSED'
