@@ -13,10 +13,16 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
+import { response } from "express";
 import request from "supertest";
 import { app } from "../../src/app";
 import { resetConfig } from "../../src/config/env-config";
 import { resetModelListCache } from "../../src/services/models.service";
+import {
+  adapters,
+  PROVIDER_ROUTES,
+  type Provider,
+} from "../../src/transformers";
 import {
   registerSink,
   resetSinks,
@@ -39,6 +45,8 @@ import {
 } from "../mocks/upstreams";
 import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
+import anthropicFixtures from "../fixtures/anthropic.json";
+import ollamaFixtures from "../fixtures/ollama.json";
 
 /**
  * The request trace (spec §3.1): one per chat request, emitted exactly
@@ -137,6 +145,7 @@ afterEach(() => {
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.BABELGATE_CONFIG;
   rmSync(TMP_CONFIG, { force: true });
+  vi.restoreAllMocks();
   resetConfig();
 });
 
@@ -373,6 +382,139 @@ describe("request trace (spec §3.1)", () => {
       expect(traces).toHaveLength(1);
     } finally {
       await new Promise<void>((r) => listener.close(() => r()));
+    }
+  });
+
+  // The source stream encoder is built before the attempt loop: a
+  // throw there reached planRoute but used to emit no trace at all.
+  // Client behaviour is unchanged from main — the same 500
+  // TRANSFORM_ERROR rendering (literal status verified on main).
+  it("stream encoder failure is traced once", async () => {
+    const spy = vi
+      .spyOn(adapters.openai, "createStreamEncoder")
+      .mockImplementationOnce(() => {
+        throw new Error("boom");
+      });
+    try {
+      const res = await request(app)
+        .post("/v1/chat/completions")
+        .send({ ...openaiFixtures.requests.basic, stream: true } as object);
+      expect(res.status).toBe(500);
+
+      await waitForTraces(1);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        status: "error",
+        httpStatus: res.status,
+        stream: true,
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // A stream the route returned but never iterated (a throw between
+  // proxyRequest and the for-await — here a stubbed flushHeaders)
+  // never runs the generator's finally, so the route calls
+  // stream.finish(clientStatus). Client behaviour is unchanged from
+  // main — the same 500 the error handler renders for that request.
+  it("stream that is never iterated is traced once", async () => {
+    const spy = vi
+      .spyOn(response, "flushHeaders")
+      .mockImplementationOnce(() => {
+        throw new Error("boom");
+      });
+    try {
+      const res = await request(app)
+        .post("/v1/chat/completions")
+        .send({ ...openaiFixtures.requests.basic, stream: true } as object);
+      expect(res.status).toBe(500);
+
+      await waitForTraces(1);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        status: "error",
+        httpStatus: res.status,
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // Guard: every kind:"chat" entry in the source route tables must
+  // open a trace — iterate the tables rather than hard-coding so a new
+  // route can't slip through. The client paths are the route's own
+  // requestPath/streamRequestPath (for these four providers the
+  // client and upstream path shapes coincide; only Gemini's carries
+  // the model).
+  it("every chat source route opens a trace", async () => {
+    const basic: Record<Provider, Record<string, unknown>> = {
+      openai: openaiFixtures.requests.basic,
+      anthropic: anthropicFixtures.requests.basic,
+      ollama: ollamaFixtures.requests.basic,
+      gemini: geminiFixtures.requests.basic,
+    };
+
+    for (const [provider, routes] of Object.entries(PROVIDER_ROUTES)) {
+      const sourceApi = provider as Provider;
+      const fixture = basic[sourceApi];
+      const model =
+        typeof fixture.model === "string" ? fixture.model : "gemini-pro";
+      for (const route of routes) {
+        if (route.kind !== "chat") continue;
+        const cases: { path: string; body: unknown; stream: boolean }[] =
+          route.streamRequestPath !== undefined
+            ? [
+                // The stream variant is the dedicated endpoint, the
+                // same basic body on each (Gemini carries no flag).
+                {
+                  path: route.requestPath(model),
+                  body: fixture,
+                  stream: false,
+                },
+                {
+                  path: route.streamRequestPath(model),
+                  body: fixture,
+                  stream: true,
+                },
+              ]
+            : [
+                // No separate stream path — streaming is a body flag
+                // (explicit: absent means stream:true for Ollama).
+                {
+                  path: route.requestPath(model),
+                  body: { ...fixture, stream: false },
+                  stream: false,
+                },
+                {
+                  path: route.requestPath(model),
+                  body: { ...fixture, stream: true },
+                  stream: true,
+                },
+              ];
+
+        for (const { path, body, stream } of cases) {
+          const before = traces.length;
+          const res = stream
+            ? await postStream(path, body)
+            : await request(app).post(path).send(body as object);
+          expect(
+            res.status,
+            `${sourceApi} ${path}: ${JSON.stringify(res.body)}`,
+          ).toBe(200);
+          await waitForTraces(before + 1);
+          expect(traces.length).toBe(before + 1);
+          expect(traces[before]).toMatchObject({
+            sourceApi,
+            status: "ok",
+            stream,
+          });
+        }
+      }
     }
   });
 

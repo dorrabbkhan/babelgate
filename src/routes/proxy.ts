@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { Router } from "express";
 import { proxyRequest } from "../services/proxy.service";
+import type { ProxyResult } from "../services/proxy.service";
 import type { Provider } from "../transformers";
 import { ProxyError, TransformError } from "../utils/errors";
 
@@ -19,8 +20,9 @@ proxyRouter.use(async (req, res, next) => {
     if (!completed) ac.abort();
   });
 
+  let result: ProxyResult | null = null;
   try {
-    const result = await proxyRequest(
+    result = await proxyRequest(
       req.path,
       req.method,
       req.body,
@@ -71,20 +73,32 @@ proxyRouter.use(async (req, res, next) => {
     res.status(200).json(result.body);
   } catch (err) {
     // The client went away mid-request — nothing left to answer.
-    if (ac.signal.aborted) return;
+    if (ac.signal.aborted) {
+      // A stream that was never iterated never ran its generator's
+      // finally — finish() emits the trace exactly once either way.
+      await result?.stream?.finish();
+      return;
+    }
     // Headers already went out: a JSON error can't be rendered onto a
     // streaming response — end it rather than calling next(err).
     if (res.headersSent) {
       res.destroy();
+      await result?.stream?.finish(res.statusCode);
       return;
     }
-    next(
+    const mapped =
       err instanceof ProxyError
         ? err
         : new TransformError(
             err instanceof Error ? err.message : "Unknown proxy error",
             { requestId: req.id },
-          ),
-    );
+          );
+    // next() dispatches the error handler asynchronously, so compute
+    // the status it will render — the same toCanonical().status the
+    // handler uses. A stream the for-await never reached (e.g.
+    // flushHeaders threw) still gets its trace; on a finished stream
+    // finish() is a no-op.
+    await result?.stream?.finish(mapped.toCanonical().status);
+    next(mapped);
   }
 });

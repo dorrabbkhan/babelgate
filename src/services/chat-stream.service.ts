@@ -9,6 +9,7 @@ import { finishTrace } from "../observe/emit";
 import type {
   CanonicalStreamEvent,
   StreamDecoder,
+  StreamEncoder,
 } from "../types/canonical.types";
 import { UpstreamError } from "../utils/errors";
 import { postStream } from "./http-client";
@@ -47,15 +48,17 @@ export async function proxyChatStream(
     opts,
   } = input;
 
-  const encoder = adapters[source].createStreamEncoder({
-    sourceRequest: sourceBody,
-    query: opts?.query ?? {},
-    requestedModel,
-  });
-
   const hops: Hop[] = [];
+  let encoder: StreamEncoder;
   let result;
   try {
+    // Inside the try so a throwing encoder still finishes the trace
+    // (hops is [] here — the request never reached an upstream).
+    encoder = adapters[source].createStreamEncoder({
+      sourceRequest: sourceBody,
+      query: opts?.query ?? {},
+      requestedModel,
+    });
     result = await attemptTargets(
       plan,
       config.registry,
@@ -130,8 +133,72 @@ export async function proxyChatStream(
 
   const signal = opts?.signal ?? new AbortController().signal;
 
+  // True once the route starts consuming chunks — which it only does
+  // after flushing headers, so iterated implies the client got the 200
+  // status line.
+  let iterated = false;
+
+  /**
+   * Whatever ended the pipe — terminal event, in-stream error, client
+   * disconnect — the upstream request is done with, and the trace is
+   * emitted exactly once (spec §3.1): a client that went away
+   * mid-stream is "aborted", an in-stream error is "error", everything
+   * else "ok". httpStatus is the 200 the route flushed before the
+   * stream started; when the route never iterated (a throw before the
+   * for-await) the client got no stream — 499 if it went away, else
+   * `clientStatus`, the status it actually received.
+   */
+  const finish = async (clientStatus?: number): Promise<void> => {
+    upstreamAc.abort();
+    const last = observed.at(-1);
+    const usageEvent = observed.find((e) => e.type === "usage");
+    await finishTrace({
+      reason: plan.reason,
+      requestedModel,
+      hops: result.hops,
+      winner: result.target.provider,
+      stream: true,
+      status: signal.aborted
+        ? "aborted"
+        : !iterated
+          ? "error"
+          : last?.type === "error"
+            ? "error"
+            : "ok",
+      httpStatus: iterated
+        ? 200
+        : signal.aborted
+          ? 499
+          : (clientStatus ?? 500),
+      errorType:
+        !signal.aborted && last?.type === "error"
+          ? last.error.kind
+          : undefined,
+      inputTokens:
+        usageEvent?.type === "usage"
+          ? usageEvent.usage.inputTokens
+          : undefined,
+      outputTokens:
+        usageEvent?.type === "usage"
+          ? usageEvent.usage.outputTokens
+          : undefined,
+      cacheReadTokens:
+        usageEvent?.type === "usage"
+          ? usageEvent.usage.cacheReadTokens
+          : undefined,
+      cacheWriteTokens:
+        usageEvent?.type === "usage"
+          ? usageEvent.usage.cacheWriteTokens
+          : undefined,
+      finishReason:
+        last?.type === "message_end" ? last.finishReason : undefined,
+      maxTokensClamp: maxTokensClampOf(canonical, result.entry),
+    });
+  };
+
   const chunks = (async function* (): AsyncGenerator<string> {
     try {
+      iterated = true;
       let ttfbSet = false;
       for await (const chunk of runStreamPipeline({
         upstream: upstream.body,
@@ -151,56 +218,12 @@ export async function proxyChatStream(
         yield chunk;
       }
     } finally {
-      // Whatever ended the pipe — terminal event, in-stream error,
-      // client disconnect — the upstream request is done with, and the
-      // trace is emitted exactly once (spec §3.1): a client that went
-      // away mid-stream is "aborted", an in-stream error is "error",
-      // everything else "ok". httpStatus is the 200 the route already
-      // sent before the stream started.
-      upstreamAc.abort();
-      const last = observed.at(-1);
-      const usageEvent = observed.find((e) => e.type === "usage");
-      await finishTrace({
-        reason: plan.reason,
-        requestedModel,
-        hops: result.hops,
-        winner: result.target.provider,
-        stream: true,
-        status: signal.aborted
-          ? "aborted"
-          : last?.type === "error"
-            ? "error"
-            : "ok",
-        httpStatus: 200,
-        errorType:
-          !signal.aborted && last?.type === "error"
-            ? last.error.kind
-            : undefined,
-        inputTokens:
-          usageEvent?.type === "usage"
-            ? usageEvent.usage.inputTokens
-            : undefined,
-        outputTokens:
-          usageEvent?.type === "usage"
-            ? usageEvent.usage.outputTokens
-            : undefined,
-        cacheReadTokens:
-          usageEvent?.type === "usage"
-            ? usageEvent.usage.cacheReadTokens
-            : undefined,
-        cacheWriteTokens:
-          usageEvent?.type === "usage"
-            ? usageEvent.usage.cacheWriteTokens
-            : undefined,
-        finishReason:
-          last?.type === "message_end" ? last.finishReason : undefined,
-        maxTokensClamp: maxTokensClampOf(canonical, result.entry),
-      });
+      await finish();
     }
   })();
 
   return {
-    stream: { contentType: encoder.contentType, chunks },
+    stream: { contentType: encoder.contentType, chunks, finish },
     headers: {
       "x-babelgate-provider": result.target.provider,
       "x-babelgate-model": result.target.model,

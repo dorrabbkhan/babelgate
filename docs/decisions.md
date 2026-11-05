@@ -2796,3 +2796,46 @@ unchanged.
   sink's own field-shape case; `src/observe/trace.test.ts` covers
   `newTrace` defaults (both fall under the Test list's
   `src/observe/*.test.ts`).
+
+**Fix round 2 (owner-requested, 2026-11-05)** — two paths that reached
+`planRoute` but emitted no trace:
+
+- **Encoder creation moved inside the traced try.**
+  `adapters[source].createStreamEncoder(...)` in
+  `chat-stream.service.ts` ran before the `try` around
+  `attemptTargets`, so a throw there skipped `finishTrace` entirely.
+  It is now the first statement inside the same try — still created
+  once, before the first hop — so the existing catch emits the trace
+  (`hops` is still `[]`) and rethrows. Client-visible behaviour is
+  unchanged (same 500 TRANSFORM_ERROR rendering).
+- **Never-iterated stream: `result.stream.finish(clientStatus)`.** A
+  throw in the route between `proxyRequest` and the `for await`
+  (setHeader/flushHeaders) left the `chunks` generator suspended at
+  start, and a suspended-start async generator's `return()` does NOT
+  run its `finally` (verified on Node 24: resolves `{done:true}`
+  without entering the body) — so the suggested
+  `chunks.return(undefined)` alone could not finish the trace. The
+  smallest correct mechanism: the generator's `finally` body moved
+  into `finish(clientStatus?)`, which the generator's `finally` still
+  calls and which `ProxyResult.stream` also exposes; the route's catch
+  calls it on every error path (`finish()` when the client aborted →
+  "aborted"; `finish(res.statusCode)` when headers already went out;
+  `finish(mapped.toCanonical().status)` on the `next(err)` path —
+  Express 5 dispatches the error handler asynchronously, so the
+  rendered status is computed the same way the handler computes it).
+  Exactly-once is unchanged:
+  `finishTrace`'s WeakSet dedupes a second call on an
+  already-finished stream. `httpStatus` when never iterated: 499 on
+  client abort (the owner decision — a client abort before any
+  response stays 499), else the status the client received; once
+  iterated it is the 200 that was flushed, as before. Side benefit:
+  `finish()` also aborts the won upstream request that a
+  never-iterated stream would otherwise leave open.
+
+**Files outside the Files block (fix round 2):**
+- `src/routes/proxy.ts` — the never-iterated gap only exists in the
+  route's catch; the `finish()` calls live there (plus hoisting
+  `result` out of the try).
+- `src/services/proxy.service.ts` — `ProxyResult.stream` gained the
+  `finish(clientStatus?)` member; `chunks` stays
+  `AsyncIterable<string>`.
