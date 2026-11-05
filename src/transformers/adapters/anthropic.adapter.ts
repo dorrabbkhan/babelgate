@@ -25,6 +25,7 @@ import {
   anthropicUsageToCanonical,
   canonicalUsageToAnthropic,
   hasUncarriedCacheControl,
+  limitCacheBreakpoints,
   toAnthropicSystem,
   toCanonicalSystem,
 } from "./anthropic.cache";
@@ -177,6 +178,16 @@ export function fromCanonicalRequest(
 
   if (request.stream !== undefined) {
     (result as { stream?: boolean }).stream = request.stream;
+  }
+
+  // §3.2: Anthropic accepts at most 4 cache breakpoints — the last 4
+  // in tools → system → messages order are kept. Task 6 turns this
+  // debug line into a `cache_limit` translation note.
+  const dropped = limitCacheBreakpoints(result);
+  if (dropped > 0) {
+    logger.debug(
+      `Dropping ${dropped} cache_control breakpoint(s): Anthropic allows at most 4`,
+    );
   }
 
   return result;

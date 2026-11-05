@@ -159,6 +159,9 @@ export function loadYamlConfig(
         ...(provider.max_output_tokens === undefined
           ? {}
           : { maxOutputTokens: provider.max_output_tokens }),
+        ...(provider.cache_hints === undefined
+          ? {}
+          : { cacheHints: provider.cache_hints }),
         timeoutMs: provider.timeout_ms,
         streamIdleMs: provider.stream_idle_ms,
       };

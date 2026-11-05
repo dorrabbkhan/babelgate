@@ -118,6 +118,70 @@ export function toAnthropicSystem(
 }
 
 /**
+ * Anthropic accepts at most 4 cache breakpoints per request, walked in
+ * order tools → system → messages (spec §3.2). Keep the LAST 4 — the
+ * breakpoints covering the most prompt — and remove `cache_control`
+ * from the rest. Returns the number dropped; the caller logs it
+ * (Task 6 turns the line into a `cache_limit` note).
+ */
+export function limitCacheBreakpoints(
+  request: MessageCreateParams,
+): number {
+  const holders: { cache_control?: CacheControlEphemeral | null }[] = [];
+  for (const tool of request.tools ?? []) {
+    if (
+      "cache_control" in tool &&
+      tool.cache_control !== undefined &&
+      tool.cache_control !== null
+    ) {
+      holders.push(tool);
+    }
+  }
+  if (Array.isArray(request.system)) {
+    for (const block of request.system) {
+      if (
+        "cache_control" in block &&
+        block.cache_control !== undefined &&
+        block.cache_control !== null
+      ) {
+        holders.push(block);
+      }
+    }
+  }
+  for (const m of request.messages) {
+    if (!Array.isArray(m.content)) continue;
+    for (const block of m.content) {
+      if (
+        "cache_control" in block &&
+        block.cache_control !== undefined &&
+        block.cache_control !== null
+      ) {
+        holders.push(block);
+      }
+      // tool_result content blocks can carry breakpoints one level down.
+      if (block.type === "tool_result" && Array.isArray(block.content)) {
+        for (const inner of block.content) {
+          if (
+            typeof inner === "object" &&
+            inner !== null &&
+            "cache_control" in inner &&
+            inner.cache_control !== undefined &&
+            inner.cache_control !== null
+          ) {
+            holders.push(inner);
+          }
+        }
+      }
+    }
+  }
+  const dropped = Math.max(0, holders.length - 4);
+  for (const holder of holders.slice(0, dropped)) {
+    delete holder.cache_control;
+  }
+  return dropped;
+}
+
+/**
  * cache_control on text/image parts, custom tools and system blocks is
  * carried as a canonical cache hint (§3.2) — this scan only fires where a
  * hint still can't be carried: other block kinds (tool_use, tool_result

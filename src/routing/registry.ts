@@ -15,6 +15,12 @@ export interface ProviderEntry {
   contextWindow?: number;
   /** Output-token cap applied by canonicalForTarget (spec §3.3) */
   maxOutputTokens?: number;
+  /**
+   * Honour cache hints for an OpenAI-compatible upstream (spec §3.2):
+   * canonicalForTarget strips every `cache` hint unless this is set
+   * (Anthropic always keeps them).
+   */
+  cacheHints?: boolean;
   timeoutMs?: number;
   streamIdleMs?: number;
 }

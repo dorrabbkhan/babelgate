@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type {
+  CanonicalCacheHint,
   CanonicalRequest,
   CanonicalResponse,
   CanonicalMessage,
@@ -246,6 +247,24 @@ function extractTextContent(msg: ChatCompletionMessageParam): string {
 
 // ============ REQUEST: Canonical → OpenAI ============
 
+/**
+ * Anthropic-style `cache_control` emitted for cache_hints providers
+ * (spec §3.2) — the SDK message/tool types don't declare it, so the
+ * request parts that can carry it are widened locally at the emit site.
+ */
+interface OpenAICacheControl {
+  type: "ephemeral";
+  ttl?: "5m" | "1h";
+}
+
+/** canonical hint → wire cache_control. */
+function toCacheControl(
+  hint: CanonicalCacheHint | undefined,
+): OpenAICacheControl | undefined {
+  if (!hint) return undefined;
+  return { type: "ephemeral", ...(hint.ttl !== undefined && { ttl: hint.ttl }) };
+}
+
 export function fromCanonicalRequest(
   request: CanonicalRequest,
 ): ChatCompletionRequest {
@@ -277,18 +296,25 @@ export function fromCanonicalRequest(
   }
 
   if (request.tools && request.tools.length > 0) {
-    result.tools = request.tools.map((tool) => ({
-      type: "function" as const,
-      function: {
-        name: tool.function.name,
-        ...(tool.function.description !== undefined && {
-          description: tool.function.description,
-        }),
-        ...(tool.function.parameters !== undefined && {
-          parameters: tool.function.parameters,
-        }),
-      },
-    }));
+    result.tools = request.tools.map((tool) => {
+      const cacheControl = toCacheControl(tool.cache);
+      return {
+        type: "function" as const,
+        function: {
+          name: tool.function.name,
+          ...(tool.function.description !== undefined && {
+            description: tool.function.description,
+          }),
+          ...(tool.function.parameters !== undefined && {
+            parameters: tool.function.parameters,
+          }),
+        },
+        // §3.2: cache_control passes through for cache_hints
+        // providers (OpenRouter-style); other targets never see a
+        // hint — canonicalForTarget strips them first.
+        ...(cacheControl && { cache_control: cacheControl }),
+      };
+    }) as ChatCompletionRequest["tools"];
   }
   if (request.toolChoice !== undefined) {
     result.tool_choice = request.toolChoice;
@@ -340,12 +366,28 @@ function convertFromCanonicalMessage(
   }
 
   if (msg.role === "system") {
+    // §3.2: a hint that reaches the encoder (cache_hints targets
+    // only) is emitted on a one-part content array — cache_control
+    // marks the end of the system text; the last hinted part wins.
+    const hint =
+      Array.isArray(msg.content) && msg.content.some((p) => p.cache)
+        ? [...msg.content].reverse().find((p) => p.cache)?.cache
+        : undefined;
+    const cacheControl = toCacheControl(hint);
+    const content =
+      cacheControl === undefined
+        ? (systemText(msg.content) ?? "")
+        : [
+            {
+              type: "text" as const,
+              text: systemText(msg.content) ?? "",
+              cache_control: cacheControl,
+            },
+          ];
     return {
       role: "system",
-      // §3.2: hinted parts flatten through systemText; the hint
-      // itself drops (Task 4 adds cache_hints).
-      content: systemText(msg.content) ?? "",
-    };
+      content,
+    } as ChatCompletionMessageParam;
   }
 
   // User message
@@ -357,14 +399,23 @@ function convertFromCanonicalContent(
 ):
   | string
   | Array<
-      | { type: "text"; text: string }
-      | { type: "image_url"; image_url: { url: string } }
+      | { type: "text"; text: string; cache_control?: OpenAICacheControl }
+      | {
+          type: "image_url";
+          image_url: { url: string };
+          cache_control?: OpenAICacheControl;
+        }
     > {
   if (typeof content === "string") return content;
 
   return content.map((part) => {
+    const cacheControl = toCacheControl(part.cache);
     if (part.type === "text") {
-      return { type: "text" as const, text: part.text || "" };
+      return {
+        type: "text" as const,
+        text: part.text || "",
+        ...(cacheControl && { cache_control: cacheControl }),
+      };
     }
     if (part.type === "image" && part.image) {
       return {
@@ -372,6 +423,7 @@ function convertFromCanonicalContent(
         image_url: {
           url: `data:${part.image.mimeType};base64,${part.image.data}`,
         },
+        ...(cacheControl && { cache_control: cacheControl }),
       };
     }
     return { type: "text" as const, text: "" };

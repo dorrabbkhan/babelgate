@@ -145,9 +145,18 @@ describe('OpenAI Adapter', () => {
 
       const result = fromCanonicalRequest(input);
 
+      // §3.2: a hint reaching the encoder (only cache_hints targets
+      // let it through) is emitted as cache_control on a one-part
+      // content array — the hint marks the end of the system text.
       expect(result.messages[0]).toEqual({
         role: 'system',
-        content: 'A\n\nB',
+        content: [
+          {
+            type: 'text',
+            text: 'A\n\nB',
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
       });
     });
 
@@ -171,8 +180,115 @@ describe('OpenAI Adapter', () => {
 
       expect(result.messages[0]).toEqual({
         role: 'system',
+        content: [
+          {
+            type: 'text',
+            text: 'A\n\nB',
+            cache_control: { type: 'ephemeral' },
+          },
+        ],
+      });
+    });
+
+    it('unhinted system parts stay a plain string', () => {
+      const input: CanonicalRequest = {
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'system',
+            content: [
+              { type: 'text', text: 'A' },
+              { type: 'text', text: 'B' },
+            ],
+          },
+          { role: 'user', content: 'Hello' },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages[0]).toEqual({
+        role: 'system',
         content: 'A\n\nB',
       });
+    });
+  });
+
+  describe('cache_control passthrough (spec §3.2)', () => {
+    it('emitted on content parts and tools when the canonical carries a hint', () => {
+      const input: CanonicalRequest = {
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'hi', cache: {} },
+              {
+                type: 'image',
+                image: { data: 'aGk=', mimeType: 'image/png' },
+                cache: { ttl: '1h' },
+              },
+            ],
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather' },
+            cache: { ttl: '1h' },
+          },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages[0]).toEqual({
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: 'hi',
+            cache_control: { type: 'ephemeral' },
+          },
+          {
+            type: 'image_url',
+            image_url: { url: 'data:image/png;base64,aGk=' },
+            cache_control: { type: 'ephemeral', ttl: '1h' },
+          },
+        ],
+      });
+      expect((result.tools?.[0] as { cache_control?: unknown }).cache_control).toEqual({
+        type: 'ephemeral',
+        ttl: '1h',
+      });
+    });
+
+    it('unhinted parts and tools carry no cache_control', () => {
+      const input: CanonicalRequest = {
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'hi' },
+              {
+                type: 'image',
+                image: { data: 'aGk=', mimeType: 'image/png' },
+              },
+            ],
+          },
+        ],
+        tools: [
+          { type: 'function', function: { name: 'get_weather' } },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(JSON.stringify(result.messages[0])).not.toContain(
+        'cache_control',
+      );
+      expect(JSON.stringify(result.tools)).not.toContain('cache_control');
     });
   });
 

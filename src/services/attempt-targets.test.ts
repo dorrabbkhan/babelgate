@@ -264,3 +264,108 @@ describe("max_output_tokens cap (spec §3.3)", () => {
     expect(inRequest.config?.maxTokens).toBe(32000);
   });
 });
+
+describe("cache hints (spec §3.2)", () => {
+  const hinted = (): CanonicalRequest => ({
+    model: "decoded-model",
+    systemPrompt: [
+      { type: "text", text: "A", cache: { ttl: "1h" } },
+      { type: "text", text: "B", cache: {} },
+    ],
+    messages: [
+      {
+        role: "system",
+        content: [
+          { type: "text", text: "A", cache: { ttl: "1h" } },
+          { type: "text", text: "B", cache: {} },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "hi", cache: {} },
+          {
+            type: "image",
+            image: { data: "aGk=", mimeType: "image/png" },
+            cache: { ttl: "5m" },
+          },
+        ],
+      },
+    ],
+    tools: [
+      {
+        type: "function",
+        function: { name: "get_weather" },
+        cache: { ttl: "1h" },
+      },
+    ],
+  });
+  const provider = (
+    type: ProviderEntry["type"],
+    cacheHints?: boolean,
+  ): ProviderEntry => ({
+    name: type,
+    type,
+    baseUrl: `http://${type}.test`,
+    ...(cacheHints === undefined ? {} : { cacheHints }),
+  });
+  const target = { provider: "openai", model: "routed-model" };
+
+  it("hints stripped for openai without cache_hints", () => {
+    const inRequest = hinted();
+
+    const out = canonicalForTarget(inRequest, provider("openai"), target);
+
+    // The parts prompt existed only to carry hints — it flattens to
+    // the same string the decoders produce for unhinted systems.
+    expect(out.systemPrompt).toBe("A\n\nB");
+    // The system message's parts collapse the same way, keeping the
+    // "\n\n" join encoders produce for hinted content today.
+    expect(out.messages[0]!.content).toBe("A\n\nB");
+    for (const m of out.messages) {
+      if (Array.isArray(m.content)) {
+        for (const p of m.content) {
+          expect(p).not.toHaveProperty("cache");
+        }
+      }
+    }
+    expect(out.tools?.[0]).not.toHaveProperty("cache");
+    // The decoded canonical is never mutated.
+    expect(inRequest.messages[1]!.content).toEqual([
+      { type: "text", text: "hi", cache: {} },
+      {
+        type: "image",
+        image: { data: "aGk=", mimeType: "image/png" },
+        cache: { ttl: "5m" },
+      },
+    ]);
+  });
+
+  it("hints kept with cache_hints", () => {
+    const inRequest = hinted();
+
+    const out = canonicalForTarget(
+      inRequest,
+      provider("openai", true),
+      target,
+    );
+
+    expect(out.systemPrompt).toEqual(inRequest.systemPrompt);
+    expect(out.messages).toEqual(inRequest.messages);
+    expect(out.tools).toEqual(inRequest.tools);
+  });
+
+  it("hints always kept for anthropic", () => {
+    const inRequest = hinted();
+
+    const out = canonicalForTarget(
+      inRequest,
+      provider("anthropic"),
+      target,
+    );
+
+    expect(out.systemPrompt).toEqual(inRequest.systemPrompt);
+    expect(out.messages).toEqual(inRequest.messages);
+    expect(out.tools).toEqual(inRequest.tools);
+  });
+});
