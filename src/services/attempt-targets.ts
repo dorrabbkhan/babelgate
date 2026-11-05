@@ -51,7 +51,32 @@ export function canonicalForTarget(
   if (entry.contextWindow !== undefined) {
     out.config = { ...canonical.config, contextWindow: entry.contextWindow };
   }
+  const clamp = maxTokensClampOf(canonical, entry);
+  if (clamp !== undefined) {
+    out.config = {
+      ...(out.config ?? canonical.config),
+      maxTokens: clamp.to,
+    };
+  }
   return out;
+}
+
+/**
+ * The clamp canonicalForTarget's max_output_tokens applied (spec §3.3),
+ * for the trace's maxTokensClamp: `{from, to}` when a requested
+ * maxTokens was reduced, `{to}` when the cap filled an unset one, and
+ * undefined when there is no cap or the request was already under it.
+ */
+export function maxTokensClampOf(
+  canonical: CanonicalRequest,
+  entry: ProviderEntry,
+): { from?: number; to: number } | undefined {
+  const cap = entry.maxOutputTokens;
+  if (cap === undefined) return undefined;
+  const requested = canonical.config?.maxTokens;
+  if (requested === undefined) return { to: cap };
+  if (requested <= cap) return undefined;
+  return { from: requested, to: cap };
 }
 
 /**

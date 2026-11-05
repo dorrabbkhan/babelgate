@@ -2510,3 +2510,28 @@ non-blocking review notes, landed on `v1.3/task-1-followups`
   `countTokensRequest` (optional). The non-null assertion in
   `proxy.service.ts` is gone; a `count_tokens` route without
   `countTokensBody` no longer typechecks.
+
+## v1.3 Task 2 — Per-provider output-token cap (2026-11-05)
+
+- **`ProviderEntry.maxOutputTokens` is set by conditional spread** in
+  both loaders (`yaml-config.ts`, `env-config.ts`), not
+  `maxOutputTokens: value | undefined`: `yaml-config.test.ts`'s
+  existing "valid full file" case asserts entries with
+  `toStrictEqual`, which fails on a key that is present-but-undefined.
+  Same reason `context_window` handling was left as is.
+- **`TARGET_MAX_OUTPUT_TOKENS` joined `ignoredEnvKeys`** between
+  `TARGET_CONTEXT_WINDOW` and `SOURCE_API`: it is env-only per spec
+  §3.3, so a loaded YAML should warn that it is ignored, exactly like
+  `TARGET_CONTEXT_WINDOW`.
+- **The cap is applied in `canonicalForTarget` via
+  `maxTokensClampOf`**, the plan's Produces name kept verbatim for
+  Task 5 (`trace.maxTokensClamp`): `{from, to}` when a requested
+  `maxTokens` was reduced, `{to}` when the cap filled an unset one,
+  `undefined` when there is no cap or the request was already under
+  it. `config` is copied before `maxTokens` is written — the decoded
+  canonical is never mutated.
+- **Invalid-cap YAML cases run from `mkdtemp` files**, not new
+  `tests/fixtures/config/*.yaml` fixtures: keeps the diff inside the
+  task's Files block and the fixture tree untouched (the guard allows
+  new files, but the plan names only the three test files).
+- **Files outside the Files block:** none.

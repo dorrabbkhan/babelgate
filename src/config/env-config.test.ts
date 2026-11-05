@@ -118,6 +118,22 @@ describe("Environment Configuration", () => {
     expect(config.targetBaseUrl).toBe("http://localhost:11434");
   });
 
+  it("TARGET_MAX_OUTPUT_TOKENS lands on the env-only provider (spec §3.3)", () => {
+    process.env.TARGET_API = "ollama";
+    process.env.TARGET_MAX_OUTPUT_TOKENS = "8000";
+
+    const config = loadConfig();
+
+    expect(config.registry.get("ollama").maxOutputTokens).toBe(8000);
+  });
+
+  it("TARGET_MAX_OUTPUT_TOKENS must be a positive integer", () => {
+    process.env.TARGET_API = "ollama";
+    process.env.TARGET_MAX_OUTPUT_TOKENS = "8k";
+
+    expect(() => loadConfig()).toThrow("TARGET_MAX_OUTPUT_TOKENS");
+  });
+
   it("should use default port when PORT is not set", () => {
     process.env.SOURCE_API = "openai";
     process.env.TARGET_API = "ollama";

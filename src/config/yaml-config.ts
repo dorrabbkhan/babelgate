@@ -38,8 +38,9 @@ export function resolveConfigPath(
 /**
  * Env vars that apply in env-only mode and are ignored when a YAML
  * file is loaded (spec §3.5): TARGET_API, every *_API_BASE_URL,
- * MODEL_MAP, TARGET_CONTEXT_WINDOW and SOURCE_API — the ones that are
- * set, in that order. Names only, never values.
+ * MODEL_MAP, TARGET_CONTEXT_WINDOW, TARGET_MAX_OUTPUT_TOKENS and
+ * SOURCE_API — the ones that are set, in that order. Names only,
+ * never values.
  */
 export function ignoredEnvKeys(env: NodeJS.ProcessEnv): string[] {
   const baseUrlKeys = Object.keys(env)
@@ -51,6 +52,9 @@ export function ignoredEnvKeys(env: NodeJS.ProcessEnv): string[] {
     ...(env.MODEL_MAP !== undefined ? ["MODEL_MAP"] : []),
     ...(env.TARGET_CONTEXT_WINDOW !== undefined
       ? ["TARGET_CONTEXT_WINDOW"]
+      : []),
+    ...(env.TARGET_MAX_OUTPUT_TOKENS !== undefined
+      ? ["TARGET_MAX_OUTPUT_TOKENS"]
       : []),
     ...(env.SOURCE_API !== undefined ? ["SOURCE_API"] : []),
   ];
@@ -152,6 +156,9 @@ export function loadYamlConfig(
         apiKey,
         apiKeyEnv: provider.api_key_env,
         contextWindow: provider.context_window,
+        ...(provider.max_output_tokens === undefined
+          ? {}
+          : { maxOutputTokens: provider.max_output_tokens }),
         timeoutMs: provider.timeout_ms,
         streamIdleMs: provider.stream_idle_ms,
       };
