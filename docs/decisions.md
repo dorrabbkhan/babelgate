@@ -2646,3 +2646,13 @@ system-role *message*, not only `systemPrompt` — OpenAI emitted
 them with `"\n"`, and Gemini's message fallback ignored array content.
 All three now flatten the system message's content through
 `systemText` too; hints still drop on non-Anthropic targets (Task 4).
+
+**Fix round 2 (review):** Ollama's `systemText` path now applies only
+when a system message's parts carry a `cache` hint; unhinted system
+parts keep main's `"\n"` join, so no unhinted system-prompt behaviour
+changes (§3.2). OpenAI side effect, disclosed: its encoder's system
+message still flattens array content via `systemText`, so an
+OpenAI-format client's *unhinted* array system content — which main
+encoded as `content: ""` (text dropped) — now arrives as its text
+joined with `"\n\n"`; a pre-existing drop fixed as a side effect, code
+unchanged.

@@ -228,11 +228,12 @@ function convertToOllamaMessage(
   if (typeof msg.content === "string") {
     result.content = msg.content;
   } else if (Array.isArray(msg.content)) {
-    // Extract text and images. §3.2: hinted system parts flatten
-    // through systemText ("\n\n", the decoder's separator); the hint
-    // itself drops (Task 4 adds cache_hints).
+    // Extract text and images. §3.2: only system parts carrying a
+    // cache hint flatten through systemText ("\n\n", the decoder's
+    // separator); unhinted parts keep the plain "\n" join. The hint
+    // itself drops either way (Task 4 adds cache_hints).
     const textParts =
-      msg.role === "system"
+      msg.role === "system" && msg.content.some((p) => p.cache)
         ? (systemText(msg.content) ?? "")
         : msg.content
             .filter((p) => p.type === "text")

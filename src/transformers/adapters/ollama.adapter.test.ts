@@ -249,6 +249,29 @@ describe("Ollama Adapter", () => {
         content: "A\n\nB",
       });
     });
+
+    it("keeps unhinted system parts joined with \"\\n\"", () => {
+      const input: CanonicalRequest = {
+        model: "llama2",
+        messages: [
+          {
+            role: "system",
+            content: [
+              { type: "text" as const, text: "A" },
+              { type: "text" as const, text: "B" },
+            ],
+          },
+          { role: "user", content: "Hello" },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages![0]).toEqual({
+        role: "system",
+        content: "A\nB",
+      });
+    });
   });
 
   describe("toCanonicalResponse", () => {
