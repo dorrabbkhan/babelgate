@@ -18,6 +18,7 @@ import {
 } from "../../utils/canonical-error";
 import { UpstreamError, ValidationError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
+import { systemText } from "../system-text";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -341,7 +342,9 @@ function convertFromCanonicalMessage(
   if (msg.role === "system") {
     return {
       role: "system",
-      content: typeof content === "string" ? content : "",
+      // §3.2: hinted parts flatten through systemText; the hint
+      // itself drops (Task 4 adds cache_hints).
+      content: systemText(msg.content) ?? "",
     };
   }
 

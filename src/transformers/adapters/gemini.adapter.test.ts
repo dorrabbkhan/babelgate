@@ -180,6 +180,32 @@ describe('Gemini Adapter', () => {
     });
   });
 
+  describe('hinted system parts (spec §3.2)', () => {
+    it('flattens hinted system parts to one instruction', () => {
+      const hinted = [
+        { type: 'text' as const, text: 'A', cache: {} },
+        { type: 'text' as const, text: 'B' },
+      ];
+      const input: CanonicalRequest = {
+        model: 'gemini-pro',
+        systemPrompt: hinted,
+        messages: [
+          { role: 'system', content: hinted },
+          { role: 'user', content: 'Hello' },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.systemInstruction).toEqual({
+        role: 'user',
+        parts: [{ text: 'A\n\nB' }],
+      });
+      expect(result.contents).toHaveLength(1);
+      expect(result.contents[0].role).toBe('user');
+    });
+  });
+
   describe('toCanonicalResponse', () => {
     it('should convert basic response', () => {
       const input: GenerateContentResponse = {

@@ -227,6 +227,30 @@ describe("Ollama Adapter", () => {
     });
   });
 
+  describe("hinted system parts (spec §3.2)", () => {
+    it("flattens hinted system parts to one string", () => {
+      const hinted = [
+        { type: "text" as const, text: "A", cache: {} },
+        { type: "text" as const, text: "B" },
+      ];
+      const input: CanonicalRequest = {
+        model: "llama2",
+        systemPrompt: hinted,
+        messages: [
+          { role: "system", content: hinted },
+          { role: "user", content: "Hello" },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages![0]).toEqual({
+        role: "system",
+        content: "A\n\nB",
+      });
+    });
+  });
+
   describe("toCanonicalResponse", () => {
     it("should convert basic response", () => {
       const input = {

@@ -15,6 +15,7 @@ import {
 } from "../../utils/canonical-error";
 import { ValidationError } from "../../utils/errors";
 import { createIdGenerator, sequentialIds } from "../../utils/ids";
+import { systemText } from "../system-text";
 import type {
   OllamaChatRequest,
   OllamaChatResponse,
@@ -227,11 +228,16 @@ function convertToOllamaMessage(
   if (typeof msg.content === "string") {
     result.content = msg.content;
   } else if (Array.isArray(msg.content)) {
-    // Extract text and images
-    const textParts = msg.content
-      .filter((p) => p.type === "text")
-      .map((p) => p.text || "")
-      .join("\n");
+    // Extract text and images. §3.2: hinted system parts flatten
+    // through systemText ("\n\n", the decoder's separator); the hint
+    // itself drops (Task 4 adds cache_hints).
+    const textParts =
+      msg.role === "system"
+        ? (systemText(msg.content) ?? "")
+        : msg.content
+            .filter((p) => p.type === "text")
+            .map((p) => p.text || "")
+            .join("\n");
 
     const images = msg.content
       .filter((p) => p.type === "image" && p.image)

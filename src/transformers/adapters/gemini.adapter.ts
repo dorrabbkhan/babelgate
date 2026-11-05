@@ -316,8 +316,10 @@ export function fromCanonicalRequest(
 
   // Add system instruction — systemText flattens a parts prompt (§3.2)
   const systemMsg = request.messages.find((m) => m.role === "system");
-  const systemContent = systemText(request.systemPrompt) ??
-    (typeof systemMsg?.content === "string" ? systemMsg.content : "");
+  const systemContent =
+    systemText(request.systemPrompt) ??
+    systemText(systemMsg?.content) ??
+    "";
   if (systemContent) {
     result.systemInstruction = {
       role: "user" as GeminiRole,

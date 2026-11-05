@@ -2633,9 +2633,16 @@ is titled `[OWNER REVIEW]`.
 - `tests/fixtures/streams/openai/tool_call.json` — the owner-approved
   fixture change above.
 
-**Files block entries that needed no change:** `ollama.adapter.ts` and
+**Files block entries that needed no change:**
 `ollama.stream.ts` (no cache fields are ever decoded or emitted for
 Ollama — asserted by the new "no cache fields ever emitted" tests),
 `src/utils/stream-reassemble.ts` (usage passes through by reference, so
 the new fields ride along), `src/types/gemini.types.ts` (the SDK
 `UsageMetadata` already declares `cachedContentTokenCount`).
+
+**Fix round 1 (review):** the encoders also read system text from the
+system-role *message*, not only `systemPrompt` — OpenAI emitted
+`content: ""` for hinted parts (system text dropped), Ollama joined
+them with `"\n"`, and Gemini's message fallback ignored array content.
+All three now flatten the system message's content through
+`systemText` too; hints still drop on non-Anthropic targets (Task 4).

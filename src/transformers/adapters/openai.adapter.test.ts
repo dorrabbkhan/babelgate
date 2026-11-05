@@ -6,10 +6,12 @@ import {
   fromCanonicalResponse,
   fromCanonicalModelList,
 } from './openai.adapter';
+import { toCanonicalRequest as anthropicToCanonicalRequest } from './anthropic.adapter';
 import { UpstreamError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import type { CanonicalRequest, CanonicalResponse } from '../../types/canonical.types';
 import type { ChatCompletionRequest, ChatCompletionResponse } from '../../types/openai.types';
+import type { MessageCreateParams } from '../../types/anthropic.types';
 
 describe('OpenAI Adapter', () => {
   describe('toCanonicalRequest', () => {
@@ -122,6 +124,55 @@ describe('OpenAI Adapter', () => {
       expect(result.max_tokens).toBe(100);
       expect(result.top_p).toBe(0.9);
       expect(result.stop).toEqual(['END']);
+    });
+  });
+
+  describe('hinted system parts (spec §3.2)', () => {
+    const hinted = [
+      { type: 'text' as const, text: 'A', cache: {} },
+      { type: 'text' as const, text: 'B' },
+    ];
+
+    it('flattens hinted system parts to one string', () => {
+      const input: CanonicalRequest = {
+        model: 'gpt-4',
+        systemPrompt: hinted,
+        messages: [
+          { role: 'system', content: hinted },
+          { role: 'user', content: 'Hello' },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages[0]).toEqual({
+        role: 'system',
+        content: 'A\n\nB',
+      });
+    });
+
+    it('Anthropic decode → OpenAI encode keeps the system text verbatim', () => {
+      const anthropicRequest = {
+        model: 'claude-3-opus-20240229',
+        max_tokens: 1024,
+        system: [
+          {
+            type: 'text',
+            text: 'A',
+            cache_control: { type: 'ephemeral' },
+          },
+          { type: 'text', text: 'B' },
+        ],
+        messages: [{ role: 'user', content: 'Hello' }],
+      } as unknown as MessageCreateParams;
+
+      const canonical = anthropicToCanonicalRequest(anthropicRequest);
+      const result = fromCanonicalRequest(canonical);
+
+      expect(result.messages[0]).toEqual({
+        role: 'system',
+        content: 'A\n\nB',
+      });
     });
   });
 
