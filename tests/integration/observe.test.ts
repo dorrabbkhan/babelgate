@@ -225,6 +225,55 @@ describe("request trace (spec §3.1)", () => {
     ]);
   });
 
+  // The upstream attempt succeeded, but decoding its reply throws —
+  // still exactly one trace, now an error one (Global Constraints:
+  // "emitted exactly once, also on failure"). Client behaviour is
+  // unchanged from main: the same 502 + canonical "upstream" kind.
+  it("decode failure after a successful upstream is traced once", async () => {
+    process.env.TARGET_API = "openai";
+    resetConfig();
+    responseOverrides.openai = {
+      status: 200,
+      body: {
+        id: "chatcmpl-custom",
+        object: "chat.completion",
+        created: 1,
+        model: "gpt-4",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "custom",
+                  custom: { name: "t", input: "{}" },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      },
+    };
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(res.status).toBe(502);
+
+    expect(traces).toHaveLength(1);
+    expect(traces[0]).toMatchObject({
+      status: "error",
+      httpStatus: res.status,
+      errorType: res.body.error.code,
+      winner: "openai",
+    });
+  });
+
   it("fallback hops on the trace", async () => {
     writeFileSync(TMP_CONFIG, GATEWAY_YAML);
     process.env.BABELGATE_CONFIG = TMP_CONFIG;
