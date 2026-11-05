@@ -108,6 +108,7 @@ export function loadConfig(): EnvConfig {
 
   const modelMap = parseModelMap(process.env.MODEL_MAP);
   const targetContextWindow = parseTargetContextWindow();
+  const targetMaxOutputTokens = parseTargetMaxOutputTokens();
 
   // Env-only mode (spec §3.5): one provider named after TARGET_API,
   // itself the default; MODEL_MAP entries become ordered routes to it.
@@ -122,6 +123,9 @@ export function loadConfig(): EnvConfig {
           ? apiKeyEnvVars[normalizedTarget]
           : undefined,
       contextWindow: targetContextWindow,
+      ...(targetMaxOutputTokens === undefined
+        ? {}
+        : { maxOutputTokens: targetMaxOutputTokens }),
     },
   ]);
   const routing: RoutingConfig = {
@@ -165,6 +169,18 @@ function parseTargetContextWindow(): number | undefined {
   if (!Number.isInteger(value) || value <= 0) {
     throw new ConfigurationError(
       "TARGET_CONTEXT_WINDOW must be a positive integer",
+    );
+  }
+  return value;
+}
+
+function parseTargetMaxOutputTokens(): number | undefined {
+  const raw = process.env.TARGET_MAX_OUTPUT_TOKENS;
+  if (raw === undefined || raw === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new ConfigurationError(
+      "TARGET_MAX_OUTPUT_TOKENS must be a positive integer",
     );
   }
   return value;

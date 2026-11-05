@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   attemptTargets,
   canonicalForTarget,
+  maxTokensClampOf,
   type Hop,
 } from "./attempt-targets";
 import { createRegistry } from "../routing/registry";
@@ -196,5 +197,70 @@ describe("canonicalForTarget", () => {
     expect(out.config).not.toBe(inRequest.config);
     expect(inRequest.config).toEqual({ temperature: 0.2 });
     expect(inRequest.model).toBe("decoded-model");
+  });
+});
+
+describe("max_output_tokens cap (spec §3.3)", () => {
+  const capped = (maxOutputTokens?: number): ProviderEntry => ({
+    name: "ollama",
+    type: "ollama",
+    baseUrl: "http://ollama.test",
+    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+  });
+  const target = { provider: "ollama", model: "routed-model" };
+  const withMax = (maxTokens?: number): CanonicalRequest => ({
+    model: "decoded-model",
+    messages: [{ role: "user", content: "hi" }],
+    ...(maxTokens === undefined
+      ? {}
+      : { config: { maxTokens } }),
+  });
+
+  it("cap clamps a larger request", () => {
+    const out = canonicalForTarget(withMax(32000), capped(8000), target);
+
+    expect(out.config?.maxTokens).toBe(8000);
+    expect(maxTokensClampOf(withMax(32000), capped(8000))).toEqual({
+      from: 32000,
+      to: 8000,
+    });
+  });
+
+  it("cap fills an unset maxTokens", () => {
+    const out = canonicalForTarget(withMax(), capped(8000), target);
+
+    expect(out.config?.maxTokens).toBe(8000);
+    expect(maxTokensClampOf(withMax(), capped(8000))).toEqual({
+      to: 8000,
+    });
+  });
+
+  it("smaller request untouched", () => {
+    const out = canonicalForTarget(withMax(4000), capped(8000), target);
+
+    expect(out.config?.maxTokens).toBe(4000);
+    expect(maxTokensClampOf(withMax(4000), capped(8000))).toBeUndefined();
+  });
+
+  it("no cap, no change", () => {
+    const inRequest = withMax(4000);
+
+    const out = canonicalForTarget(inRequest, capped(), target);
+
+    expect(out).toEqual({
+      model: "routed-model",
+      messages: [{ role: "user", content: "hi" }],
+      config: { maxTokens: 4000 },
+    });
+    expect(maxTokensClampOf(inRequest, capped())).toBeUndefined();
+  });
+
+  it("decoded canonical never mutated", () => {
+    const inRequest = withMax(32000);
+
+    const out = canonicalForTarget(inRequest, capped(8000), target);
+
+    expect(out.config).not.toBe(inRequest.config);
+    expect(inRequest.config?.maxTokens).toBe(32000);
   });
 });

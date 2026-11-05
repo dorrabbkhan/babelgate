@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ignoredEnvKeys,
@@ -149,6 +151,54 @@ describe("loadYamlConfig", () => {
     ).toThrowError("BABELGATE_TEST_UNSET_KEY");
   });
 
+  it("max_output_tokens lands on the entry or is a startup error (spec §3.3)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-cap-"));
+    try {
+      const good = join(dir, "good.yaml");
+      writeFileSync(
+        good,
+        [
+          "default: ollama",
+          "providers:",
+          "  ollama:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          "    max_output_tokens: 8000",
+          "",
+        ].join("\n"),
+      );
+      const config = loadYamlConfig(good, {});
+      expect(config.registry.get("ollama").maxOutputTokens).toBe(8000);
+
+      for (const [name, value] of [
+        ["zero", "0"],
+        ["string", '"8k"'],
+      ] as const) {
+        const bad = join(dir, `${name}.yaml`);
+        writeFileSync(
+          bad,
+          [
+            "default: ollama",
+            "providers:",
+            "  ollama:",
+            "    type: ollama",
+            "    base_url: http://localhost:11434",
+            `    max_output_tokens: ${value}`,
+            "",
+          ].join("\n"),
+        );
+        expect(() => loadYamlConfig(bad, {}), name).toThrowError(
+          ConfigurationError,
+        );
+        expect(() => loadYamlConfig(bad, {}), name).toThrowError(
+          "max_output_tokens",
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("a missing explicit path is a startup error", () => {
     expect(() => loadYamlConfig(fixture("does-not-exist.yaml"), {})).toThrowError(
       "Config file not found",
@@ -209,5 +259,11 @@ describe("ignoredEnvKeys", () => {
       "SOURCE_API",
     ]);
     expect(ignoredEnvKeys({ PORT: "3000" })).toEqual([]);
+  });
+
+  it("TARGET_MAX_OUTPUT_TOKENS is env-only and reported when a file loads", () => {
+    expect(ignoredEnvKeys({ TARGET_MAX_OUTPUT_TOKENS: "8000" })).toEqual([
+      "TARGET_MAX_OUTPUT_TOKENS",
+    ]);
   });
 });

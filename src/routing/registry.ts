@@ -13,6 +13,8 @@ export interface ProviderEntry {
   apiKey?: string;
   apiKeyEnv?: string;
   contextWindow?: number;
+  /** Output-token cap applied by canonicalForTarget (spec §3.3) */
+  maxOutputTokens?: number;
   timeoutMs?: number;
   streamIdleMs?: number;
 }
