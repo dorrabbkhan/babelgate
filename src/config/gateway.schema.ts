@@ -11,6 +11,7 @@ export interface GatewayFileProvider {
   api_key_env?: string;
   context_window?: number;
   max_output_tokens?: number;
+  cache_hints?: boolean;
   timeout_ms?: number;
   stream_idle_ms?: number;
 }
@@ -40,6 +41,7 @@ const providerEntrySchema = z
     api_key_env: z.string().optional(),
     context_window: z.number().int().positive().optional(),
     max_output_tokens: z.number().int().positive().optional(),
+    cache_hints: z.boolean().optional(),
     timeout_ms: z.number().int().positive().optional(),
     stream_idle_ms: z.number().int().positive().optional(),
   })

@@ -1056,6 +1056,64 @@ describe('Anthropic Adapter', () => {
       });
     });
 
+    it('more than 4 breakpoints keeps the last 4', () => {
+      // 6 hinted positions in the order Anthropic walks them —
+      // tools → system → messages — so the earliest two (the tool
+      // hint and the first system part) must lose theirs (§3.2).
+      const input: CanonicalRequest = {
+        model: 'claude-3-opus-20240229',
+        systemPrompt: [
+          { type: 'text', text: 'first', cache: {} },
+          { type: 'text', text: 'second', cache: { ttl: '1h' } },
+        ],
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'm1', cache: {} },
+              { type: 'text', text: 'm2', cache: {} },
+              { type: 'text', text: 'm3', cache: {} },
+            ],
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather' },
+            cache: { ttl: '1h' },
+          },
+        ],
+        config: { maxTokens: 1024 },
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      const breakpoints = [
+        result.tools?.[0],
+        ...(Array.isArray(result.system) ? result.system : []),
+        ...result.messages.flatMap((m) =>
+          Array.isArray(m.content) ? m.content : [],
+        ),
+      ];
+      expect(
+        breakpoints.filter((b) => b && 'cache_control' in b).length,
+      ).toBe(4);
+      // tools[0] and system[0] are the earliest breakpoints — dropped.
+      expect(result.tools?.[0]).not.toHaveProperty('cache_control');
+      expect((result.system as { cache_control?: unknown }[])[0]).not.toHaveProperty(
+        'cache_control',
+      );
+      expect(
+        (result.system as { cache_control?: unknown }[])[1]
+      ).toMatchObject({ cache_control: { type: 'ephemeral', ttl: '1h' } });
+      const parts = result.messages[0]!.content as {
+        cache_control?: unknown;
+      }[];
+      for (const part of parts) {
+        expect(part.cache_control).toEqual({ type: 'ephemeral' });
+      }
+    });
+
     it('no hints → request bytes identical to today', () => {
       const input: CanonicalRequest = {
         model: 'claude-3-opus-20240229',

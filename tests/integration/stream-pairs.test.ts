@@ -25,6 +25,9 @@ import {
   resetCaptured,
   resetOverrides,
   resetStreamCase,
+  resetCachedUsage,
+  cachedUsage,
+  CACHED_USAGE,
   streamCase,
   nonStreamSource,
   MOCK_BASE_URLS,
@@ -135,6 +138,7 @@ afterEach(() => {
   resetCaptured();
   resetOverrides();
   resetStreamCase();
+  resetCachedUsage();
   delete process.env.UPSTREAM_RETRIES;
 });
 
@@ -858,6 +862,149 @@ describe("16-pair streaming × tools matrix (spec §4.5, §5)", () => {
       assertToolsForwarded(target);
       if (caseName === "after_tool_result") {
         assertToolResultForwarded(target, source);
+      }
+    },
+  );
+});
+
+// ---------- cached usage matrix (spec §3.2) ----------
+
+/**
+ * The canonical usage a target's cached-usage mock decodes to:
+ * Ollama's dialect has no cache fields; Gemini's carries reads only.
+ */
+function expectedCanonical(target: Provider): {
+  read?: number;
+  write?: number;
+} {
+  if (target === "ollama") return {};
+  if (target === "gemini") return { read: CACHED_USAGE.readTokens };
+  return {
+    read: CACHED_USAGE.readTokens,
+    write: CACHED_USAGE.writeTokens,
+  };
+}
+
+interface StreamUsage {
+  input?: number;
+  output?: number;
+  read?: number;
+  write?: number;
+}
+
+/** The usage a client-dialect stream carries, in canonical terms. */
+function clientStreamUsage(source: Provider, wire: string): StreamUsage {
+  if (source === "openai") {
+    let usage: any;
+    for (const line of wire.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).replace(/^ /, "");
+      if (data === "" || data === "[DONE]") continue;
+      const chunk = JSON.parse(data);
+      if (chunk.usage) usage = chunk.usage;
+    }
+    return {
+      input: usage?.prompt_tokens,
+      output: usage?.completion_tokens,
+      read: usage?.prompt_tokens_details?.cached_tokens,
+      write: usage?.prompt_tokens_details?.cache_write_tokens,
+    };
+  }
+  if (source === "anthropic") {
+    let usage: any;
+    for (const frame of wire.split(/\r?\n\r?\n/)) {
+      const data = frame
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).replace(/^ /, ""))
+        .join("\n");
+      if (!data) continue;
+      const evt = JSON.parse(data);
+      if (evt.type === "message_delta") usage = evt.usage;
+    }
+    return {
+      // Anthropic's input_tokens excludes cached tokens — add them
+      // back so the caller can compare against canonical inputTokens.
+      input:
+        usage === undefined
+          ? undefined
+          : usage.input_tokens +
+            (usage.cache_read_input_tokens ?? 0) +
+            (usage.cache_creation_input_tokens ?? 0),
+      output: usage?.output_tokens,
+      read: usage?.cache_read_input_tokens,
+      write: usage?.cache_creation_input_tokens,
+    };
+  }
+  if (source === "gemini") {
+    let usage: any;
+    for (const line of wire.split(/\r?\n/)) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).replace(/^ /, "");
+      if (data === "") continue;
+      const evt = JSON.parse(data);
+      if (evt.usageMetadata) usage = evt.usageMetadata;
+    }
+    return {
+      input: usage?.promptTokenCount,
+      output: usage?.candidatesTokenCount,
+      read: usage?.cachedContentTokenCount,
+    };
+  }
+  // ollama: the done:true line carries the totals; no cache fields.
+  const lines = wire.split("\n").filter((l) => l !== "");
+  const last = JSON.parse(lines.at(-1)!);
+  return { input: last.prompt_eval_count, output: last.eval_count };
+}
+
+describe("cached usage survives every pair, streamed (spec §3.2, §4.2)", () => {
+  it.each(ALL_PAIRS)(
+    "%s → %s",
+    async (source: Provider, target: Provider) => {
+      setPair(source, target);
+      cachedUsage[target] = true;
+
+      const path =
+        source === "gemini"
+          ? "/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse"
+          : PROVIDER_PATHS[source].pathPrefix;
+      const body = {
+        ...(SOURCE_FIXTURES[source].requests.basic as Record<
+          string,
+          unknown
+        >),
+        ...(source !== "gemini" && { stream: true }),
+        // An OpenAI client gets the usage chunk only when it asked.
+        ...(source === "openai" && {
+          stream_options: { include_usage: true },
+        }),
+      };
+
+      const res = await postStream(path, body);
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      const wire = res.body as string;
+      const usage = clientStreamUsage(source, wire);
+      const expected = expectedCanonical(target);
+
+      // All input tokens reach the client regardless of dialect;
+      // the cache counts arrive only when the source wire can carry
+      // them (Ollama: never; Gemini: reads only).
+      expect(usage.input, `${source} input`).toBe(
+        CACHED_USAGE.inputTokens,
+      );
+      expect(usage.output, `${source} output`).toBe(
+        CACHED_USAGE.outputTokens,
+      );
+      if (source === "ollama") {
+        expect(JSON.parse(wire.trimEnd().split("\n").at(-1)!)).not.toHaveProperty(
+          "cache_read_input_tokens",
+        );
+      } else if (source === "gemini") {
+        expect(usage.read).toBe(expected.read);
+      } else {
+        expect(usage.read, `${source} cache read`).toBe(expected.read);
+        expect(usage.write, `${source} cache write`).toBe(expected.write);
       }
     },
   );

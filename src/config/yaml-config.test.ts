@@ -199,6 +199,54 @@ describe("loadYamlConfig", () => {
     }
   });
 
+  it("cache_hints lands on the entry or is a startup error (spec §3.2)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-hints-"));
+    try {
+      const good = join(dir, "good.yaml");
+      writeFileSync(
+        good,
+        [
+          "default: ollama",
+          "providers:",
+          "  ollama:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          "  openrouter:",
+          "    type: openai",
+          "    base_url: https://openrouter.test",
+          "    api_key_env: BABELGATE_TEST_KEY",
+          "    cache_hints: true",
+          "",
+        ].join("\n"),
+      );
+      const config = loadYamlConfig(good, {
+        BABELGATE_TEST_KEY: "k",
+      });
+      expect(config.registry.get("openrouter").cacheHints).toBe(true);
+      expect(config.registry.get("ollama").cacheHints).toBeUndefined();
+
+      const bad = join(dir, "bad.yaml");
+      writeFileSync(
+        bad,
+        [
+          "default: ollama",
+          "providers:",
+          "  ollama:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          '    cache_hints: "yes"',
+          "",
+        ].join("\n"),
+      );
+      expect(() => loadYamlConfig(bad, {})).toThrowError(
+        ConfigurationError,
+      );
+      expect(() => loadYamlConfig(bad, {})).toThrowError("cache_hints");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("a missing explicit path is a startup error", () => {
     expect(() => loadYamlConfig(fixture("does-not-exist.yaml"), {})).toThrowError(
       "Config file not found",

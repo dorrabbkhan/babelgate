@@ -3,8 +3,14 @@ import type { RoutePlan, RouteTarget } from "../routing/plan-route";
 import { hopOutcome, isFallbackEligible } from "../routing/fallback";
 import type { Hop } from "../routing/route-log";
 import type { Provider } from "../transformers";
-import type { CanonicalRequest } from "../types/canonical.types";
+import { systemText } from "../transformers/system-text";
+import type {
+  CanonicalContentPart,
+  CanonicalRequest,
+  CanonicalTool,
+} from "../types/canonical.types";
 import { ProxyError, UpstreamError } from "../utils/errors";
+import { logger } from "../utils/logger";
 import { toClientError } from "./upstream-errors";
 
 export type { Hop } from "../routing/route-log";
@@ -57,6 +63,74 @@ export function canonicalForTarget(
       ...(out.config ?? canonical.config),
       maxTokens: clamp.to,
     };
+  }
+  // §3.2: Anthropic and providers with cache_hints honour hints;
+  // everywhere else they are removed from the copy before encode.
+  if (entry.type !== "anthropic" && entry.cacheHints !== true) {
+    return stripCacheHints(out, entry.type);
+  }
+  return out;
+}
+
+/** Return `part` without its cache hint; shares the object when unhinted. */
+function withoutHint(part: CanonicalContentPart): CanonicalContentPart {
+  if (part.cache === undefined) return part;
+  const { cache: _hint, ...rest } = part;
+  return rest;
+}
+
+function withoutToolHint(tool: CanonicalTool): CanonicalTool {
+  if (tool.cache === undefined) return tool;
+  const { cache: _hint, ...rest } = tool;
+  return rest;
+}
+
+/**
+ * Remove every cache hint from a per-target copy (spec §3.2). Parts
+ * prompts exist only to carry hints, so a system prompt or system
+ * message whose parts lose their hints collapses back to the string
+ * the decoder produced (systemText's "\n\n" join) — the strip changes
+ * no prompt text. Hinted arrays elsewhere keep their shape (a user
+ * message may mix text and images); tools keep theirs too. Ollama
+ * drops hints silently per the spec table.
+ */
+function stripCacheHints(
+  canonical: CanonicalRequest,
+  target: Provider,
+): CanonicalRequest {
+  let stripped = false;
+  const out: CanonicalRequest = { ...canonical };
+
+  if (
+    Array.isArray(canonical.systemPrompt) &&
+    canonical.systemPrompt.some((p) => p.cache !== undefined)
+  ) {
+    out.systemPrompt = systemText(canonical.systemPrompt);
+    stripped = true;
+  }
+
+  out.messages = canonical.messages.map((m) => {
+    if (!Array.isArray(m.content)) return m;
+    if (!m.content.some((p) => p.cache !== undefined)) return m;
+    stripped = true;
+    if (
+      m.role === "system" &&
+      m.content.every((p) => p.type === "text")
+    ) {
+      return { ...m, content: systemText(m.content) ?? "" };
+    }
+    return { ...m, content: m.content.map(withoutHint) };
+  });
+
+  if (canonical.tools?.some((t) => t.cache !== undefined)) {
+    out.tools = canonical.tools.map(withoutToolHint);
+    stripped = true;
+  }
+
+  if (stripped && target !== "ollama") {
+    logger.debug(
+      `Dropping cache hints (target provider "${target}" has no cache_hints)`,
+    );
   }
   return out;
 }

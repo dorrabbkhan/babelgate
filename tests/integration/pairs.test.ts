@@ -13,6 +13,9 @@ import {
   capturedRequests,
   resetCaptured,
   resetOverrides,
+  resetCachedUsage,
+  cachedUsage,
+  CACHED_USAGE,
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
 import openaiFixtures from "../fixtures/openai.json";
@@ -92,6 +95,79 @@ const pairs = providers.flatMap((source) =>
   providers.map((target) => ({ source, target })),
 );
 
+/**
+ * The canonical usage a target's cached-usage mock decodes to
+ * (spec §3.2): Ollama's dialect has no cache fields; Gemini's carries
+ * reads only.
+ */
+function expectedCanonical(target: Provider): {
+  read?: number;
+  write?: number;
+} {
+  if (target === "ollama") return {};
+  if (target === "gemini") return { read: CACHED_USAGE.readTokens };
+  return {
+    read: CACHED_USAGE.readTokens,
+    write: CACHED_USAGE.writeTokens,
+  };
+}
+
+/**
+ * The client must receive the surviving counts in its own dialect —
+ * or no cache fields at all when the source wire cannot carry them
+ * (Ollama: inputTokens only; Gemini: reads only).
+ */
+/* eslint-disable @typescript-eslint/no-explicit-any */
+function expectCachedUsage(
+  source: Provider,
+  target: Provider,
+  body: unknown,
+): void {
+  const expected = expectedCanonical(target);
+  const b = body as Record<string, any>;
+  if (source === "openai") {
+    const details = b.usage?.prompt_tokens_details;
+    if (expected.read === undefined && expected.write === undefined) {
+      expect(details).toBeUndefined();
+    } else {
+      expect(details).toEqual({
+        ...(expected.read !== undefined && {
+          cached_tokens: expected.read,
+        }),
+        ...(expected.write !== undefined && {
+          cache_write_tokens: expected.write,
+        }),
+      });
+    }
+    expect(b.usage.prompt_tokens).toBe(CACHED_USAGE.inputTokens);
+    return;
+  }
+  if (source === "anthropic") {
+    const usage = b.usage;
+    expect(usage.cache_read_input_tokens).toBe(expected.read);
+    expect(usage.cache_creation_input_tokens).toBe(expected.write);
+    // input_tokens on the wire excludes the cached tokens.
+    expect(usage.input_tokens).toBe(
+      CACHED_USAGE.inputTokens -
+        (expected.read ?? 0) -
+        (expected.write ?? 0),
+    );
+    expect(usage.output_tokens).toBe(CACHED_USAGE.outputTokens);
+    return;
+  }
+  if (source === "gemini") {
+    expect(b.usageMetadata?.cachedContentTokenCount).toBe(expected.read);
+    expect(b.usageMetadata?.promptTokenCount).toBe(
+      CACHED_USAGE.inputTokens,
+    );
+    return;
+  }
+  // ollama: inputTokens only — the wire has no cache fields.
+  expect(b.prompt_eval_count).toBe(CACHED_USAGE.inputTokens);
+  expect(b.eval_count).toBe(CACHED_USAGE.outputTokens);
+  expect(JSON.stringify(b)).not.toContain("cache");
+}
+
 beforeAll(() => {
   server.listen({ onUnhandledRequest: "bypass" });
 
@@ -106,6 +182,7 @@ afterEach(() => {
   server.resetHandlers();
   resetCaptured();
   resetOverrides();
+  resetCachedUsage();
 });
 
 afterAll(() => {
@@ -171,6 +248,29 @@ describe("provider pair coverage", () => {
 
       // Response must be a list of models in the SOURCE provider's shape
       MODEL_LIST_CHECKS[source](res.body);
+    },
+  );
+
+  it.each(pairs)(
+    "$source → $target: cached usage survives every pair (spec §3.2)",
+    async ({ source, target }) => {
+      process.env.SOURCE_API = source;
+      process.env.TARGET_API = target;
+      resetConfig();
+      cachedUsage[target] = true;
+
+      const sourceFixture = FIXTURES[source].requests["basic"];
+      const body =
+        source === "ollama"
+          ? { ...(sourceFixture as Record<string, unknown>), stream: false }
+          : (sourceFixture as object);
+
+      const res = await request(app)
+        .post(PROVIDER_PATHS[source].pathPrefix)
+        .send(body);
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expectCachedUsage(source, target, res.body);
     },
   );
 

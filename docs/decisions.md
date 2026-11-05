@@ -2656,3 +2656,64 @@ OpenAI-format client's *unhinted* array system content — which main
 encoded as `content: ""` (text dropped) — now arrives as its text
 joined with `"\n\n"`; a pre-existing drop fixed as a side effect, code
 unchanged.
+
+## v1.3 Task 4 — Cache-hint encoding flags, encoder stability, cached-usage pair matrix (2026-11-05)
+
+- **`ProviderEntry.cacheHints` (YAML `cache_hints`) is set by
+  conditional spread** in `yaml-config.ts`, same reason as Task 2's
+  `maxOutputTokens`: `yaml-config.test.ts`'s "valid full file" case
+  asserts entries with `toStrictEqual`, which fails on a
+  present-but-undefined key. The plan names no env-only-mode key, so
+  none was added — env mode keeps hints stripped.
+- **Hint stripping happens in `canonicalForTarget`** (adapters stay
+  config-free per spec §3.2): every `cache` is removed unless
+  `entry.type === "anthropic"` or `entry.cacheHints === true`. When a
+  system prompt's or system message's parts lose their hints they
+  collapse to `systemText`'s `"\n\n"` join — the same string the
+  decoder produced and the encoders emit — so the strip changes no
+  prompt text. Hinted arrays elsewhere (user/assistant/tool messages,
+  tools) keep their shape minus `cache`. Ollama strips silently;
+  OpenAI/Gemini targets log one `logger.debug` line per request
+  (Task 6 turns it into a `cache_control_dropped` note).
+- **The Anthropic 4-breakpoint cap is a post-pass** over the encoded
+  request (`limitCacheBreakpoints` in `anthropic.cache.ts`): it
+  collects `cache_control` holders in Anthropic's walk order —
+  `tools` → `system` → `messages` (including `tool_result` content
+  blocks one level down) — keeps the last 4 and deletes the rest;
+  one `logger.debug` line reports the count (Task 6 turns it into a
+  `cache_limit` note).
+- **The OpenAI encoder emits `cache_control: {type:"ephemeral", ttl?}`**
+  on every part carrying a canonical hint, on `tools[]` at top level,
+  and on the system message as a **one-part content array** (the
+  plan's wording). A single part can mark only one breakpoint, so the
+  **last** hinted part's cache value wins — it covers the most prompt;
+  interior hints collapse into it. Recorded because multi-part
+  systems with differently placed hints lose precision here either
+  way.
+- **Two existing OpenAI adapter expectations changed** (flagged, not
+  loosened): the §3.2 hinted-system cases previously asserted the
+  hinted system message encoded to a plain string. Task 4's spec
+  mandates emitting `cache_control` when canonical carries a hint, so
+  both now assert the one-part content array. All other expected
+  values — fixtures, snapshots, existing tests — are unchanged.
+- **Stability findings:** the 4 request encoders were already
+  deterministic and prefix-stable on main (400 seeded cases pass
+  unmodified — no non-determinism fix was needed). The generator caps
+  hints at 4 per request and appends only user/assistant turns: a
+  bare tool message legitimately merges into Anthropic's previous
+  tool-result user block and a hinted appended turn could push an
+  earlier breakpoint past the cap — wire rules, not instability.
+- **Mock design:** `tests/mocks/upstreams.ts` `cachedUsage` replies
+  are hand-written provider wire shapes (not adapter output) so the
+  matrix reads the documented wire fields — Anthropic
+  `cache_read_input_tokens`/`cache_creation_input_tokens`, OpenAI
+  `prompt_tokens_details.cached_tokens`/`cache_write_tokens`, Gemini
+  `cachedContentTokenCount`, Ollama totals only.
+
+**Files outside the Files block:**
+- `src/transformers/adapters/anthropic.cache.ts` — `limitCacheBreakpoints`
+  belongs with the §3.2 cache-conversion helpers Task 3 created here;
+  `anthropic.adapter.ts` stays under ~400 lines.
+- `src/config/yaml-config.test.ts` — a new case pinning `cache_hints`
+  parsing; the task's Test list doesn't name it, but Task 2 set the
+  precedent for config-key cases living here.
