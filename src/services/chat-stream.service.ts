@@ -3,7 +3,9 @@ import {
   PROVIDER_ROUTES,
 } from "../transformers";
 import { authHeaders } from "../routing/registry";
-import { logRoute, type Hop } from "../routing/route-log";
+import type { Hop } from "../routing/route-log";
+import { currentTrace } from "../observe/context";
+import { finishTrace } from "../observe/emit";
 import type {
   CanonicalStreamEvent,
   StreamDecoder,
@@ -14,6 +16,8 @@ import { runStreamPipeline } from "./stream-pipeline";
 import {
   attemptTargets,
   canonicalForTarget,
+  errorTraceFields,
+  maxTokensClampOf,
   toClientFacing,
 } from "./attempt-targets";
 import type { ChatInput } from "./chat.service";
@@ -95,13 +99,12 @@ export async function proxyChatStream(
       { requestId, signal: opts?.signal, hops },
     );
   } catch (err) {
-    logRoute({
-      requestId,
-      sourceApi: source,
-      requestedModel,
+    await finishTrace({
       reason: plan.reason,
+      requestedModel,
       hops,
       stream: true,
+      ...errorTraceFields(err, opts?.signal?.aborted === true),
     });
     throw err;
   }
@@ -129,28 +132,50 @@ export async function proxyChatStream(
 
   const chunks = (async function* (): AsyncGenerator<string> {
     try {
-      yield* runStreamPipeline({
+      let ttfbSet = false;
+      for await (const chunk of runStreamPipeline({
         upstream: upstream.body,
         decoder: recordingDecoder,
         encoder,
         idleMs: result.entry.streamIdleMs ?? config.upstreamStreamIdleMs,
         signal,
-      });
+      })) {
+        // §3.1: ttfb is the moment the first chunk goes to the client.
+        if (!ttfbSet) {
+          ttfbSet = true;
+          const trace = currentTrace();
+          if (trace !== undefined) {
+            trace.ttfbMs = Date.now() - trace.startedAt;
+          }
+        }
+        yield chunk;
+      }
     } finally {
       // Whatever ended the pipe — terminal event, in-stream error,
       // client disconnect — the upstream request is done with, and the
-      // route log line goes out exactly once (spec §3.4).
+      // trace is emitted exactly once (spec §3.1): a client that went
+      // away mid-stream is "aborted", an in-stream error is "error",
+      // everything else "ok". httpStatus is the 200 the route already
+      // sent before the stream started.
       upstreamAc.abort();
       const last = observed.at(-1);
       const usageEvent = observed.find((e) => e.type === "usage");
-      logRoute({
-        requestId,
-        sourceApi: source,
-        requestedModel,
+      await finishTrace({
         reason: plan.reason,
+        requestedModel,
         hops: result.hops,
         winner: result.target.provider,
         stream: true,
+        status: signal.aborted
+          ? "aborted"
+          : last?.type === "error"
+            ? "error"
+            : "ok",
+        httpStatus: 200,
+        errorType:
+          !signal.aborted && last?.type === "error"
+            ? last.error.kind
+            : undefined,
         inputTokens:
           usageEvent?.type === "usage"
             ? usageEvent.usage.inputTokens
@@ -159,8 +184,17 @@ export async function proxyChatStream(
           usageEvent?.type === "usage"
             ? usageEvent.usage.outputTokens
             : undefined,
+        cacheReadTokens:
+          usageEvent?.type === "usage"
+            ? usageEvent.usage.cacheReadTokens
+            : undefined,
+        cacheWriteTokens:
+          usageEvent?.type === "usage"
+            ? usageEvent.usage.cacheWriteTokens
+            : undefined,
         finishReason:
           last?.type === "message_end" ? last.finishReason : undefined,
+        maxTokensClamp: maxTokensClampOf(canonical, result.entry),
       });
     }
   })();

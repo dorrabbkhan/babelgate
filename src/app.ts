@@ -3,6 +3,7 @@ import { requestLogger } from "./middleware/request-logger";
 import { detectSourceMiddleware } from "./middleware/detect-source";
 import { errorHandler } from "./middleware/error-handler";
 import { requireApiKey } from "./middleware/require-api-key";
+import { observeMiddleware } from "./observe/middleware";
 import { proxyRouter } from "./routes/proxy";
 
 const app = express();
@@ -28,7 +29,13 @@ app.get("/health", (_req, res) => {
 // /health above stays open for probes.
 app.use(requireApiKey(process.env.PROXY_API_KEY || undefined));
 
-// 3b. Proxy routes - transforms and forwards LLM API requests
+// 3b. Request trace (spec §3.1) — chat requests get an
+// AsyncLocalStorage scope holding their RequestTrace; finishTrace in
+// the services emits it once. Mounted after auth so pre-route
+// rejections are never traced.
+app.use(observeMiddleware());
+
+// 3c. Proxy routes - transforms and forwards LLM API requests
 app.use(proxyRouter);
 
 // 4. 404 handler - catch unmatched routes

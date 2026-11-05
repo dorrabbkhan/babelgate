@@ -2717,3 +2717,82 @@ unchanged.
 - `src/config/yaml-config.test.ts` — a new case pinning `cache_hints`
   parsing; the task's Test list doesn't name it, but Task 2 set the
   precedent for config-key cases living here.
+
+## v1.3 Task 5 — RequestTrace, client id, middleware, emitTrace, log sink (2026-11-05)
+
+- **Scope opens only for chat routes.** `observeMiddleware` runs after
+  `requireApiKey` and calls `findSourceRoute(source, method, path)`;
+  when the matched route's `kind !== "chat"` there is no scope at all
+  (model lists, count_tokens, unmatched provider paths). This makes
+  spec §3.1's "only chat requests produce traces" structural rather
+  than incidental, and keeps `currentTrace()` undefined inside
+  non-chat handlers for Task 6's `recordNote`/`snapshot`. Chat-route
+  requests rejected before `planRoute` (unsupported Gemini method,
+  validation, empty path model) create a trace that is simply never
+  finished — no emit, matching "pre-route rejections are not traced".
+- **`finishTrace` outside a scope is a no-op.** The update carries no
+  `requestId`/`sourceApi`, so there is no fallback "Request completed"
+  line for direct service calls — the v1.2 tests that asserted it now
+  run inside `runWithTrace`. A second `finishTrace` for the same trace
+  is a no-op (WeakSet in emit.ts), so an error path plus the stream's
+  `finally` can never double-emit (Review Focus 1).
+- **Moved route-log tests.** v1.2 had no `route-log.test.ts`; the two
+  tests asserting the "Request completed" line moved instead:
+  `proxy.service.test.ts`'s "logs token usage metrics on completion" →
+  `src/observe/sinks/log.test.ts` (same assertions, wrapped in
+  `runWithTrace`), and `gateway.test.ts`'s "route log line has no
+  prompt text" → `tests/integration/observe.test.ts` as "log line has
+  no prompt text" (same assertions, same GATEWAY_YAML routing).
+- **status/httpStatus/errorType conventions.** A stream that ends on a
+  canonical `error` event is `status: "error"` with `httpStatus` 200
+  (headers were already flushed) and `errorType` = the event's
+  canonical kind; a client abort mid-stream is `status: "aborted"`,
+  `httpStatus` 200, no `errorType`; a client abort before any response
+  is `status: "aborted"`, `httpStatus` 499 (nginx's client-closed
+  convention) via `errorTraceFields` in `attempt-targets.ts`, which
+  also maps errors to the *client-facing* canonical status/kind
+  (`err.toCanonical()`), not `ProxyError.statusCode` — an upstream 400
+  is recorded as 400/`invalid_request`, matching what the error
+  handler renders.
+- **`maxTokensClamp` records the winning hop's clamp** only
+  (`maxTokensClampOf(canonical, result.entry)`); all-fail requests
+  carry none. `ttfbMs` is set when the first stream chunk is yielded
+  (JSON replies: when the encoded body is ready, computed against
+  `trace.startedAt`).
+- **The log line is built field-by-field**, never by spreading the
+  trace — so `userAgent` (a header), `bodies`, `notes` and `repairs`
+  cannot leak into it; `diagnostics` goes in as codes only. All
+  v1.2 `RouteLogRecord` fields keep their names and values; the new
+  fields are exactly the plan's list: `client`, `status`,
+  `httpStatus`, `cacheReadTokens`, `cacheWriteTokens`, `costUsd`,
+  `ttfbMs`, `totalMs`, `diagnostics`.
+- **Sink registry.** The log sink is the module-level default in
+  `emit.ts`, so a fresh module graph (tests' `vi.resetModules`)
+  re-registers exactly once; `resetSinks()` clears sinks and the warn
+  throttle for tests. `emitTrace(trace, now)` takes an injectable
+  clock for the one-warn-per-60 s-per-sink test. `bodies` is stripped
+  via one shared destructure per emit for every sink except
+  `body-ring`/`usage-store` (spec §3.1.1).
+- **Trace.ts carries Task 6/9's types now** (`TranslationNote`,
+  `ToolCallDiagnostic`, `ToolCallRepair`, `BodySnapshot`,
+  `BodySnapshots`) — `RequestTrace` needs them for its spec §3.1
+  fields; Task 6/9 will import rather than redeclare them (their
+  entries in later Files blocks shrink accordingly).
+- **Gemini CLI UA** uses the recorded pattern verbatim:
+  `GeminiCLI-tui/0.66.0/<model> (<os>; <arch>; terminal)` → the
+  `GeminiCLI` substring → `gemini-cli` (Task 1 record). Playground
+  requests reach `playground` through the `x-babelgate-client` header
+  override — no special case.
+
+**Files outside the Files block:**
+- `src/services/attempt-targets.ts` — `errorTraceFields`, the shared
+  status/httpStatus/errorType helper both chat services' error paths
+  need (kept beside `toClientFacing`, the file's error-mapping home).
+- `src/services/proxy.service.test.ts` and
+  `tests/integration/gateway.test.ts` — the two route-log tests were
+  *removed* here as part of the sanctioned move (assertions unchanged
+  in their new homes).
+- `src/observe/sinks/log.test.ts` — the moved test's new home plus the
+  sink's own field-shape case; `src/observe/trace.test.ts` covers
+  `newTrace` defaults (both fall under the Test list's
+  `src/observe/*.test.ts`).

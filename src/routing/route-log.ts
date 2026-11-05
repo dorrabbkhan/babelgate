@@ -1,5 +1,4 @@
 import type { Provider } from "../transformers";
-import { logger } from "../utils/logger";
 
 /** One tried route target (spec §3.4 route log line). */
 export interface Hop {
@@ -11,9 +10,9 @@ export interface Hop {
 }
 
 /**
- * The spec §3.4 route log record — one per chat request; the v1.3
- * usage-store row. Only routing and usage fields: never prompt bodies,
- * completions, tool arguments or keys.
+ * The spec §3.4 route log record — the routing and usage fields of a
+ * v1.3 RequestTrace (src/observe/trace.ts). Only routing and usage
+ * fields: never prompt bodies, completions, tool arguments or keys.
  */
 export interface RouteLogRecord {
   requestId: string;
@@ -26,9 +25,4 @@ export interface RouteLogRecord {
   inputTokens?: number;
   outputTokens?: number;
   finishReason?: string;
-}
-
-/** One info line per chat request, replacing "Request completed". */
-export function logRoute(record: RouteLogRecord): void {
-  logger.info(record, "Request completed");
 }
