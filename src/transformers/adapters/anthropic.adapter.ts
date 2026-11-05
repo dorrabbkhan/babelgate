@@ -22,6 +22,13 @@ import type {
   ToolResultBlockParam,
 } from "../../types/anthropic.types";
 import {
+  anthropicUsageToCanonical,
+  canonicalUsageToAnthropic,
+  hasUncarriedCacheControl,
+  toAnthropicSystem,
+  toCanonicalSystem,
+} from "./anthropic.cache";
+import {
   toCanonicalMessage,
   toCanonicalTool,
   toCanonicalToolChoice,
@@ -62,20 +69,9 @@ function logDropped(request: MessageCreateParams): void {
   if (request.metadata !== undefined) {
     logger.debug('Dropping request field "metadata" (no canonical equivalent)');
   }
-  if (hasCacheControl(request)) {
+  if (hasUncarriedCacheControl(request)) {
     logger.debug('Dropping "cache_control" fields (no canonical equivalent)');
   }
-}
-
-/** cache_control may sit on any block, tool or system part (§3.5). */
-function hasCacheControl(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(hasCacheControl);
-  if (value !== null && typeof value === "object") {
-    const obj = value as Record<string, unknown>;
-    if ("cache_control" in obj) return true;
-    return Object.values(obj).some(hasCacheControl);
-  }
-  return false;
 }
 
 export function toCanonicalRequest(
@@ -87,17 +83,14 @@ export function toCanonicalRequest(
     toCanonicalMessage(m),
   );
 
-  // §3.5: a system array's text blocks join with a blank line.
+  // §3.5: a system array's text blocks join with a blank line — unless a
+  // block carries cache_control, which turns the prompt into hinted
+  // parts (§3.2).
   const systemPrompt = !request.system
     ? undefined
     : typeof request.system === "string"
       ? request.system
-      : request.system
-          .filter(
-            (b): b is { type: "text"; text: string } => b.type === "text",
-          )
-          .map((b) => b.text)
-          .join("\n\n");
+      : toCanonicalSystem(request.system);
 
   // Add system as first message if present
   if (systemPrompt !== undefined) {
@@ -156,16 +149,18 @@ export function fromCanonicalRequest(
     messages.push(toMessageParam(m));
   }
 
-  const systemPrompt =
+  const systemInput =
     request.systemPrompt ||
     request.messages.find((m) => m.role === "system")?.content;
+  // §3.2: parts become a system block array (with cache_control); a
+  // string stays a string.
+  const system = toAnthropicSystem(systemInput);
 
   const result: MessageCreateParams = {
     model: request.model,
     messages,
     max_tokens: request.config?.maxTokens ?? 4096,
-    ...(systemPrompt &&
-      typeof systemPrompt === "string" && { system: systemPrompt }),
+    ...(system !== undefined && system.length > 0 && { system }),
     ...(request.config?.temperature !== undefined && {
       temperature: request.config.temperature,
     }),
@@ -226,11 +221,7 @@ export function toCanonicalResponse(
       ...(toolCalls.length > 0 && { toolCalls }),
     },
     finishReason: mapFinishReason(response.stop_reason),
-    usage: {
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-      totalTokens: response.usage.input_tokens + response.usage.output_tokens,
-    },
+    usage: anthropicUsageToCanonical(response.usage),
   };
 }
 
@@ -280,10 +271,13 @@ export function fromCanonicalResponse(response: CanonicalResponse): Message {
     model: response.model,
     stop_reason: mapToAnthropicStopReason(response.finishReason),
     stop_sequence: null,
-    usage: {
-      input_tokens: response.usage?.inputTokens ?? 0,
-      output_tokens: response.usage?.outputTokens ?? 0,
-    },
+    usage: canonicalUsageToAnthropic(
+      response.usage ?? {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+    ),
   } as Message;
 }
 

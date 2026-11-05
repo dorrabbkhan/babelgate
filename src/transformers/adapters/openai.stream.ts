@@ -18,6 +18,8 @@ import {
 import {
   fromCanonicalError,
   mapToOpenaiFinishReason,
+  openaiUsageFromCanonical,
+  openaiUsageToCanonical,
   toCanonicalError,
 } from "./openai.adapter";
 
@@ -114,14 +116,7 @@ export function createStreamDecoder(
       }
     }
     if (chunk.usage && usage === undefined) {
-      usage = {
-        inputTokens: chunk.usage.prompt_tokens ?? 0,
-        outputTokens: chunk.usage.completion_tokens ?? 0,
-        totalTokens:
-          chunk.usage.total_tokens ??
-          (chunk.usage.prompt_tokens ?? 0) +
-            (chunk.usage.completion_tokens ?? 0),
-      };
+      usage = openaiUsageToCanonical(chunk.usage);
     }
   }
 
@@ -253,11 +248,7 @@ export function createStreamEncoder(
               created,
               model: ctx.requestedModel,
               choices: [],
-              usage: {
-                prompt_tokens: event.usage.inputTokens,
-                completion_tokens: event.usage.outputTokens,
-                total_tokens: event.usage.totalTokens,
-              },
+              usage: openaiUsageFromCanonical(event.usage),
             }),
           );
         case "message_end":

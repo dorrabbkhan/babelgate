@@ -9,6 +9,7 @@ import type {
   CanonicalImage,
   CanonicalModelList,
   CanonicalToolChoice,
+  CanonicalUsage,
   ProviderAdapter,
 } from "../../types/canonical.types";
 import {
@@ -17,10 +18,12 @@ import {
 } from "../../utils/canonical-error";
 import { UpstreamError, ValidationError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
+import { systemText } from "../system-text";
 import type {
   ChatCompletionRequest,
   ChatCompletionResponse,
   ChatCompletionMessageParam,
+  OpenAICompatibleUsage,
 } from "../../types/openai.types";
 import {
   createStreamDecoder,
@@ -339,7 +342,9 @@ function convertFromCanonicalMessage(
   if (msg.role === "system") {
     return {
       role: "system",
-      content: typeof content === "string" ? content : "",
+      // §3.2: hinted parts flatten through systemText; the hint
+      // itself drops (Task 4 adds cache_hints).
+      content: systemText(msg.content) ?? "",
     };
   }
 
@@ -416,13 +421,74 @@ export function toCanonicalResponse(
     message,
     finishReason: mapFinishReason(choice?.finish_reason),
     usage: response.usage
-      ? {
-          inputTokens: response.usage.prompt_tokens,
-          outputTokens: response.usage.completion_tokens,
-          totalTokens: response.usage.total_tokens,
-        }
+      ? openaiUsageToCanonical(response.usage as OpenAICompatibleUsage)
       : undefined,
     created: response.created,
+  };
+}
+
+/**
+ * Wire usage → canonical (spec §3.2): `prompt_tokens_details.cached_tokens`
+ * and `cache_write_tokens` map to read/write; DeepSeek-style
+ * `prompt_cache_hit_tokens` maps to read when the details object is absent.
+ * `prompt_tokens` already includes cached tokens, so `inputTokens` needs
+ * no summing. Cache fields are emitted only when non-zero.
+ */
+export function openaiUsageToCanonical(usage: {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+  };
+  prompt_cache_hit_tokens?: number;
+}): CanonicalUsage {
+  const read =
+    usage.prompt_tokens_details?.cached_tokens ??
+    usage.prompt_cache_hit_tokens ??
+    0;
+  const write = usage.prompt_tokens_details?.cache_write_tokens ?? 0;
+  const input = usage.prompt_tokens ?? 0;
+  const output = usage.completion_tokens ?? 0;
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: usage.total_tokens ?? input + output,
+    ...(read > 0 && { cacheReadTokens: read }),
+    ...(write > 0 && { cacheWriteTokens: write }),
+  };
+}
+
+/** Canonical → wire usage; `prompt_tokens_details` appears only with non-zero cache fields. */
+export function openaiUsageFromCanonical(
+  usage: NonNullable<CanonicalResponse["usage"]>,
+): {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  prompt_tokens_details?: {
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+  };
+} {
+  return {
+    prompt_tokens: usage.inputTokens,
+    completion_tokens: usage.outputTokens,
+    total_tokens: usage.totalTokens,
+    ...(((usage.cacheReadTokens ?? 0) > 0 ||
+      (usage.cacheWriteTokens ?? 0) > 0) && {
+      prompt_tokens_details: {
+        ...(usage.cacheReadTokens !== undefined &&
+          usage.cacheReadTokens > 0 && {
+            cached_tokens: usage.cacheReadTokens,
+          }),
+        ...(usage.cacheWriteTokens !== undefined &&
+          usage.cacheWriteTokens > 0 && {
+            cache_write_tokens: usage.cacheWriteTokens,
+          }),
+      },
+    }),
   };
 }
 
@@ -481,11 +547,7 @@ export function fromCanonicalResponse(
       },
     ],
     usage: response.usage
-      ? {
-          prompt_tokens: response.usage.inputTokens,
-          completion_tokens: response.usage.outputTokens,
-          total_tokens: response.usage.totalTokens,
-        }
+      ? openaiUsageFromCanonical(response.usage)
       : undefined,
   };
 }

@@ -19,15 +19,30 @@ const imageSchema = z.object({
   mimeType: mimeTypeSchema,
 });
 
+const cacheHintSchema = z.object({
+  ttl: z.enum(["5m", "1h"]).optional(),
+});
+
 const contentPartSchema = z
   .object({
     type: z.enum(["text", "image"]),
     text: z.string().optional(),
     image: imageSchema.optional(),
+    cache: cacheHintSchema.optional(),
   })
   .refine((p) => (p.type === "text" ? p.text !== undefined : true), {
     message: "content part of type 'text' must have text",
   });
+
+// systemPrompt parts are text-only (spec §3.2)
+const systemPromptSchema = z.union([
+  z.string(),
+  z
+    .array(contentPartSchema)
+    .refine((parts) => parts.every((p) => p.type === "text"), {
+      message: "system prompt parts must be text",
+    }),
+]);
 
 const toolCallSchema = z.object({
   id: z.string(),
@@ -69,6 +84,7 @@ const functionSchema = z.object({
 export const canonicalToolSchema = z.object({
   type: z.literal("function"),
   function: functionSchema,
+  cache: cacheHintSchema.optional(),
 });
 
 export const canonicalToolChoiceSchema = z.union([
@@ -82,7 +98,7 @@ export const canonicalToolChoiceSchema = z.union([
 export const canonicalRequestSchema = z.object({
   model: z.string().min(1),
   messages: z.array(canonicalMessageSchema).min(1),
-  systemPrompt: z.string().optional(),
+  systemPrompt: systemPromptSchema.optional(),
   config: canonicalConfigSchema.optional(),
   tools: z.array(canonicalToolSchema).optional(),
   toolChoice: canonicalToolChoiceSchema.optional(),
@@ -102,6 +118,8 @@ export const canonicalUsageSchema = z.object({
   inputTokens: z.number().int().nonnegative(),
   outputTokens: z.number().int().nonnegative(),
   totalTokens: z.number().int().nonnegative(),
+  cacheReadTokens: z.number().int().nonnegative().optional(),
+  cacheWriteTokens: z.number().int().nonnegative().optional(),
 });
 
 export const canonicalResponseSchema = z.object({

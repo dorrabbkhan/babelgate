@@ -12,8 +12,9 @@ export interface CanonicalRequest {
   model: string;
   /** Conversation messages */
   messages: CanonicalMessage[];
-  /** System prompt (extracted from messages for providers that need it separate) */
-  systemPrompt?: string;
+  /** System prompt (extracted from messages for providers that need it separate).
+   *  An array carries per-part cache hints; parts are text-only (schema-enforced). */
+  systemPrompt?: string | CanonicalContentPart[];
   /** Generation configuration */
   config?: CanonicalConfig;
   /** Tool/function definitions */
@@ -46,6 +47,13 @@ export interface CanonicalContentPart {
   text?: string;
   /** Image content (when type is 'image') */
   image?: CanonicalImage;
+  /** Prompt-cache breakpoint hint (Anthropic cache_control) */
+  cache?: CanonicalCacheHint;
+}
+
+/** Prompt-cache breakpoint hint; ttl defaults to the provider's (5m for Anthropic). */
+export interface CanonicalCacheHint {
+  ttl?: "5m" | "1h";
 }
 
 export interface CanonicalImage {
@@ -85,6 +93,8 @@ export interface CanonicalTool {
   type: "function";
   /** Function definition */
   function: CanonicalFunction;
+  /** Prompt-cache breakpoint hint (Anthropic cache_control) */
+  cache?: CanonicalCacheHint;
 }
 
 export interface CanonicalFunction {
@@ -142,12 +152,16 @@ export type CanonicalFinishReason =
   | "unknown";
 
 export interface CanonicalUsage {
-  /** Tokens in the prompt */
+  /** ALL input tokens, cached included (OTel convention) */
   inputTokens: number;
   /** Tokens in the response */
   outputTokens: number;
   /** Total tokens (input + output) */
   totalTokens: number;
+  /** Input tokens read from cache; emitted only when present and non-zero */
+  cacheReadTokens?: number;
+  /** Input tokens written to cache; emitted only when present and non-zero */
+  cacheWriteTokens?: number;
 }
 
 // ============ STREAMING ============

@@ -9,7 +9,9 @@ import type {
 import { parseToolArguments } from "../../utils/tool-args";
 import { ValidationError } from "../../utils/errors";
 import { logger } from "../../utils/logger";
+import { toCacheControl, toCacheHint } from "./anthropic.cache";
 import type {
+  CacheControlEphemeral,
   MessageParam,
   ContentBlockParam,
   Tool,
@@ -132,7 +134,13 @@ export function toCanonicalTool(tool: ToolUnion): CanonicalTool {
   if ("input_schema" in tool && tool.input_schema) {
     fn.parameters = tool.input_schema as Record<string, unknown>;
   }
-  return { type: "function", function: fn };
+  const cache =
+    "cache_control" in tool ? toCacheHint(tool.cache_control) : undefined;
+  return {
+    type: "function",
+    function: fn,
+    ...(cache && { cache }),
+  };
 }
 
 // auto→auto, any→required, tool{name}→function choice, none→none (§3.4).
@@ -173,7 +181,11 @@ function extractContent(
   const parts: CanonicalContentPart[] = [];
   for (const block of content) {
     if (block.type === "text") {
-      parts.push({ type: "text", text: block.text });
+      parts.push({
+        type: "text",
+        text: block.text,
+        ...(block.cache_control && { cache: toCacheHint(block.cache_control) }),
+      });
       continue;
     }
     if (block.type === "image" && "source" in block) {
@@ -190,6 +202,9 @@ function extractContent(
             mimeType: (source.media_type ||
               "image/png") as CanonicalImage["mimeType"],
           },
+          ...(block.cache_control && {
+            cache: toCacheHint(block.cache_control),
+          }),
         });
       } else {
         // image without a usable base64 source keeps the old placeholder
@@ -260,6 +275,7 @@ export function toToolUseBlock(tc: CanonicalToolCall): ToolUseBlockParam {
 }
 
 export function toAnthropicTool(tool: CanonicalTool): Tool {
+  const cacheControl = toCacheControl(tool.cache);
   return {
     name: tool.function.name,
     ...(tool.function.description && {
@@ -269,6 +285,7 @@ export function toAnthropicTool(tool: CanonicalTool): Tool {
       type: "object",
       ...(tool.function.parameters ?? {}),
     } as Tool["input_schema"],
+    ...(cacheControl && { cache_control: cacheControl }),
   };
 }
 
@@ -288,10 +305,15 @@ export function toAnthropicToolChoice(choice: CanonicalToolChoice): ToolChoice {
 }
 
 type AnthropicContentBlock =
-  | { type: "text"; text: string }
+  | {
+      type: "text";
+      text: string;
+      cache_control?: CacheControlEphemeral;
+    }
   | {
       type: "image";
       source: { type: "base64"; media_type: ImageMediaType; data: string };
+      cache_control?: CacheControlEphemeral;
     };
 
 function convertToAnthropicContent(
@@ -302,8 +324,13 @@ function convertToAnthropicContent(
   }
 
   const blocks: AnthropicContentBlock[] = content.map((part) => {
+    const cacheControl = toCacheControl(part.cache);
     if (part.type === "text") {
-      return { type: "text", text: part.text || "" };
+      return {
+        type: "text",
+        text: part.text || "",
+        ...(cacheControl && { cache_control: cacheControl }),
+      };
     }
     if (part.type === "image" && part.image) {
       return {
@@ -313,13 +340,19 @@ function convertToAnthropicContent(
           media_type: validateMediaType(part.image.mimeType),
           data: part.image.data,
         },
+        ...(cacheControl && { cache_control: cacheControl }),
       };
     }
     return { type: "text", text: "" };
   });
 
-  // If only one text block, return as string
-  if (blocks.length === 1 && blocks[0].type === "text") {
+  // If only one text block, return as string — unless it carries a
+  // cache hint, which only a block can express.
+  if (
+    blocks.length === 1 &&
+    blocks[0].type === "text" &&
+    blocks[0].cache_control === undefined
+  ) {
     return blocks[0].text;
   }
 

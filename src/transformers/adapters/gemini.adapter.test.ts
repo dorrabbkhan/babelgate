@@ -180,6 +180,32 @@ describe('Gemini Adapter', () => {
     });
   });
 
+  describe('hinted system parts (spec §3.2)', () => {
+    it('flattens hinted system parts to one instruction', () => {
+      const hinted = [
+        { type: 'text' as const, text: 'A', cache: {} },
+        { type: 'text' as const, text: 'B' },
+      ];
+      const input: CanonicalRequest = {
+        model: 'gemini-pro',
+        systemPrompt: hinted,
+        messages: [
+          { role: 'system', content: hinted },
+          { role: 'user', content: 'Hello' },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.systemInstruction).toEqual({
+        role: 'user',
+        parts: [{ text: 'A\n\nB' }],
+      });
+      expect(result.contents).toHaveLength(1);
+      expect(result.contents[0].role).toBe('user');
+    });
+  });
+
   describe('toCanonicalResponse', () => {
     it('should convert basic response', () => {
       const input: GenerateContentResponse = {
@@ -678,6 +704,56 @@ describe('Gemini Adapter', () => {
       expect(result.messages[1].content).toBe('{"temp":55}');
       expect(result.messages[2].toolCallId).toBe('call_paris');
       expect(result.messages[2].content).toBe('{"temp":72}');
+    });
+  });
+
+  describe('cached usage (spec §3.2)', () => {
+    it('cachedContentTokenCount decoded and encoded', () => {
+      const decoded = toCanonicalResponse(
+        {
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 'Hi' }] },
+              finishReason: FinishReason.STOP,
+              index: 0,
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 100,
+            candidatesTokenCount: 5,
+            totalTokenCount: 105,
+            cachedContentTokenCount: 60,
+          },
+        },
+        'gemini-pro'
+      );
+
+      expect(decoded.usage).toEqual({
+        inputTokens: 100,
+        outputTokens: 5,
+        totalTokens: 105,
+        cacheReadTokens: 60,
+      });
+
+      const encoded = fromCanonicalResponse({
+        id: 'gemini-1',
+        model: 'gemini-pro',
+        message: { role: 'assistant', content: 'Hi' },
+        finishReason: 'stop',
+        usage: {
+          inputTokens: 100,
+          outputTokens: 5,
+          totalTokens: 105,
+          cacheReadTokens: 60,
+        },
+      });
+
+      expect(encoded.usageMetadata).toStrictEqual({
+        promptTokenCount: 100,
+        candidatesTokenCount: 5,
+        totalTokenCount: 105,
+        cachedContentTokenCount: 60,
+      });
     });
   });
 

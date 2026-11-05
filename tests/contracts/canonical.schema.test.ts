@@ -277,4 +277,82 @@ describe('Canonical stream event schema', () => {
       expect(result.success).toBe(true);
     }
   });
+
+  it('image part with cache is valid', () => {
+    const result = canonicalRequestSchema.safeParse({
+      model: 'm',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              image: { data: 'abc', mimeType: 'image/png' },
+              cache: { ttl: '1h' },
+            },
+          ],
+        },
+      ],
+      tools: [
+        {
+          type: 'function',
+          function: { name: 'f' },
+          cache: {},
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('system parts must be text', () => {
+    const image = canonicalRequestSchema.safeParse({
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      systemPrompt: [
+        { type: 'image', image: { data: 'abc', mimeType: 'image/png' } },
+      ],
+    });
+    expect(image.success).toBe(false);
+
+    const text = canonicalRequestSchema.safeParse({
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      systemPrompt: [
+        { type: 'text', text: 'a' },
+        { type: 'text', text: 'b', cache: { ttl: '5m' } },
+      ],
+    });
+    expect(text.success).toBe(true);
+  });
+
+  it('cached usage fields parse and stay optional', () => {
+    const withCache = canonicalResponseSchema.safeParse({
+      id: 'r1',
+      model: 'm',
+      message: { role: 'assistant', content: 'hi' },
+      finishReason: 'stop',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 5,
+        totalTokens: 105,
+        cacheReadTokens: 90,
+        cacheWriteTokens: 9,
+      },
+    });
+    expect(withCache.success).toBe(true);
+
+    const negative = canonicalResponseSchema.safeParse({
+      id: 'r1',
+      model: 'm',
+      message: { role: 'assistant', content: 'hi' },
+      finishReason: 'stop',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 5,
+        totalTokens: 105,
+        cacheReadTokens: -1,
+      },
+    });
+    expect(negative.success).toBe(false);
+  });
 });

@@ -768,7 +768,7 @@ describe('Anthropic Adapter', () => {
       expect(result.messages[0].content).toBe('part one\n\npart two');
     });
 
-    it('thinking blocks and cache_control are dropped', () => {
+    it('thinking blocks are dropped; cache_control decodes onto parts and system', () => {
       const input = {
         model: 'claude-3-opus-20240229',
         messages: [
@@ -810,7 +810,13 @@ describe('Anthropic Adapter', () => {
       const assistant = result.messages[2];
       expect(assistant.content).toEqual([{ type: 'text', text: 'answer' }]);
       expect(assistant.toolCalls).toBeUndefined();
-      expect(result.systemPrompt).toBe('sys');
+      // §3.2: cache_control turns systemPrompt into hinted parts
+      expect(result.systemPrompt).toEqual([
+        { type: 'text', text: 'sys', cache: {} },
+      ]);
+      expect(result.messages[1].content).toEqual([
+        { type: 'text', text: 'hi', cache: {} },
+      ]);
     });
 
     it('unknown block type → 400 naming it', () => {
@@ -843,6 +849,239 @@ describe('Anthropic Adapter', () => {
       expect(err).toBeInstanceOf(ValidationError);
       expect((err as ValidationError).statusCode).toBe(400);
       expect((err as ValidationError).message).toContain('"document"');
+    });
+  });
+
+  describe('cache hints and cached usage (spec §3.2)', () => {
+    it('cache_control decoded onto parts, tools and system', () => {
+      const input = {
+        model: 'claude-3-opus-20240229',
+        max_tokens: 1024,
+        system: [
+          { type: 'text', text: 'first' },
+          {
+            type: 'text',
+            text: 'second',
+            cache_control: { type: 'ephemeral', ttl: '1h' },
+          },
+        ],
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: 'hi',
+                cache_control: { type: 'ephemeral' },
+              },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: 'abc123',
+                },
+                cache_control: { type: 'ephemeral', ttl: '1h' },
+              },
+            ],
+          },
+        ],
+        tools: [
+          {
+            name: 'get_weather',
+            input_schema: { type: 'object' },
+            cache_control: { type: 'ephemeral', ttl: '1h' },
+          },
+        ],
+      } as unknown as MessageCreateParams;
+
+      const result = toCanonicalRequest(input);
+
+      // absent ttl decodes to {} — Anthropic defaults it to 5m
+      expect(result.systemPrompt).toEqual([
+        { type: 'text', text: 'first' },
+        { type: 'text', text: 'second', cache: { ttl: '1h' } },
+      ]);
+      expect(result.messages[0]).toEqual({
+        role: 'system',
+        content: [
+          { type: 'text', text: 'first' },
+          { type: 'text', text: 'second', cache: { ttl: '1h' } },
+        ],
+      });
+      expect(result.messages[1].content).toEqual([
+        { type: 'text', text: 'hi', cache: {} },
+        {
+          type: 'image',
+          image: { data: 'abc123', mimeType: 'image/png' },
+          cache: { ttl: '1h' },
+        },
+      ]);
+      expect(result.tools?.[0].cache).toEqual({ ttl: '1h' });
+    });
+
+    it('usage sums cached input', () => {
+      const input = createTestMessage({
+        content: [{ type: 'text', text: 'Hi' }] as Message['content'],
+        usage: {
+          input_tokens: 10,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 90,
+          output_tokens: 5,
+        } as Message['usage'],
+      });
+
+      const result = toCanonicalResponse(input, 'claude-3-opus-20240229');
+
+      expect(result.usage).toEqual({
+        inputTokens: 1000,
+        cacheReadTokens: 900,
+        cacheWriteTokens: 90,
+        outputTokens: 5,
+        totalTokens: 1005,
+      });
+    });
+
+    it('usage encode splits back', () => {
+      const input: CanonicalResponse = {
+        id: 'msg_123',
+        model: 'claude-3-opus-20240229',
+        message: { role: 'assistant', content: 'Hi' },
+        finishReason: 'stop',
+        usage: {
+          inputTokens: 1000,
+          cacheReadTokens: 900,
+          cacheWriteTokens: 90,
+          outputTokens: 5,
+          totalTokens: 1005,
+        },
+      };
+
+      const result = fromCanonicalResponse(input);
+
+      expect(result.usage).toEqual({
+        input_tokens: 10,
+        cache_creation_input_tokens: 90,
+        cache_read_input_tokens: 900,
+        output_tokens: 5,
+      });
+    });
+
+    it('split never negative', () => {
+      const input: CanonicalResponse = {
+        id: 'msg_123',
+        model: 'claude-3-opus-20240229',
+        message: { role: 'assistant', content: 'Hi' },
+        finishReason: 'stop',
+        usage: {
+          inputTokens: 5,
+          cacheReadTokens: 9,
+          outputTokens: 1,
+          totalTokens: 6,
+        },
+      };
+
+      const result = fromCanonicalResponse(input);
+
+      expect(result.usage.input_tokens).toBe(0);
+      expect(result.usage.cache_read_input_tokens).toBe(9);
+    });
+
+    it('cache_control encoded on blocks, tools and system', () => {
+      const input: CanonicalRequest = {
+        model: 'claude-3-opus-20240229',
+        systemPrompt: [
+          { type: 'text', text: 'first' },
+          { type: 'text', text: 'second', cache: { ttl: '1h' } },
+        ],
+        messages: [
+          {
+            role: 'system',
+            content: [
+              { type: 'text', text: 'first' },
+              { type: 'text', text: 'second', cache: { ttl: '1h' } },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'hi', cache: {} },
+              {
+                type: 'image',
+                image: { data: 'abc123', mimeType: 'image/png' },
+                cache: { ttl: '1h' },
+              },
+            ],
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather' },
+            cache: { ttl: '1h' },
+          },
+        ],
+        config: { maxTokens: 1024 },
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.system).toEqual([
+        { type: 'text', text: 'first' },
+        {
+          type: 'text',
+          text: 'second',
+          cache_control: { type: 'ephemeral', ttl: '1h' },
+        },
+      ]);
+      expect(result.messages[0].content).toEqual([
+        {
+          type: 'text',
+          text: 'hi',
+          cache_control: { type: 'ephemeral' },
+        },
+        {
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: 'image/png',
+            data: 'abc123',
+          },
+          cache_control: { type: 'ephemeral', ttl: '1h' },
+        },
+      ]);
+      expect(result.tools?.[0].cache_control).toEqual({
+        type: 'ephemeral',
+        ttl: '1h',
+      });
+    });
+
+    it('no hints → request bytes identical to today', () => {
+      const input: CanonicalRequest = {
+        model: 'claude-3-opus-20240229',
+        systemPrompt: 'Be helpful',
+        messages: [
+          { role: 'system', content: 'Be helpful' },
+          { role: 'user', content: 'Hello' },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather' },
+          },
+        ],
+        config: { maxTokens: 1024 },
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result).toStrictEqual({
+        model: 'claude-3-opus-20240229',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        system: 'Be helpful',
+        tools: [{ name: 'get_weather', input_schema: { type: 'object' } }],
+      });
     });
   });
 

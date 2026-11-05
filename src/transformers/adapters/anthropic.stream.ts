@@ -25,6 +25,10 @@ import {
   toCanonicalError,
   toCanonicalRequest,
 } from "./anthropic.adapter";
+import {
+  anthropicUsageToCanonical,
+  canonicalUsageToAnthropic,
+} from "./anthropic.cache";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Obj = Record<string, any>;
@@ -72,6 +76,8 @@ export function createStreamDecoder(
   let finished = false;
   let nextToolIndex = 0;
   let inputTokens: number | undefined;
+  let cacheReadTokens: number | undefined;
+  let cacheWriteTokens: number | undefined;
   let outputTokens: number | undefined;
   let finish: CanonicalFinishReason | undefined;
   // wire content-block index → block kind / canonical tool index
@@ -116,6 +122,8 @@ export function createStreamDecoder(
       case "message_start": {
         const message = event.message ?? {};
         inputTokens = message.usage?.input_tokens;
+        cacheReadTokens = message.usage?.cache_read_input_tokens;
+        cacheWriteTokens = message.usage?.cache_creation_input_tokens;
         out.push({
           type: "message_start",
           id: typeof message.id === "string" ? message.id : ids(),
@@ -189,6 +197,12 @@ export function createStreamDecoder(
         if (event.usage?.input_tokens != null) {
           inputTokens = event.usage.input_tokens;
         }
+        if (event.usage?.cache_read_input_tokens != null) {
+          cacheReadTokens = event.usage.cache_read_input_tokens;
+        }
+        if (event.usage?.cache_creation_input_tokens != null) {
+          cacheWriteTokens = event.usage.cache_creation_input_tokens;
+        }
         if (event.usage?.output_tokens != null) {
           outputTokens = event.usage.output_tokens;
         }
@@ -196,16 +210,15 @@ export function createStreamDecoder(
       }
       case "message_stop": {
         if (inputTokens !== undefined || outputTokens !== undefined) {
-          const input = inputTokens ?? 0;
-          const output = outputTokens ?? 0;
-          out.push({
-            type: "usage",
-            usage: {
-              inputTokens: input,
-              outputTokens: output,
-              totalTokens: input + output,
-            },
+          // §3.2: canonical inputTokens is ALL input, cached included —
+          // Anthropic's input_tokens excludes the cache fields.
+          const usage = anthropicUsageToCanonical({
+            input_tokens: inputTokens,
+            cache_read_input_tokens: cacheReadTokens,
+            cache_creation_input_tokens: cacheWriteTokens,
+            output_tokens: outputTokens,
           });
+          out.push({ type: "usage", usage });
         }
         out.push({
           type: "message_end",
@@ -408,12 +421,10 @@ export function createStreamEncoder(
                 stop_reason: mapToAnthropicStopReason(event.finishReason),
                 stop_sequence: null,
               },
-              usage: {
-                ...(usage && {
-                  input_tokens: usage.inputTokens,
-                }),
-                output_tokens: usage?.outputTokens ?? 0,
-              },
+              usage:
+                usage !== undefined
+                  ? canonicalUsageToAnthropic(usage)
+                  : { output_tokens: 0 },
             }) +
             sse("message_stop", { type: "message_stop" })
           );

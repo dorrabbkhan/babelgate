@@ -227,6 +227,53 @@ describe("Ollama Adapter", () => {
     });
   });
 
+  describe("hinted system parts (spec §3.2)", () => {
+    it("flattens hinted system parts to one string", () => {
+      const hinted = [
+        { type: "text" as const, text: "A", cache: {} },
+        { type: "text" as const, text: "B" },
+      ];
+      const input: CanonicalRequest = {
+        model: "llama2",
+        systemPrompt: hinted,
+        messages: [
+          { role: "system", content: hinted },
+          { role: "user", content: "Hello" },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages![0]).toEqual({
+        role: "system",
+        content: "A\n\nB",
+      });
+    });
+
+    it("keeps unhinted system parts joined with \"\\n\"", () => {
+      const input: CanonicalRequest = {
+        model: "llama2",
+        messages: [
+          {
+            role: "system",
+            content: [
+              { type: "text" as const, text: "A" },
+              { type: "text" as const, text: "B" },
+            ],
+          },
+          { role: "user", content: "Hello" },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages![0]).toEqual({
+        role: "system",
+        content: "A\nB",
+      });
+    });
+  });
+
   describe("toCanonicalResponse", () => {
     it("should convert basic response", () => {
       const input = {
@@ -326,6 +373,51 @@ describe("Ollama Adapter", () => {
 
       expect(fromCanonicalResponse(stopResponse).done).toBe(true);
       expect(fromCanonicalResponse(lengthResponse).done).toBe(false);
+    });
+  });
+
+  describe("cached usage (spec §3.2)", () => {
+    it("no cache fields ever emitted", () => {
+      // Ollama reuses its KV cache by itself: prompt_eval_cached_count
+      // is not decoded and cache hints are never encoded.
+      const decoded = toCanonicalResponse(
+        {
+          model: "llama2",
+          created_at: new Date(),
+          message: { role: "assistant", content: "Hi" },
+          done: true,
+          prompt_eval_count: 36,
+          prompt_eval_cached_count: 35,
+          eval_count: 10,
+        } as unknown as OllamaChatResponse,
+        "llama2"
+      );
+
+      expect(decoded.usage).toEqual({
+        inputTokens: 36,
+        outputTokens: 10,
+        totalTokens: 46,
+      });
+
+      const encoded = fromCanonicalResponse({
+        id: "ollama-1",
+        model: "llama2",
+        message: { role: "assistant", content: "Hi" },
+        finishReason: "stop",
+        usage: {
+          inputTokens: 36,
+          outputTokens: 10,
+          totalTokens: 46,
+          cacheReadTokens: 35,
+          cacheWriteTokens: 4,
+        },
+      });
+
+      expect(encoded.prompt_eval_count).toBe(36);
+      expect(encoded.eval_count).toBe(10);
+      expect(
+        Object.keys(encoded).every((k) => !k.includes("cache"))
+      ).toBe(true);
     });
   });
 

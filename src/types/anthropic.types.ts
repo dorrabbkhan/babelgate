@@ -33,6 +33,9 @@ export type Tool = Anthropic.Tool;
 export type ToolUnion = Anthropic.ToolUnion;
 export type ToolChoice = Anthropic.ToolChoice;
 
+// Prompt caching
+export type CacheControlEphemeral = Anthropic.CacheControlEphemeral;
+
 // Usage
 export type Usage = Anthropic.Usage;
 
