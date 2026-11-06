@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { resetConfig } from "../../config/env-config";
 import { resetSinks } from "../emit";
 import * as sqlite from "../sqlite";
+import { startRetention } from "../retention";
 import { newTrace, type RequestTrace } from "../trace";
 import { logger } from "../../utils/logger";
 import {
@@ -365,6 +366,35 @@ describe("createUsageStore", () => {
     });
     store.close();
   });
+
+  it("flush never throws", () => {
+    // A transaction already open on the store's own connection makes
+    // flush()'s own BEGIN fail — from the 250 ms timer or accept()
+    // that throw would kill the process. The batch drops with the
+    // usual warning instead.
+    const openSpy = vi.spyOn(sqlite, "openDatabase");
+    const store = createUsageStore({ path: dbPath(), logBodies: false });
+    const db = openSpy.mock.results[0]
+      ?.value as ReturnType<typeof sqlite.openDatabase>;
+    db.exec("BEGIN");
+
+    const warnSpy = vi
+      .spyOn(logger, "warn")
+      .mockImplementation(() => logger);
+    store.accept(makeTrace({ requestId: "doomed" }));
+    expect(() => store.flush()).not.toThrow();
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ dropped: 1 }),
+      expect.stringContaining("batch dropped"),
+    );
+    try {
+      db.exec("ROLLBACK");
+    } catch {
+      // flush's catch already rolled the transaction back
+    }
+    store.close();
+  });
 });
 
 describe("getUsageStore (singleton)", () => {
@@ -433,6 +463,40 @@ describe("getUsageStore (singleton)", () => {
     store.flush();
     expect(store.listRequests({ limit: 10 }).rows).toHaveLength(1);
     store.close();
+  });
+
+  it("a locked db never breaks retention", () => {
+    const locked = join(dir, "retention-locked.db");
+    const store = createUsageStore({ path: locked, logBodies: false });
+    // A second connection holds an exclusive write lock with one row
+    // written — the retention DELETE blocks and throws SQLITE_BUSY.
+    const holder = sqlite.openDatabase(locked);
+    holder.exec("BEGIN EXCLUSIVE");
+    holder.exec(
+      `INSERT INTO requests (
+        id, started_at, client, source_api, requested_model, route_reason,
+        stream, status, http_status, cost_estimated, total_ms,
+        hops, notes, diagnostics, repairs
+      ) VALUES (
+        'holder-row', 1, 'claude-code', 'openai', 'gpt-4', 'default',
+        0, 'ok', 200, 0, 1, '[]', '[]', '[]', '[]'
+      )`,
+    );
+
+    vi.useFakeTimers();
+    const warnSpy = vi
+      .spyOn(logger, "warn")
+      .mockImplementation(() => logger);
+    let stop: () => void = () => {};
+    expect(() => {
+      stop = startRetention(store, 30, 1_000);
+    }).not.toThrow();
+    expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
+    expect(warnSpy).toHaveBeenCalled();
+    stop();
+    holder.exec("ROLLBACK");
+    holder.close();
+    expect(() => store.close()).not.toThrow();
   });
 });
 

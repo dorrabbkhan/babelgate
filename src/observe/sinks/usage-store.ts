@@ -123,8 +123,8 @@ export function createUsageStore(opts: {
     }
     if (queue.length === 0) return;
     const batch = queue.splice(0, queue.length);
-    db.exec("BEGIN");
     try {
+      db.exec("BEGIN");
       for (const trace of batch) {
         const winner = winningHop(trace);
         insertRequest.run(

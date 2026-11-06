@@ -13,6 +13,7 @@ import { openDatabase } from "./sqlite";
 import { newTrace, type RequestTrace } from "./trace";
 import { startRetention } from "./retention";
 import { createUsageStore, type UsageStore } from "./sinks/usage-store";
+import { logger } from "../utils/logger";
 
 /**
  * Retention (spec §3.4): rows older than USAGE_RETENTION_DAYS are
@@ -97,5 +98,38 @@ describe("startRetention", () => {
     vi.advanceTimersByTime(60_000);
     expect(store.getRequest("aged")).toBeUndefined();
     stop2();
+  });
+
+  it("retention survives a failing prune", () => {
+    vi.useFakeTimers();
+    // A prune that throws every call (SQLITE_BUSY) must never escape
+    // startRetention or a tick — it warns, throttled to once a minute.
+    const failing = {
+      pruneBefore: vi.fn((): void => {
+        throw new Error("database is locked");
+      }),
+    };
+    const warnSpy = vi
+      .spyOn(logger, "warn")
+      .mockImplementation(() => logger);
+
+    let stop: () => void = () => {};
+    expect(() => {
+      stop = startRetention(failing, 30, 1_000);
+    }).not.toThrow();
+    expect(() => vi.advanceTimersByTime(1_000)).not.toThrow();
+    expect(failing.pruneBefore).toHaveBeenCalledTimes(2);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(warnSpy.mock.calls[0])).toContain(
+      "retention failed",
+    );
+
+    vi.advanceTimersByTime(60_000);
+    expect(failing.pruneBefore).toHaveBeenCalledTimes(62);
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+
+    stop();
+    vi.advanceTimersByTime(5_000);
+    expect(failing.pruneBefore).toHaveBeenCalledTimes(62);
   });
 });
