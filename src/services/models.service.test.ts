@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import {
   createModelListCache,
+  getRawModelList,
   proxyModelList,
   resetModelListCache,
 } from "./models.service";
@@ -187,6 +188,46 @@ describe("proxyModelList", () => {
     );
     await proxyModelList("openai", OPENAI_MODELS_ROUTE, config, "r1");
     await proxyModelList("openai", OPENAI_MODELS_ROUTE, config, "r2");
+    expect(mockGetJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("the raw body is cached and decoded on read (spec §3.6 live prices)", async () => {
+    // getRawModelList hands back the upstream body as sent — fields
+    // the canonical decode drops (OpenRouter's `pricing`) included —
+    // and shares the same 60 s cache as proxyModelList.
+    const rawWithPricing = {
+      object: "list",
+      data: [
+        {
+          id: "gpt-x",
+          pricing: { prompt: "0.0000002", completion: "0.0000008" },
+        },
+      ],
+    };
+    mockListsByUrl({
+      "http://second.test/v1/models": rawWithPricing,
+    });
+    const config = gatewayConfig(
+      [entry("second", "openai", "http://second.test")],
+      "second",
+    );
+
+    const raw = await getRawModelList(
+      config.registry.get("second"),
+      config,
+      "r1",
+    );
+    expect(raw).toEqual(rawWithPricing);
+
+    // The canonical path decodes the same cached body — still one
+    // fetch total, and the pricing field never reaches the client.
+    const result = await proxyModelList(
+      "openai",
+      OPENAI_MODELS_ROUTE,
+      config,
+      "r2",
+    );
+    expect(openaiIds(result)).toEqual(["gpt-x"]);
     expect(mockGetJson).toHaveBeenCalledTimes(1);
   });
 

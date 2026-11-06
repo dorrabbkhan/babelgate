@@ -21,6 +21,13 @@ export interface ProviderEntry {
    * (Anthropic always keeps them).
    */
   cacheHints?: boolean;
+  /**
+   * Read this provider's prices live off its model-list `pricing`
+   * block (OpenRouter schema) instead of the bundled table (§3.6).
+   */
+  livePrices?: boolean;
+  /** Price this provider's requests at $0 (self-hosted), §3.6. */
+  local?: boolean;
   timeoutMs?: number;
   streamIdleMs?: number;
 }

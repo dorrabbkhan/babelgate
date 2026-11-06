@@ -1,4 +1,7 @@
-import type { CanonicalRequest } from "../types/canonical.types";
+import type {
+  CanonicalRequest,
+  CanonicalStreamEvent,
+} from "../types/canonical.types";
 import { systemText } from "../transformers/system-text";
 
 /**
@@ -31,5 +34,24 @@ export function estimateInputTokens(req: CanonicalRequest): number {
 
   if (req.tools) chars += JSON.stringify(req.tools).length;
 
+  return Math.ceil(chars / 4);
+}
+
+/**
+ * Output side of the local estimate (spec §3.6): chars/4 over the
+ * stream's text and tool-call argument deltas — used to cost a
+ * successful stream that ended without a usage event.
+ */
+export function estimateOutputTokens(
+  events: CanonicalStreamEvent[],
+): number {
+  let chars = 0;
+  for (const event of events) {
+    if (event.type === "text_delta") {
+      chars += event.text.length;
+    } else if (event.type === "tool_call_delta") {
+      chars += event.argumentsDelta.length;
+    }
+  }
   return Math.ceil(chars / 4);
 }

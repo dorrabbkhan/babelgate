@@ -54,6 +54,7 @@ import {
   OPENAI2_BASE_URL,
   DEAD_BASE_URL,
 } from "../mocks/upstreams";
+import bundledPrices from "../../src/cost/prices.json";
 import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import anthropicFixtures from "../fixtures/anthropic.json";
@@ -197,7 +198,9 @@ describe("request trace (spec §3.1)", () => {
       inputTokens: 10,
       outputTokens: 8,
       finishReason: "stop",
-      costUsd: null,
+      // Task 8: an ollama winner is local — $0, never "unknown".
+      costUsd: 0,
+      priceSource: "local",
     });
     expect(traces[0].hops).toHaveLength(1);
     expect(traces[0].hops[0]).toMatchObject({
@@ -829,6 +832,150 @@ describe("body snapshots and the inspector ring (spec §3.5)", () => {
     expect(
       Buffer.byteLength(wire!.value as string, "utf8"),
     ).toBeLessThanOrEqual(262_144);
+  });
+});
+
+describe("cost on the trace (spec §3.6)", () => {
+  /** Prices wiring for these tests: `prices:` overrides + a ref provider. */
+  const PRICES_YAML = `default: local
+providers:
+  local:
+    type: ollama
+    base_url: ${MOCK_BASE_URLS.ollama}
+  openrouter:
+    type: openai
+    base_url: ${OPENAI2_BASE_URL}
+    api_key_env: OPENAI2_API_KEY
+  ref:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+aliases:
+  fast: local/qwen3-coder:30b
+routes:
+  - match: flaky
+    to: local/qwen3-coder:30b
+    fallback: [openrouter/qwen/qwen3-coder]
+  - match: "*"
+    to: local/llama3
+observe:
+  would_cost_reference: ref/gpt-4o
+prices:
+  openrouter/qwen/*: {input: 1, output: 2}
+`;
+
+  it("unknown price is null, never 0", async () => {
+    // An openai-type winner whose model is in no price source —
+    // override list empty, no live_prices, not in the bundled table.
+    process.env.TARGET_API = "openai";
+    resetConfig();
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        ...openaiFixtures.requests.basic,
+        model: "definitely-not-a-real-model-9f3a",
+      } as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await waitForTraces(1);
+
+    expect(traces[0].costUsd).toBeNull();
+    expect(traces[0].priceSource).toBeUndefined();
+  });
+
+  // Review Focus 4: the alias "fast", explicit
+  // "openrouter/qwen/qwen3-coder" syntax, a fallback hop winning and
+  // the ":" model id — every request is priced at the WINNING hop's
+  // (provider, model), never the requested string.
+  it("prices the winning hop", async () => {
+    writeFileSync(TMP_CONFIG, PRICES_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+
+    // Alias → ollama's colon model wins: priced local, never "fast".
+    const alias = await request(app)
+      .post("/v1/chat/completions")
+      .send({ ...openaiFixtures.requests.basic, model: "fast" } as object);
+    expect(alias.status, JSON.stringify(alias.body)).toBe(200);
+
+    // Rule target 503s → the openrouter fallback wins and prices
+    // itself through the prices: glob.
+    responseOverrides.ollama = { status: 503, body: { error: "down" } };
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({ ...openaiFixtures.requests.basic, model: "flaky" } as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // Explicit provider/model syntax resolves to the same winner.
+    const explicit = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        ...openaiFixtures.requests.basic,
+        model: "openrouter/qwen/qwen3-coder",
+      } as object);
+    expect(explicit.status, JSON.stringify(explicit.body)).toBe(200);
+
+    await waitForTraces(3);
+    expect(traces).toHaveLength(3);
+
+    expect(traces[0]).toMatchObject({
+      requestedModel: "fast",
+      reason: "alias:fast",
+      winner: "local",
+      costUsd: 0,
+      priceSource: "local",
+    });
+    expect(traces[0].hops[0]).toMatchObject({
+      provider: "local",
+      model: "qwen3-coder:30b",
+      outcome: "ok",
+    });
+
+    // The mocks serve 10 in / 8 out: (10×1 + 8×2) USD per 1M.
+    const expected = (10 * 1 + 8 * 2) / 1e6;
+    for (const [i, requested] of [
+      [1, "flaky"],
+      [2, "openrouter/qwen/qwen3-coder"],
+    ] as const) {
+      expect(traces[i]).toMatchObject({
+        requestedModel: requested,
+        winner: "openrouter",
+        priceSource: "override",
+      });
+      expect(traces[i].costUsd).toBeCloseTo(expected, 12);
+      expect(traces[i].hops.at(-1)).toMatchObject({
+        provider: "openrouter",
+        model: "qwen/qwen3-coder",
+        outcome: "ok",
+      });
+    }
+  });
+
+  it("would-have-cost on local rows", async () => {
+    writeFileSync(TMP_CONFIG, PRICES_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await waitForTraces(1);
+
+    const t = traces[0];
+    // local ollama row: real cost $0, but the same tokens priced at
+    // ref/gpt-4o's bundled price land in wouldCostUsd.
+    expect(t).toMatchObject({
+      winner: "local",
+      costUsd: 0,
+      priceSource: "local",
+    });
+    const ref = bundledPrices.models["gpt-4o"];
+    expect(ref).toBeDefined();
+    expect(t.wouldCostUsd).toBeCloseTo(
+      (10 * ref.input + 8 * ref.output) / 1e6,
+      12,
+    );
   });
 });
 

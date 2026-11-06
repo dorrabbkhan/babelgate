@@ -3004,3 +3004,88 @@ unchanged.
   breaks serving"` test's "app answers chat 200" half (Review Focus 2)
   is an end-to-end assertion and lives in the integration suite; the
   sink-level halves are in `usage-store.test.ts`.
+
+## v1.3 Task 8 — Prices, cost, live prices, would-have-cost (2026-11-07)
+
+- **Bundled table:** `src/cost/prices.json` generated from LiteLLM
+  `model_prices_and_context_window.json` at commit
+  `77b4644523c20e8338f1986d88d24a5c6ed22b3a` (main @ 2026-11-06),
+  3 322 chat-mode models, via the task's own `buildPriceTable`
+  transform. Doc reference: LiteLLM repo
+  (https://github.com/BerriAI/litellm, MIT — notice added to NOTICE);
+  OpenRouter `pricing` field names (`prompt`, `completion`,
+  `input_cache_read`, `input_cache_write`, string USD/token) per
+  https://openrouter.ai/docs/api-reference/list-available-models.
+- **LiteLLM has no `openrouter/` keys** in this snapshot — an
+  OpenRouter provider is priced by `live_prices: true` (its own
+  `/models` `pricing` block) or a `prices:` override, never by the
+  bundled table. The bundled "provider-prefixed key" retry exists for
+  `gemini/` only, exactly as the plan's Interfaces spell it.
+- **Pricing happens inside `finishTrace`** (`priceTrace` in emit.ts):
+  it resolves the winner's `ProviderEntry` from `getConfig().registry`
+  and the winning model from the last hop with `outcome === "ok"`, so
+  aliases, explicit names and `:`-bearing model ids can never leak
+  into the lookup (Review Focus 4). The whole step is wrapped in
+  try/catch — a missing config or any lookup failure leaves the trace
+  unpriced; it can never break the response.
+- **Semantics where the spec is silent:** a request with no winning
+  hop (every target failed) or no usage at all stays `costUsd: null`
+  — unknown is never conflated with $0 (D8), and a failed upstream
+  may still have consumed tokens we cannot see. Partial usage that
+  arrived before an abort/error IS priced ("totals computed"). A
+  successful JSON reply without usage is not estimated — §3.6 names
+  the estimate for streams only; every provider returns usage on JSON
+  replies, so a missing one stays `null` rather than a silent
+  estimate.
+- **Stream estimate:** `estimated` only when `status === "ok"` AND no
+  `usage` event arrived — `estimateInputTokens(canonical)` for input,
+  new `estimateOutputTokens(observed)` (chars/4 over text + tool-call
+  argument deltas, mirroring how the input estimate counts tool
+  arguments) for output; `costEstimated: true` rides the same
+  TraceFinish flag the formula sets for missing cache prices.
+- **`would_cost_reference` is resolved at price time, not load time:**
+  parseTarget against the registry; an unresolvable value simply
+  skips `wouldCostUsd`. Validating it at load would break the Task 7
+  test that loads an `observe:` section naming a provider that is not
+  configured.
+- **`config.prices` is optional on `GatewayConfig`** so env-only mode
+  and existing test literals need no change; lookup order is record
+  order (YAML map order), matching "first hit wins" like routes.
+- **The model-list cache now stores the raw body** (`getRawModelList`,
+  same 60 s TTL, successful fetches only) and `proxyModelList`
+  decodes per provider on read — `pricing` survives to live-price
+  lookups while the client-facing merge is byte-identical. `source`
+  (the request's API dialect) is passed through to the upstream-fetch
+  log line; live-price fetches fall back to the ambient trace's
+  `sourceApi`.
+- **One existing assertion updated:** `"one trace per chat request"`
+  expected `costUsd: null` for an ollama winner — now `costUsd: 0`
+  with `priceSource: "local"`. That is the task's own feature landing
+  (§3.6 step 2: ollama → local $0), not a weakened assertion; the
+  rest of that case is untouched.
+- **update:prices script:** `npm run update:prices -- <commit>`
+  fetches via global `fetch`; the pure `buildPriceTable` is exported
+  for the fixture test. In this sandbox the script's fetch had no
+  egress, so the table was produced by downloading the file once with
+  curl and running the same `buildPriceTable` + write path — the
+  script itself is unchanged and the output is what it would have
+  written.
+
+**Files outside the Files block:**
+- `src/config/env-config.ts` — `GatewayConfig.prices` (optional) and
+  the `PriceOverride` interface; `lookupPrice`'s `config` parameter
+  is typed `GatewayConfig`, so the field has to live there.
+- `src/services/chat-stream.service.ts` — computes the §3.6 stream
+  estimate and passes it + `costEstimated` into `finishTrace`
+  (emit.ts cannot see the canonical request or the stream's text).
+- `src/utils/token-estimate.ts` — `estimateOutputTokens`, the output
+  side of the chars/4 estimate the spec's token-estimate owns.
+- `src/observe/emit.test.ts` — one case covering pricing inside
+  `finishTrace` at unit level.
+- `src/config/yaml-config.test.ts` — parse coverage for the new
+  `live_prices`/`local`/`prices:` keys (project rule: tests ship with
+  the code they test).
+- `tests/fixtures/prices/litellm-sample.json` — the 5-model LiteLLM
+  sample Step 1 names (new file, no existing fixture touched).
+- `scripts/update-prices.test.ts` — Step 1's `update-prices.test.ts`;
+  placed beside the script it tests.
