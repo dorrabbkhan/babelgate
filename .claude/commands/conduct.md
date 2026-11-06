@@ -15,6 +15,9 @@ Run the conductor loop from CLAUDE.md for plan version $0, task $1.
    - review: `scripts/conductor/build-prompt.sh review $0 $1 <PR> [focus.md] | scripts/conductor/devin.sh review $0 $1`
    - fix:    `scripts/conductor/build-prompt.sh fix $0 $1 <PR> required.md | scripts/conductor/devin.sh fix $0 $1`
      (required.md lists the REQUIRED items precisely, with file:line and the exact test values to assert).
+   Docker steps (`docker build` / `docker run` in a task's Step 4) are the conductor's: Devin's sandbox can't run
+   Docker (standing notes). Run them yourself on the PR branch once the PR is up (no `docker push`), and add the
+   output to the status comment.
 4. Follow the loop and judgment rules exactly. Keep a short running log in
    ~/babelgate-conductor/$0-task$1/conductor-log.md.
 5. Finish with scripts/conductor/status-comment.sh and scripts/conductor/notify.sh, then print a summary:
