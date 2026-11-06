@@ -8,7 +8,8 @@ import {
   afterAll,
   vi,
 } from "vitest";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { http, HttpResponse } from "msw";
@@ -30,6 +31,12 @@ import {
 } from "../../src/observe/emit";
 import { createLogSink } from "../../src/observe/sinks/log";
 import { createBodyRing } from "../../src/observe/sinks/body-ring";
+import {
+  createUsageStore,
+  getUsageStore,
+  resetUsageStore,
+} from "../../src/observe/sinks/usage-store";
+import { openDatabase } from "../../src/observe/sqlite";
 import type {
   BodySnapshots,
   RequestTrace,
@@ -149,6 +156,9 @@ afterEach(() => {
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.BABELGATE_CONFIG;
   delete process.env.INSPECTOR_BUFFER;
+  delete process.env.USAGE_DB;
+  delete process.env.USAGE_STORE;
+  resetUsageStore();
   rmSync(TMP_CONFIG, { force: true });
   vi.restoreAllMocks();
   resetConfig();
@@ -819,5 +829,77 @@ describe("body snapshots and the inspector ring (spec §3.5)", () => {
     expect(
       Buffer.byteLength(wire!.value as string, "utf8"),
     ).toBeLessThanOrEqual(262_144);
+  });
+});
+
+describe("usage store resilience (spec §3.4, Review Focus 2)", () => {
+  it("unusable db never breaks serving", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bg-usage-it-"));
+    try {
+      // (a) A path whose parent is a regular file — mkdir fails; the
+      // sink logs one warning naming the path and the fix, disables
+      // itself, and requests still answer.
+      writeFileSync(join(dir, "a-file"), "x");
+      process.env.USAGE_DB = join(dir, "a-file", "usage.db");
+      resetConfig();
+      const warnSpy = vi.spyOn(logger, "warn");
+      expect(getUsageStore()).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          usageDb: join(dir, "a-file", "usage.db"),
+        }),
+        expect.stringContaining("USAGE_STORE"),
+      );
+
+      const res = await request(app)
+        .post("/v1/chat/completions")
+        .send(openaiFixtures.requests.basic as object);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+      // (b) A file that is not SQLite at the path — same outcome.
+      warnSpy.mockClear();
+      resetUsageStore();
+      const textDb = join(dir, "text.db");
+      writeFileSync(textDb, "this is not sqlite");
+      process.env.USAGE_DB = textDb;
+      resetConfig();
+      expect(getUsageStore()).toBeUndefined();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      const res2 = await request(app)
+        .post("/v1/chat/completions")
+        .send(openaiFixtures.requests.basic as object);
+      expect(res2.status, JSON.stringify(res2.body)).toBe(200);
+
+      // (c) A second connection holding an exclusive lock — the store
+      // stays registered, the flush waits out the 200 ms busy timeout
+      // and drops the batch with a warning; the request still answers.
+      const locked = join(dir, "locked.db");
+      const store = createUsageStore({ path: locked, logBodies: false });
+      registerSink(store);
+      const holder = openDatabase(locked);
+      holder.exec("BEGIN EXCLUSIVE");
+
+      warnSpy.mockClear();
+      const res3 = await request(app)
+        .post("/v1/chat/completions")
+        .send(openaiFixtures.requests.basic as object);
+      expect(res3.status, JSON.stringify(res3.body)).toBe(200);
+      await waitForTraces(1);
+      store.flush();
+      expect(store.listRequests({ limit: 10 }).rows).toHaveLength(0);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ usageDb: locked }),
+        expect.stringContaining("batch dropped"),
+      );
+      holder.exec("ROLLBACK");
+      holder.close();
+      store.close();
+    } finally {
+      delete process.env.USAGE_DB;
+      resetUsageStore();
+      resetConfig();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

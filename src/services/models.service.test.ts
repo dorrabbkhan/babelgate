@@ -53,7 +53,17 @@ function gatewayConfig(
     upstreamStreamIdleMs: 300_000,
     registry: createRegistry(providers),
     routing: { defaultProvider, aliases, rules: [] },
-    observe: { inspectorBuffer: 50 },
+    observe: {
+      usageStore: true,
+      usageDb: ":memory:",
+      retentionDays: 30,
+      inspectorBuffer: 50,
+      logBodies: false,
+      metrics: true,
+      ui: true,
+      uiAllowRemote: false,
+      uiAllowedHosts: [],
+    },
   };
 }
 

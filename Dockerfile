@@ -16,7 +16,11 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
+# §3.4: the usage store lives on a volume at /data, writable by node.
+ENV USAGE_DB=/data/usage.db
+RUN mkdir -p /data && chown node:node /data
 USER node
+VOLUME /data
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD wget -qO- http://localhost:3000/health || exit 1

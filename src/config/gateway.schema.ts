@@ -24,12 +24,23 @@ export interface GatewayFileRoute {
   fallback?: string[];
 }
 
+/** The YAML `observe:` section (spec §3.11); env vars win at load. */
+export interface GatewayFileObserve {
+  usage_store?: boolean;
+  usage_db?: string;
+  retention_days?: number;
+  inspector_buffer?: number;
+  log_bodies?: boolean;
+  would_cost_reference?: string;
+}
+
 /** A parsed babelgate.yaml file, before targets are resolved (spec §3.5). */
 export interface GatewayFile {
   default: string;
   providers: Record<string, GatewayFileProvider>;
   aliases?: Record<string, string>;
   routes?: GatewayFileRoute[];
+  observe?: GatewayFileObserve;
 }
 
 const PROVIDER_NAME = /^[a-z0-9][a-z0-9_-]*$/;
@@ -82,5 +93,15 @@ export const gatewayFileSchema: z.ZodType<GatewayFile> = z.strictObject({
         fallback: z.array(z.string()).optional(),
       }),
     )
+    .optional(),
+  observe: z
+    .strictObject({
+      usage_store: z.boolean().optional(),
+      usage_db: z.string().min(1).optional(),
+      retention_days: z.number().int().positive().optional(),
+      inspector_buffer: z.number().int().nonnegative().optional(),
+      log_bodies: z.boolean().optional(),
+      would_cost_reference: z.string().min(1).optional(),
+    })
     .optional(),
 });

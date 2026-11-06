@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
 import dotenv from "dotenv";
 import type { Provider } from "../transformers";
 import { parseModelMap, type ModelMapRule } from "../utils/model-map";
@@ -38,16 +40,42 @@ export interface GatewayConfig {
 }
 
 /**
- * Observe-layer settings (spec §3.11). Task 7 grows this with the
- * usage-store, metrics and UI keys; Task 6 adds the inspector ring.
+ * Observe-layer settings (spec §3.11). Env vars win over the YAML
+ * `observe:` keys that have an env counterpart; `wouldCostReference`,
+ * `metrics`, `ui`, `uiAllowRemote` and `uiAllowedHosts` are consumed by
+ * later tasks (8, 10, 12).
  */
 export interface ObserveConfig {
+  /** `USAGE_STORE` / `observe.usage_store` — SQLite usage store, default on */
+  usageStore: boolean;
+  /** `USAGE_DB` / `observe.usage_db` — default `~/.babelgate/usage.db` */
+  usageDb: string;
+  /** `USAGE_RETENTION_DAYS` / `observe.retention_days` — default 30 */
+  retentionDays: number;
   /**
    * Inspector ring size — the last N chat traces keep their body
-   * snapshots (spec §3.5, D3). `INSPECTOR_BUFFER`, default 50;
-   * 0 disables snapshotting entirely.
+   * snapshots (spec §3.5, D3). `INSPECTOR_BUFFER` /
+   * `observe.inspector_buffer`, default 50; 0 disables snapshotting.
    */
   inspectorBuffer: number;
+  /**
+   * `LOG_BODIES` / `observe.log_bodies` — persist body snapshots to the
+   * usage DB's `bodies` table (D3), default false.
+   */
+  logBodies: boolean;
+  /**
+   * `observe.would_cost_reference` (YAML only) — `provider/model` a
+   * `local` provider's rows are priced against (Task 8).
+   */
+  wouldCostReference?: string;
+  /** `METRICS` — `/metrics` endpoint (Task 10), default on */
+  metrics: boolean;
+  /** `UI` — `/ui` endpoints (Task 12), default on */
+  ui: boolean;
+  /** `UI_ALLOW_REMOTE` — let non-loopback clients reach `/ui`, default false */
+  uiAllowRemote: boolean;
+  /** `UI_ALLOWED_HOSTS` — comma-separated host allowlist, default empty */
+  uiAllowedHosts: string[];
 }
 
 /**
@@ -171,7 +199,7 @@ export function loadConfig(): EnvConfig {
     targetContextWindow,
     registry,
     routing,
-    observe: { inspectorBuffer: parseInspectorBuffer(process.env) },
+    observe: parseObserve(process.env),
     deprecatedEnv:
       process.env.SOURCE_API !== undefined ? ["SOURCE_API"] : [],
   };
@@ -216,6 +244,100 @@ export function parseInspectorBuffer(env: NodeJS.ProcessEnv): number {
     );
   }
   return value;
+}
+
+/** The YAML `observe:` section's keys (gateway.schema.ts). */
+export interface ObserveYaml {
+  usage_store?: boolean;
+  usage_db?: string;
+  retention_days?: number;
+  inspector_buffer?: number;
+  log_bodies?: boolean;
+  would_cost_reference?: string;
+}
+
+function parseBoolEnv(
+  name: string,
+  raw: string | undefined,
+  fallback: boolean,
+): boolean {
+  if (raw === undefined || raw === "") return fallback;
+  const value = raw.trim().toLowerCase();
+  if (["on", "true", "1"].includes(value)) return true;
+  if (["off", "false", "0"].includes(value)) return false;
+  throw new ConfigurationError(`${name} must be on/off or true/false`);
+}
+
+function parsePositiveIntEnv(
+  name: string,
+  raw: string | undefined,
+  fallback: number,
+): number {
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new ConfigurationError(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+/**
+ * `~` and `~/…` in a `usage_db` path expand to the user's home —
+ * SQLite does not understand `~`.
+ */
+export function expandHome(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  return path;
+}
+
+/**
+ * Build the `observe` block (spec §3.11): env vars win over the YAML
+ * `observe:` keys that have an env counterpart (env-only mode passes
+ * no `yaml`). Shared by loadConfig and loadYamlConfig.
+ */
+export function parseObserve(
+  env: NodeJS.ProcessEnv,
+  yaml: ObserveYaml = {},
+): ObserveConfig {
+  return {
+    usageStore: parseBoolEnv(
+      "USAGE_STORE",
+      env.USAGE_STORE,
+      yaml.usage_store ?? true,
+    ),
+    usageDb: expandHome(
+      env.USAGE_DB || yaml.usage_db || "~/.babelgate/usage.db",
+    ),
+    retentionDays: parsePositiveIntEnv(
+      "USAGE_RETENTION_DAYS",
+      env.USAGE_RETENTION_DAYS,
+      yaml.retention_days ?? 30,
+    ),
+    inspectorBuffer:
+      env.INSPECTOR_BUFFER !== undefined
+        ? parseInspectorBuffer(env)
+        : (yaml.inspector_buffer ?? 50),
+    logBodies: parseBoolEnv(
+      "LOG_BODIES",
+      env.LOG_BODIES,
+      yaml.log_bodies ?? false,
+    ),
+    ...(yaml.would_cost_reference !== undefined
+      ? { wouldCostReference: yaml.would_cost_reference }
+      : {}),
+    metrics: parseBoolEnv("METRICS", env.METRICS, true),
+    ui: parseBoolEnv("UI", env.UI, true),
+    uiAllowRemote: parseBoolEnv(
+      "UI_ALLOW_REMOTE",
+      env.UI_ALLOW_REMOTE,
+      false,
+    ),
+    uiAllowedHosts: (env.UI_ALLOWED_HOSTS ?? "")
+      .split(",")
+      .map((host) => host.trim())
+      .filter((host) => host !== ""),
+  };
 }
 
 /**

@@ -1,6 +1,11 @@
 import type { Server } from "node:http";
 import { app } from "./app";
 import { getConfig } from "./config/env-config";
+import { installSqliteWarningFilter } from "./observe/sqlite";
+import {
+  getUsageStore,
+  resetUsageStore,
+} from "./observe/sinks/usage-store";
 import { formatRoutingTable } from "./routing/table";
 import { logger } from "./utils/logger";
 
@@ -12,6 +17,12 @@ import { logger } from "./utils/logger";
 export function startServer(): Promise<Server> {
   const config = getConfig();
   const port = config.port;
+
+  // §3.4: filter the one-time node:sqlite ExperimentalWarning (that
+  // warning only) before the store can load the builtin, then open the
+  // usage store — an unusable DB disables the sink, never the server.
+  installSqliteWarningFilter();
+  getUsageStore();
 
   return new Promise<Server>((resolve, reject) => {
     // No callback to app.listen: Express 5 registers a passed callback on
@@ -25,10 +36,13 @@ export function startServer(): Promise<Server> {
       logger.info({ signal }, "Shutting down");
       server.close(() => {
         logger.info("All connections drained");
+        // §3.4: the queued trace rows flush once on shutdown.
+        resetUsageStore();
         process.exit(0);
       });
       setTimeout(() => {
         logger.warn("Forcing exit — connections did not drain in time");
+        resetUsageStore();
         process.exit(1);
       }, 10_000).unref();
     }
