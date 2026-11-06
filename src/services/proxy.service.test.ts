@@ -3,7 +3,6 @@ import { readFileSync } from "node:fs";
 import { proxyRequest } from "./proxy.service";
 import { resetConfig } from "../config/env-config";
 import { UpstreamError, ValidationError } from "../utils/errors";
-import { logger } from "../utils/logger";
 
 vi.mock("./http-client", () => ({
   postJson: vi.fn(),
@@ -310,43 +309,6 @@ describe("proxyRequest", () => {
     };
     expect(body.object).toBe("chat.completion");
     expect(body.choices![0]!.message!.content).toBe("Hi");
-  });
-
-  it("logs token usage metrics on completion", async () => {
-    const infoSpy = vi.spyOn(logger, "info");
-
-    await proxyRequest(
-      "/v1/chat/completions",
-      "POST",
-      VALID_OPENAI_REQUEST,
-      "r1",
-      { source: "openai" },
-    );
-
-    const completed = infoSpy.mock.calls.find(
-      ([_fields, msg]) => msg === "Request completed",
-    );
-    expect(completed).toBeDefined();
-    // spec §3.4 route log record
-    expect(completed![0]).toMatchObject({
-      requestId: "r1",
-      sourceApi: "openai",
-      requestedModel: "gpt-4",
-      reason: "default",
-      winner: "ollama",
-      stream: false,
-      inputTokens: 5,
-      outputTokens: 1,
-      finishReason: "stop",
-      hops: [
-        {
-          provider: "ollama",
-          model: "gpt-4",
-          outcome: "ok",
-          ms: expect.any(Number),
-        },
-      ],
-    });
   });
 
   it("stream branch returns stream, not body", async () => {

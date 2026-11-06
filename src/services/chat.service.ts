@@ -6,8 +6,13 @@ import {
 } from "../transformers";
 import type { RoutePlan } from "../routing/plan-route";
 import { authHeaders } from "../routing/registry";
-import { logRoute, type Hop } from "../routing/route-log";
-import type { CanonicalRequest } from "../types/canonical.types";
+import type { Hop } from "../routing/route-log";
+import { currentTrace } from "../observe/context";
+import { finishTrace } from "../observe/emit";
+import type {
+  CanonicalRequest,
+  CanonicalResponse,
+} from "../types/canonical.types";
 import { canonicalResponseSchema } from "../types/canonical.schema";
 import { UpstreamError } from "../utils/errors";
 import { logger } from "../utils/logger";
@@ -15,6 +20,8 @@ import { postJson } from "./http-client";
 import {
   attemptTargets,
   canonicalForTarget,
+  errorTraceFields,
+  maxTokensClampOf,
   toClientFacing,
 } from "./attempt-targets";
 import type {
@@ -91,52 +98,76 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
       { requestId, signal: input.opts?.signal, hops },
     );
   } catch (err) {
-    logRoute({
-      requestId,
-      sourceApi: source,
-      requestedModel,
+    await finishTrace({
       reason: plan.reason,
+      requestedModel,
       hops,
       stream: false,
+      ...errorTraceFields(err, input.opts?.signal?.aborted === true),
     });
     throw err;
   }
 
   // Target → Canonical → Source. §3.5: replies carry the model name the
-  // client asked for, not the routed name sent upstream.
-  const canonicalResp = adapters[result.entry.type].toCanonicalResponse(
-    result.value.body,
-    result.target.model,
-  );
-  canonicalResp.model = requestedModel;
+  // client asked for, not the routed name sent upstream. A throwing
+  // decode or source encode after a won attempt is still traced.
+  let canonicalResp: CanonicalResponse;
+  let body: unknown;
+  try {
+    canonicalResp = adapters[result.entry.type].toCanonicalResponse(
+      result.value.body,
+      result.target.model,
+    );
+    canonicalResp.model = requestedModel;
 
-  // Adapter bug detection (non-production only): canonical response
-  // should always be schema-valid
-  if (process.env.NODE_ENV !== "production") {
-    const respParsed = canonicalResponseSchema.safeParse(canonicalResp);
-    if (!respParsed.success) {
-      logger.error(
-        { requestId, issues: respParsed.error.issues },
-        "Canonical response failed schema validation — adapter bug",
-      );
+    // Adapter bug detection (non-production only): canonical response
+    // should always be schema-valid
+    if (process.env.NODE_ENV !== "production") {
+      const respParsed = canonicalResponseSchema.safeParse(canonicalResp);
+      if (!respParsed.success) {
+        logger.error(
+          { requestId, issues: respParsed.error.issues },
+          "Canonical response failed schema validation — adapter bug",
+        );
+      }
     }
+
+    body = adapters[source].fromCanonicalResponse(canonicalResp);
+  } catch (err) {
+    await finishTrace({
+      reason: plan.reason,
+      requestedModel,
+      hops: result.hops,
+      winner: result.target.provider,
+      stream: false,
+      ...errorTraceFields(err, input.opts?.signal?.aborted === true),
+    });
+    throw err;
   }
 
-  logRoute({
-    requestId,
-    sourceApi: source,
-    requestedModel,
+  // §3.1: for a JSON reply the first byte to the client goes out when
+  // the body is ready — here, right after the source encode.
+  const trace = currentTrace();
+  await finishTrace({
     reason: plan.reason,
+    requestedModel,
     hops: result.hops,
     winner: result.target.provider,
     stream: false,
+    status: "ok",
+    httpStatus: 200,
     inputTokens: canonicalResp.usage?.inputTokens,
     outputTokens: canonicalResp.usage?.outputTokens,
+    cacheReadTokens: canonicalResp.usage?.cacheReadTokens,
+    cacheWriteTokens: canonicalResp.usage?.cacheWriteTokens,
     finishReason: canonicalResp.finishReason,
+    maxTokensClamp: maxTokensClampOf(canonical, result.entry),
+    ttfbMs:
+      trace === undefined ? undefined : Date.now() - trace.startedAt,
   });
 
   return {
-    body: adapters[source].fromCanonicalResponse(canonicalResp),
+    body,
     headers: {
       "x-babelgate-provider": result.target.provider,
       "x-babelgate-model": result.target.model,

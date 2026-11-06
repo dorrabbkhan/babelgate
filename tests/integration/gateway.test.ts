@@ -567,45 +567,6 @@ describe("gateway: fallbacks and routing headers (spec §3.4)", () => {
     });
   });
 
-  it("route log line has no prompt text", async () => {
-    const infoSpy = vi.spyOn(logger, "info");
-
-    const res = await openaiChat({
-      model: "gpt-4",
-      messages: [
-        { role: "user", content: "repeat SENTINEL-7f3a back" },
-      ],
-    });
-    expect(res.status).toBe(200);
-    // The prompt did reach the upstream — only the log must not see it.
-    expect(JSON.stringify(capturedRequests.ollama)).toContain(
-      "SENTINEL-7f3a",
-    );
-
-    const call = infoSpy.mock.calls.find(
-      ([fields, msg]) =>
-        msg === "Request completed" &&
-        (fields as { hops?: unknown }).hops !== undefined,
-    );
-    expect(call).toBeDefined();
-    const record = call![0] as Record<string, unknown>;
-    expect(JSON.stringify(record)).not.toContain("SENTINEL-7f3a");
-    expect(record).toMatchObject({
-      requestId: expect.any(String),
-      sourceApi: "openai",
-      requestedModel: "gpt-4",
-      reason: "rule:2",
-      winner: "main",
-      stream: false,
-      inputTokens: 10,
-      outputTokens: 8,
-      finishReason: "stop",
-    });
-    expect(Array.isArray(record.hops)).toBe(true);
-    expect(
-      (record.hops as { provider?: string; outcome?: string }[])[0],
-    ).toMatchObject({ provider: "main", outcome: "ok" });
-  });
 });
 
 /**

@@ -24,6 +24,16 @@ export interface ProxyResult {
   stream?: {
     contentType: string;
     chunks: AsyncIterable<string>;
+    /**
+     * Emits the stream's trace when `chunks` was never iterated — a
+     * throw in the route before the `for await` (setHeader /
+     * flushHeaders) skips a suspended-start generator's finally
+     * entirely (an unstarted async generator's return() does not run
+     * the body). `clientStatus` is the status the client actually
+     * received; omit it when the client went away first. A no-op once
+     * the stream finished on its own — the trace emits at most once.
+     */
+    finish(clientStatus?: number): Promise<void>;
   };
 }
 

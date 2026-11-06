@@ -3,10 +3,13 @@ import {
   PROVIDER_ROUTES,
 } from "../transformers";
 import { authHeaders } from "../routing/registry";
-import { logRoute, type Hop } from "../routing/route-log";
+import type { Hop } from "../routing/route-log";
+import { currentTrace } from "../observe/context";
+import { finishTrace } from "../observe/emit";
 import type {
   CanonicalStreamEvent,
   StreamDecoder,
+  StreamEncoder,
 } from "../types/canonical.types";
 import { UpstreamError } from "../utils/errors";
 import { postStream } from "./http-client";
@@ -14,6 +17,8 @@ import { runStreamPipeline } from "./stream-pipeline";
 import {
   attemptTargets,
   canonicalForTarget,
+  errorTraceFields,
+  maxTokensClampOf,
   toClientFacing,
 } from "./attempt-targets";
 import type { ChatInput } from "./chat.service";
@@ -43,15 +48,17 @@ export async function proxyChatStream(
     opts,
   } = input;
 
-  const encoder = adapters[source].createStreamEncoder({
-    sourceRequest: sourceBody,
-    query: opts?.query ?? {},
-    requestedModel,
-  });
-
   const hops: Hop[] = [];
+  let encoder: StreamEncoder;
   let result;
   try {
+    // Inside the try so a throwing encoder still finishes the trace
+    // (hops is [] here — the request never reached an upstream).
+    encoder = adapters[source].createStreamEncoder({
+      sourceRequest: sourceBody,
+      query: opts?.query ?? {},
+      requestedModel,
+    });
     result = await attemptTargets(
       plan,
       config.registry,
@@ -95,13 +102,12 @@ export async function proxyChatStream(
       { requestId, signal: opts?.signal, hops },
     );
   } catch (err) {
-    logRoute({
-      requestId,
-      sourceApi: source,
-      requestedModel,
+    await finishTrace({
       reason: plan.reason,
+      requestedModel,
       hops,
       stream: true,
+      ...errorTraceFields(err, opts?.signal?.aborted === true),
     });
     throw err;
   }
@@ -127,46 +133,97 @@ export async function proxyChatStream(
 
   const signal = opts?.signal ?? new AbortController().signal;
 
+  // True once the route starts consuming chunks — which it only does
+  // after flushing headers, so iterated implies the client got the 200
+  // status line.
+  let iterated = false;
+
+  /**
+   * Whatever ended the pipe — terminal event, in-stream error, client
+   * disconnect — the upstream request is done with, and the trace is
+   * emitted exactly once (spec §3.1): a client that went away
+   * mid-stream is "aborted", an in-stream error is "error", everything
+   * else "ok". httpStatus is the 200 the route flushed before the
+   * stream started; when the route never iterated (a throw before the
+   * for-await) the client got no stream — 499 if it went away, else
+   * `clientStatus`, the status it actually received.
+   */
+  const finish = async (clientStatus?: number): Promise<void> => {
+    upstreamAc.abort();
+    const last = observed.at(-1);
+    const usageEvent = observed.find((e) => e.type === "usage");
+    await finishTrace({
+      reason: plan.reason,
+      requestedModel,
+      hops: result.hops,
+      winner: result.target.provider,
+      stream: true,
+      status: signal.aborted
+        ? "aborted"
+        : !iterated
+          ? "error"
+          : last?.type === "error"
+            ? "error"
+            : "ok",
+      httpStatus: iterated
+        ? 200
+        : signal.aborted
+          ? 499
+          : (clientStatus ?? 500),
+      errorType:
+        !signal.aborted && last?.type === "error"
+          ? last.error.kind
+          : undefined,
+      inputTokens:
+        usageEvent?.type === "usage"
+          ? usageEvent.usage.inputTokens
+          : undefined,
+      outputTokens:
+        usageEvent?.type === "usage"
+          ? usageEvent.usage.outputTokens
+          : undefined,
+      cacheReadTokens:
+        usageEvent?.type === "usage"
+          ? usageEvent.usage.cacheReadTokens
+          : undefined,
+      cacheWriteTokens:
+        usageEvent?.type === "usage"
+          ? usageEvent.usage.cacheWriteTokens
+          : undefined,
+      finishReason:
+        last?.type === "message_end" ? last.finishReason : undefined,
+      maxTokensClamp: maxTokensClampOf(canonical, result.entry),
+    });
+  };
+
   const chunks = (async function* (): AsyncGenerator<string> {
     try {
-      yield* runStreamPipeline({
+      iterated = true;
+      let ttfbSet = false;
+      for await (const chunk of runStreamPipeline({
         upstream: upstream.body,
         decoder: recordingDecoder,
         encoder,
         idleMs: result.entry.streamIdleMs ?? config.upstreamStreamIdleMs,
         signal,
-      });
+      })) {
+        // §3.1: ttfb is the moment the first chunk goes to the client.
+        if (!ttfbSet) {
+          ttfbSet = true;
+          const trace = currentTrace();
+          if (trace !== undefined) {
+            trace.ttfbMs = Date.now() - trace.startedAt;
+          }
+        }
+        yield chunk;
+      }
     } finally {
-      // Whatever ended the pipe — terminal event, in-stream error,
-      // client disconnect — the upstream request is done with, and the
-      // route log line goes out exactly once (spec §3.4).
-      upstreamAc.abort();
-      const last = observed.at(-1);
-      const usageEvent = observed.find((e) => e.type === "usage");
-      logRoute({
-        requestId,
-        sourceApi: source,
-        requestedModel,
-        reason: plan.reason,
-        hops: result.hops,
-        winner: result.target.provider,
-        stream: true,
-        inputTokens:
-          usageEvent?.type === "usage"
-            ? usageEvent.usage.inputTokens
-            : undefined,
-        outputTokens:
-          usageEvent?.type === "usage"
-            ? usageEvent.usage.outputTokens
-            : undefined,
-        finishReason:
-          last?.type === "message_end" ? last.finishReason : undefined,
-      });
+      await finish();
     }
   })();
 
   return {
-    stream: { contentType: encoder.contentType, chunks },
+    stream: { contentType: encoder.contentType, chunks, finish },
     headers: {
       "x-babelgate-provider": result.target.provider,
       "x-babelgate-model": result.target.model,

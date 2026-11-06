@@ -11,6 +11,7 @@ import type {
 } from "../types/canonical.types";
 import { ProxyError, UpstreamError } from "../utils/errors";
 import { logger } from "../utils/logger";
+import type { TraceFinish } from "../observe/emit";
 import { toClientError } from "./upstream-errors";
 
 export type { Hop } from "../routing/route-log";
@@ -133,6 +134,29 @@ function stripCacheHints(
     );
   }
   return out;
+}
+
+/**
+ * The trace's status/httpStatus/errorType for a failed chat request
+ * (spec §3.1): the client-facing values — the canonical error's status
+ * and kind, matching what the error handler renders. A client abort
+ * before any response went out records 499 (nginx's client-closed
+ * convention); mid-stream aborts record the 200 already sent.
+ */
+export function errorTraceFields(
+  err: unknown,
+  aborted: boolean,
+): Pick<TraceFinish, "status" | "httpStatus" | "errorType"> {
+  if (aborted) {
+    return { status: "aborted", httpStatus: 499 };
+  }
+  const canonical =
+    err instanceof ProxyError ? err.toCanonical() : undefined;
+  return {
+    status: "error",
+    httpStatus: canonical?.status ?? 500,
+    errorType: canonical?.kind ?? "internal",
+  };
 }
 
 /**
