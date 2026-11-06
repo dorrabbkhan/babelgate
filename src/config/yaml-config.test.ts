@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ignoredEnvKeys,
@@ -242,6 +242,146 @@ describe("loadYamlConfig", () => {
         ConfigurationError,
       );
       expect(() => loadYamlConfig(bad, {})).toThrowError("cache_hints");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("observe: keys map to ObserveConfig and env wins (spec §3.11)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-observe-"));
+    try {
+      let n = 0;
+      const yaml = (observe: string[]) => {
+        const file = join(dir, `cfg-${n++}.yaml`);
+        writeFileSync(
+          file,
+          [
+            "default: ollama",
+            "providers:",
+            "  ollama:",
+            "    type: ollama",
+            "    base_url: http://localhost:11434",
+            ...observe,
+            "",
+          ].join("\n"),
+        );
+        return file;
+      };
+
+      const full = yaml([
+        "observe:",
+        "  usage_store: false",
+        `  usage_db: ${join(dir, "custom.db")}`,
+        "  retention_days: 7",
+        "  inspector_buffer: 10",
+        "  log_bodies: true",
+        "  would_cost_reference: openrouter/qwen",
+      ]);
+      const config = loadYamlConfig(full, {});
+      expect(config.observe).toStrictEqual({
+        usageStore: false,
+        usageDb: join(dir, "custom.db"),
+        retentionDays: 7,
+        inspectorBuffer: 10,
+        logBodies: true,
+        wouldCostReference: "openrouter/qwen",
+        metrics: true,
+        ui: true,
+        uiAllowRemote: false,
+        uiAllowedHosts: [],
+      });
+
+      // No observe: section → the §3.11 defaults (usage_db's ~ expands).
+      const defaults = loadYamlConfig(yaml([]), {});
+      expect(defaults.observe).toStrictEqual({
+        usageStore: true,
+        usageDb: join(homedir(), ".babelgate", "usage.db"),
+        retentionDays: 30,
+        inspectorBuffer: 50,
+        logBodies: false,
+        metrics: true,
+        ui: true,
+        uiAllowRemote: false,
+        uiAllowedHosts: [],
+      });
+      expect("wouldCostReference" in defaults.observe).toBe(false);
+
+      // Env wins over every observe: key it names.
+      const env = loadYamlConfig(full, {
+        USAGE_STORE: "on",
+        USAGE_DB: join(dir, "env.db"),
+        USAGE_RETENTION_DAYS: "90",
+        INSPECTOR_BUFFER: "0",
+        LOG_BODIES: "false",
+      });
+      expect(env.observe).toMatchObject({
+        usageStore: true,
+        usageDb: join(dir, "env.db"),
+        retentionDays: 90,
+        inspectorBuffer: 0,
+        logBodies: false,
+        // no env counterpart — the YAML value stands
+        wouldCostReference: "openrouter/qwen",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("observe: unknown keys and bad values are startup errors", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-observe-bad-"));
+    try {
+      const yaml = (observe: readonly string[]) => {
+        const file = join(dir, "cfg.yaml");
+        writeFileSync(
+          file,
+          [
+            "default: ollama",
+            "providers:",
+            "  ollama:",
+            "    type: ollama",
+            "    base_url: http://localhost:11434",
+            "observe:",
+            ...observe,
+            "",
+          ].join("\n"),
+        );
+        return file;
+      };
+
+      for (const [name, lines, needle] of [
+        ["unknown key", ["  mystery: true"], "mystery"],
+        ["usage_store not a bool", ["  usage_store: maybe"], "usage_store"],
+        ["retention_days not positive", ["  retention_days: 0"], "retention_days"],
+        ["inspector_buffer negative", ["  inspector_buffer: -1"], "inspector_buffer"],
+      ] as const) {
+        expect(() => loadYamlConfig(yaml(lines), {}), name).toThrowError(
+          ConfigurationError,
+        );
+        expect(() => loadYamlConfig(yaml(lines), {}), name).toThrowError(
+          needle,
+        );
+      }
+
+      // Invalid env values error naming the env var.
+      const good = join(dir, "good.yaml");
+      writeFileSync(
+        good,
+        [
+          "default: ollama",
+          "providers:",
+          "  ollama:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          "",
+        ].join("\n"),
+      );
+      expect(() =>
+        loadYamlConfig(good, { USAGE_RETENTION_DAYS: "abc" }),
+      ).toThrowError("USAGE_RETENTION_DAYS");
+      expect(() =>
+        loadYamlConfig(good, { USAGE_STORE: "banana" }),
+      ).toThrowError("USAGE_STORE");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

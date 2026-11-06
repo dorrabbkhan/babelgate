@@ -2931,3 +2931,76 @@ unchanged.
   `openai.adapter.test.ts` — the per-site note cases Step 1 names
   (`"each drop site records its code"`); the Test list's named files
   cover context, ring and integration only.
+
+## v1.3 Task 7 — Usage store, migrations, retention, `observe:` config, Docker volume (2026-11-06)
+
+- **`DatabaseSync` on the newest Node checked: no warning.** On Node
+  24.22.0 (the newest available locally) `new DatabaseSync(":memory:")`
+  prints nothing — `node:sqlite` is stable on the 24 line, so the name
+  is not deprecated and no ExperimentalWarning is emitted. On 22.x the
+  warning still fires: the Docker image's Node 22.23.4 prints the
+  one-time `ExperimentalWarning` for `node:sqlite` when it is not
+  filtered (the Step 4 run showed 0 such lines with the filter
+  installed). The filter therefore stays unconditional — it is the
+  only thing standing between a 22.x user and a stderr line — while
+  being a no-op on 24.
+- **The warning filter wraps `process.emit`, not `process.on`.** A
+  `process.on("warning")` listener cannot suppress the default print:
+  Node's own warning printer is a `warning` listener registered at
+  bootstrap, so it runs before any user listener and writes to stderr
+  regardless. Intercepting `process.emit` drops the matching `warning`
+  event before any listener — including the printer — sees it, so
+  nothing reaches stderr. The predicate swallows ONLY an
+  `ExperimentalWarning` whose message mentions SQLite; every other
+  event and warning passes through untouched. It is installed once by
+  `installSqliteWarningFilter()` in `src/observe/sqlite.ts`, called
+  from `cli.ts` and `index.ts` before the store can load, and again
+  inside `openDatabase` for direct callers.
+- **Schema and queries.** The `requests`/`bodies`/`schema_version`
+  DDL is spec §3.4 verbatim at `schema_version` 1; migrations are
+  forward-only and each runs in a transaction. `provider`/`model`
+  columns store the *winning* hop (last hop with `outcome === "ok"`;
+  NULL when nothing won) so `usage(group: "model")` and
+  `usage(group: "provider")` price and count the winner, never a
+  failed first hop. `unpriced` counts rows with `cost_usd IS NULL` —
+  unknown price is never conflated with $0 (D8). The cursor is
+  `[startedAt, id]` base64url-encoded, paged by
+  `(started_at, id) DESC` keyset; a bad cursor raises
+  `ValidationError`.
+- **Resilience (Review Focus 2).** Open/migrate failures disable the
+  sink with one warning naming the path and the fix
+  (`getUsageStore()` → undefined, never retried until restart).
+  A locked DB surfaces as `SQLITE_BUSY` after the 200 ms
+  `DatabaseSync` `timeout`, rolls the batch back, drops it with a
+  warn-throttled (60 s) log, and the store keeps serving on the next
+  flush. `bodies` cascade-delete works because `node:sqlite`
+  enables `PRAGMA foreign_keys` by default — asserted by
+  `"retention deletes old rows and their bodies"`.
+- **`UsageStore.pruneBefore`** is one method beyond the plan's
+  `TraceSink & UsageQueries & { flush; close }` — it is the seam
+  `startRetention` calls (typed minimally there as
+  `{ pruneBefore(cutoffMs) }`).
+- **`~` in `usage_db` expands to the user's home** (`expandHome` in
+  env-config.ts): SQLite does not understand `~`, and the §3.11
+  default is `~/.babelgate/usage.db`.
+- **`observe:` env-wins semantics.** `parseObserve(env, yaml)` is
+  shared by `loadConfig` and `loadYamlConfig`; every observe key with
+  an env counterpart lets env win, matching v1.2's rule. The env-only
+  keys (`metrics`, `ui`, `uiAllowRemote`, `uiAllowedHosts`) are parsed
+  now because `ObserveConfig` names them all; they are consumed by
+  Tasks 10–12. `wouldCostReference` is YAML-only per §3.11.
+
+**Files outside the Files block:**
+- `src/observe/sinks/usage-queries.ts` — split out of
+  `usage-store.ts` (478 → ~260 + ~210 lines) for AGENTS.md rule 7
+  (single-purpose, ~400 lines): the read path (`RequestRow`,
+  `UsageGroup`, `UsageQueries`, `createUsageQueries`) is a separate
+  module; `usage-store.ts` re-exports the types so the plan's import
+  surface is unchanged.
+- `src/services/models.service.test.ts` — its `gatewayConfig` helper
+  builds a `GatewayConfig` literal and needed the new required
+  `observe` fields.
+- `tests/integration/observe.test.ts` — the `"unusable db never
+  breaks serving"` test's "app answers chat 200" half (Review Focus 2)
+  is an end-to-end assertion and lives in the integration suite; the
+  sink-level halves are in `usage-store.test.ts`.

@@ -3,6 +3,7 @@ import { parseArgs } from "node:util";
 import type { Provider } from "./transformers/adapters";
 import { getConfig, setConfigPath } from "./config/env-config";
 import { resolveConfigPath } from "./config/yaml-config";
+import { installSqliteWarningFilter } from "./observe/sqlite";
 import { formatRoutingTable } from "./routing/table";
 import { startServer } from "./index";
 
@@ -280,6 +281,9 @@ export async function main(argv: string[]): Promise<void> {
     }
 
     setConfigPath(args.config);
+    // §3.4: the node:sqlite ExperimentalWarning (that warning only) is
+    // filtered before the usage store can load the builtin.
+    installSqliteWarningFilter();
     await startServer();
     const config = getConfig();
     if (args.preset !== undefined) {
