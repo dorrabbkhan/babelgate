@@ -102,6 +102,47 @@ describe("livePrice (spec §3.6)", () => {
     ).resolves.toBeUndefined();
   });
 
+  // OpenRouter's "-1" (dynamic/custom pricing, e.g. openrouter/auto)
+  // is "no usable price", not a negative cost.
+  it("negative live price falls back", async () => {
+    mockGetJson.mockResolvedValue({
+      status: 200,
+      body: {
+        data: [
+          { id: "m", pricing: { prompt: "-1", completion: "-1" } },
+        ],
+      },
+      durationMs: 1,
+    });
+    await expect(
+      livePrice(entry, "m", config, "r1"),
+    ).resolves.toBeUndefined();
+
+    // A negative cache price is absent, so cacheRead falls back to
+    // `input` at compute time — it is not priced at -$1M.
+    resetModelListCache();
+    mockGetJson.mockResolvedValue({
+      status: 200,
+      body: {
+        data: [
+          {
+            id: "m",
+            pricing: {
+              prompt: "0.000001",
+              completion: "0.000002",
+              input_cache_read: "-1",
+            },
+          },
+        ],
+      },
+      durationMs: 1,
+    });
+    await expect(livePrice(entry, "m", config, "r1")).resolves.toEqual({
+      input: 1,
+      output: 2,
+    });
+  });
+
   it("shares the model-list 60 s cache — no second fetch", async () => {
     mockGetJson.mockResolvedValue({
       status: 200,

@@ -15,7 +15,9 @@ interface LivePricing {
 const per1M = (s: string | undefined): number | undefined => {
   if (s === undefined) return undefined;
   const n = Number((Number(s) * 1e6).toPrecision(10));
-  return Number.isFinite(n) ? n : undefined;
+  // OpenRouter serves "-1" for dynamically priced models — a negative
+  // price means "no usable price", not a rebate.
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
 };
 
 /**
@@ -24,7 +26,8 @@ const per1M = (s: string | undefined): number | undefined => {
  * with `live_prices: true` reach this — the raw list's `data[]` row
  * whose `id` matches the routed model, `pricing` converted from
  * string USD/token to USD per 1M. Any failure — fetch, missing row
- * or unusable numbers — returns undefined so the caller falls back
+ * or unusable numbers (OpenRouter's "-1" dynamic prices count as
+ * unusable) — returns undefined so the caller falls back
  * to the bundled table; a debug line is the only trace it leaves.
  */
 export async function livePrice(

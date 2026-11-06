@@ -3089,3 +3089,16 @@ unchanged.
   sample Step 1 names (new file, no existing fixture touched).
 - `scripts/update-prices.test.ts` — Step 1's `update-prices.test.ts`;
   placed beside the script it tests.
+- **Fix round 1 (PR #71):** `finishTrace` no longer awaits pricing —
+  `priceTrace` runs in the background and the trace is emitted when
+  it settles, still priced before emit (a rejected lookup emits it
+  unpriced). A cold `live_prices` model-list fetch can take the full
+  upstream timeout, and Global Constraints forbid sink I/O on the
+  request path; the function is now synchronous (`void`), so
+  remaining `await finishTrace(...)` call sites are harmless no-ops.
+  Tests that read traces right after a response now wait for the emit
+  (`waitForTraces` / `vi.waitFor`) with assertions unchanged. Also:
+  negative live prices (OpenRouter's `"-1"` for dynamically priced
+  models) are treated as absent — a negative `prompt`/`completion`
+  drops the live row so the lookup falls back to bundled (§3.6
+  3→4); a negative cache price falls back to `input` at compute time.

@@ -175,17 +175,28 @@ async function priceTrace(trace: RequestTrace): Promise<void> {
 
 /**
  * Merge the pipeline's finish fields into the ambient trace, stamp
- * totalMs, price it (§3.6) and emit it exactly once — a second call
+ * totalMs, then price (§3.6) and emit it exactly once — a second call
  * for the same trace (e.g. an error path plus the stream's finally)
- * is a no-op. Outside a trace scope it is a no-op: the caller decides
- * nothing — the middleware decides what is traced.
+ * is a no-op. Pricing can await upstream I/O (a cold live-price model
+ * list takes up to the upstream timeout), so it runs in the
+ * background: this function returns without waiting for it (Global
+ * Constraints — no sink work blocks the request path), and the trace
+ * is still priced before it reaches the sinks. Outside a trace scope
+ * it is a no-op: the caller decides nothing — the middleware decides
+ * what is traced.
  */
-export async function finishTrace(update: TraceFinish): Promise<void> {
+export function finishTrace(update: TraceFinish): void {
   const trace = currentTrace();
   if (trace === undefined || emitted.has(trace)) return;
   emitted.add(trace);
   Object.assign(trace, update);
   trace.totalMs = Date.now() - trace.startedAt;
-  await priceTrace(trace);
-  emitTrace(trace);
+  const emit = (): void => emitTrace(trace);
+  void priceTrace(trace).then(emit, (err: unknown) => {
+    logger.debug(
+      { requestId: trace.requestId, err },
+      "Cost lookup failed; trace emitted unpriced",
+    );
+    emit();
+  });
 }

@@ -183,6 +183,7 @@ describe("request trace (spec §3.1)", () => {
     } as object);
     expect(stream.status).toBe(200);
 
+    await waitForTraces(2);
     expect(traces).toHaveLength(2);
     expect(traces[0]).toMatchObject({
       requestId: expect.any(String),
@@ -232,6 +233,7 @@ describe("request trace (spec §3.1)", () => {
       .send(openaiFixtures.requests.basic as object);
     expect(res.status).toBe(400);
 
+    await waitForTraces(1);
     expect(traces).toHaveLength(1);
     expect(traces[0].winner).toBeUndefined();
     expect(traces[0]).toMatchObject({
@@ -292,6 +294,7 @@ describe("request trace (spec §3.1)", () => {
       .send(openaiFixtures.requests.basic as object);
     expect(res.status).toBe(502);
 
+    await waitForTraces(1);
     expect(traces).toHaveLength(1);
     expect(traces[0]).toMatchObject({
       status: "error",
@@ -313,6 +316,7 @@ describe("request trace (spec §3.1)", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(capturedRequests2).toHaveLength(1);
 
+    await waitForTraces(1);
     expect(traces).toHaveLength(1);
     expect(traces[0]).toMatchObject({
       requestedModel: "gpt-4",
@@ -976,6 +980,104 @@ prices:
       (10 * ref.input + 8 * ref.output) / 1e6,
       12,
     );
+  });
+
+  // Global Constraints: a cold live-price model list can take the
+  // whole upstream timeout, and no sink work may delay the response.
+  // The mocked /models below is 1.5 s slow; both requests answer in
+  // <1 s, and the traces arrive — priced — once the background lookup
+  // settles.
+  it("live price fetch never delays the response", async () => {
+    writeFileSync(
+      TMP_CONFIG,
+      `default: live
+providers:
+  live:
+    type: openai
+    base_url: ${OPENAI2_BASE_URL}
+    api_key_env: OPENAI2_API_KEY
+    live_prices: true
+routes:
+  - match: "*"
+    to: live/priced-model
+`,
+    );
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+
+    server.use(
+      http.get(`${OPENAI2_BASE_URL}/v1/models`, async () => {
+        await new Promise((r) => setTimeout(r, 1500));
+        return HttpResponse.json({
+          data: [
+            {
+              id: "priced-model",
+              pricing: {
+                prompt: "0.000001",
+                completion: "0.000002",
+              },
+            },
+          ],
+        });
+      }),
+      http.post(
+        `${OPENAI2_BASE_URL}/v1/chat/completions`,
+        async ({ request }) => {
+          const body = (await request.json()) as { stream?: boolean };
+          if (body.stream === true) {
+            // An OpenAI-dialect stream whose final usage chunk serves
+            // the same 10 in / 8 out as the non-stream mock.
+            return HttpResponse.text(
+              [
+                'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"priced-model","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}',
+                "",
+                'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"priced-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+                "",
+                'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"priced-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18}}',
+                "",
+                "data: [DONE]",
+                "",
+              ].join("\n"),
+              { headers: { "content-type": "text/event-stream" } },
+            );
+          }
+          return HttpResponse.json(openaiFixtures.responses.basic);
+        },
+      ),
+    );
+
+    const jsonStart = Date.now();
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(Date.now() - jsonStart).toBeLessThan(1000);
+
+    const streamStart = Date.now();
+    const streamRes = await postStream("/v1/chat/completions", {
+      ...openaiFixtures.requests.basic,
+      stream: true,
+    } as object);
+    expect(streamRes.status).toBe(200);
+    expect(Date.now() - streamStart).toBeLessThan(1000);
+
+    // Exactly one trace per request — emitted once the still-running
+    // background price lookup settles: live-priced $1/$2 per 1M on
+    // the mock's 10 in / 8 out usage.
+    await waitForTraces(2, 5000);
+    expect(traces).toHaveLength(2);
+    const expected = (10 * 1 + 8 * 2) / 1e6;
+    for (const stream of [false, true] as const) {
+      const trace = traces.find((t) => t.stream === stream);
+      expect(trace).toMatchObject({
+        winner: "live",
+        stream,
+        priceSource: "live",
+        inputTokens: 10,
+        outputTokens: 8,
+      });
+      expect(trace!.costUsd).toBeCloseTo(expected, 12);
+    }
   });
 });
 

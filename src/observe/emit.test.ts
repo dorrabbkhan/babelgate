@@ -135,12 +135,13 @@ describe("finishTrace (spec §3.1)", () => {
       sourceApi: "openai",
     });
 
-    await runWithTrace(trace, async () => {
-      await finishTrace(finish);
-      await finishTrace(finish); // second call is a no-op
+    runWithTrace(trace, () => {
+      finishTrace(finish);
+      finishTrace(finish); // second call is a no-op
     });
 
-    expect(seen).toHaveLength(1);
+    // Emit happens in the background, once pricing settles.
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
     expect(seen[0]).toMatchObject({
       requestId: "r1",
       requestedModel: "gpt-4",
@@ -158,7 +159,7 @@ describe("finishTrace (spec §3.1)", () => {
   it("outside a trace scope it is a no-op", async () => {
     const seen: RequestTrace[] = [];
     registerSink({ name: "recorder", accept: (t) => seen.push(t) });
-    await finishTrace(finish);
+    finishTrace(finish);
     expect(seen).toHaveLength(0);
   });
 
@@ -178,7 +179,7 @@ describe("finishTrace (spec §3.1)", () => {
         sourceApi: "openai",
       });
 
-      await runWithTrace(trace, () =>
+      runWithTrace(trace, () =>
         finishTrace({
           ...finish,
           hops: [
@@ -193,7 +194,7 @@ describe("finishTrace (spec §3.1)", () => {
         }),
       );
 
-      expect(seen).toHaveLength(1);
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
       expect(seen[0]).toMatchObject({
         costUsd: 0,
         priceSource: "local",
