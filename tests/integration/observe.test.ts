@@ -29,7 +29,11 @@ import {
   type TraceSink,
 } from "../../src/observe/emit";
 import { createLogSink } from "../../src/observe/sinks/log";
-import type { RequestTrace } from "../../src/observe/trace";
+import { createBodyRing } from "../../src/observe/sinks/body-ring";
+import type {
+  BodySnapshots,
+  RequestTrace,
+} from "../../src/observe/trace";
 import { logger } from "../../src/utils/logger";
 import {
   upstreamHandlers,
@@ -144,6 +148,7 @@ afterEach(() => {
   resetStreamCase();
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.BABELGATE_CONFIG;
+  delete process.env.INSPECTOR_BUFFER;
   rmSync(TMP_CONFIG, { force: true });
   vi.restoreAllMocks();
   resetConfig();
@@ -575,5 +580,244 @@ describe("request trace (spec §3.1)", () => {
     expect(
       (record.hops as { provider?: string; outcome?: string }[])[0],
     ).toMatchObject({ provider: "main", outcome: "ok" });
+  });
+});
+
+describe("body snapshots and the inspector ring (spec §3.5)", () => {
+  // A body-ring sink sees the trace unstripped (spec §3.1.1) — the
+  // recorder above only ever gets the bodies-less copy.
+  it("four stages captured", async () => {
+    const ring = createBodyRing(50);
+    registerSink(ring);
+
+    const json = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(json.status).toBe(200);
+
+    const stream = await postStream("/v1/chat/completions", {
+      ...openaiFixtures.requests.basic,
+      stream: true,
+    } as object);
+    expect(stream.status).toBe(200);
+
+    await waitForTraces(2);
+
+    const jsonBodies = ring.get(traces[0].requestId);
+    expect(jsonBodies).toBeDefined();
+    expect(jsonBodies?.source?.value).toMatchObject({ model: "gpt-4" });
+    expect(jsonBodies?.canonical?.value).toMatchObject({
+      model: "gpt-4",
+    });
+    expect(jsonBodies?.target).toHaveLength(1);
+    expect(jsonBodies?.target[0].value).toMatchObject({ model: "gpt-4" });
+    expect(jsonBodies?.response?.canonical?.value).toMatchObject({
+      model: "gpt-4",
+    });
+    expect(jsonBodies?.response?.wire?.value).toMatchObject({
+      done: true,
+    });
+    for (const snap of [
+      jsonBodies?.source,
+      jsonBodies?.canonical,
+      jsonBodies?.target[0],
+      jsonBodies?.response?.canonical,
+      jsonBodies?.response?.wire,
+    ]) {
+      expect(snap?.truncated).toBeUndefined();
+    }
+
+    const streamBodies = ring.get(traces[1].requestId);
+    expect(streamBodies).toBeDefined();
+    expect(streamBodies?.source?.value).toMatchObject({ model: "gpt-4" });
+    expect(streamBodies?.canonical?.value).toMatchObject({
+      model: "gpt-4",
+      stream: true,
+    });
+    expect(streamBodies?.target).toHaveLength(1);
+    expect(streamBodies?.response?.canonical?.value).toMatchObject({
+      model: "gpt-4",
+    });
+    // A stream's wire snapshot is the upstream bytes as text.
+    const wire = streamBodies?.response?.wire;
+    expect(typeof wire?.value).toBe("string");
+    expect(wire?.value as string).toContain('"done":true');
+    expect(wire?.truncated).toBeUndefined();
+  });
+
+  it("a fallback hop adds a second target snapshot", async () => {
+    writeFileSync(TMP_CONFIG, GATEWAY_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+    const ring = createBodyRing(50);
+    registerSink(ring);
+    responseOverrides.ollama = { status: 503, body: { error: "down" } };
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await waitForTraces(1);
+
+    const bodies = ring.get(traces[0].requestId);
+    expect(bodies?.target).toHaveLength(2);
+    // First hop's body is the ollama dialect, the winner's is openai.
+    expect(bodies?.target[0].value).toMatchObject({ model: "llama3" });
+    expect(bodies?.target[1].value).toMatchObject({
+      model: "fallback-model",
+    });
+  });
+
+  it("INSPECTOR_BUFFER=0 captures nothing", async () => {
+    process.env.INSPECTOR_BUFFER = "0";
+    resetConfig();
+    // A sink named like a body sink receives the trace unstripped —
+    // bodies must simply be absent.
+    const seen: (BodySnapshots | undefined)[] = [];
+    registerSink({
+      name: "body-ring",
+      accept: (t) => seen.push(t.bodies),
+    });
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(res.status).toBe(200);
+    await waitForTraces(1);
+
+    expect(seen).toEqual([undefined]);
+  });
+
+  // "0 disables snapshotting entirely" (spec §3.5): with the ring off
+  // a streamed request carries no bodies, the tap does no work, and
+  // the client stream is identical to the ring-on stream.
+  it("INSPECTOR_BUFFER=0 does no capture work on streams", async () => {
+    const ring = createBodyRing(50);
+    registerSink(ring);
+
+    const on = await postStream("/v1/chat/completions", {
+      ...openaiFixtures.requests.basic,
+      stream: true,
+    } as object);
+    expect(on.status).toBe(200);
+    await waitForTraces(1);
+    // The tap really ran — the ring holds a wire snapshot.
+    expect(
+      ring.get(traces[0].requestId)?.response?.wire,
+    ).toBeDefined();
+
+    process.env.INSPECTOR_BUFFER = "0";
+    resetConfig();
+    const seen: (BodySnapshots | undefined)[] = [];
+    registerSink({
+      name: "body-ring",
+      accept: (t) => seen.push(t.bodies),
+    });
+
+    const off = await postStream("/v1/chat/completions", {
+      ...openaiFixtures.requests.basic,
+      stream: true,
+    } as object);
+    expect(off.status).toBe(200);
+    await waitForTraces(2);
+
+    expect(seen).toEqual([undefined]);
+    // Mask per-request volatility (chunk id, created timestamp) —
+    // every other byte must match the ring-on stream.
+    const mask = (s: string) =>
+      s
+        .replace(/"id":"[^"]*"/g, '"id":""')
+        .replace(/"created":\d+/g, '"created":0');
+    expect(mask(off.body as string)).toBe(mask(on.body as string));
+  });
+
+  // Review Focus 3: a request carrying a ~8.7 MB base64 image leaves
+  // ≤1 MB snapshots marked truncated; a >256 KB upstream stream leaves
+  // a ≤256 KB wire snapshot — and the client gets the stream whole.
+  it("large bodies are truncated in the ring", async () => {
+    const ring = createBodyRing(50);
+    registerSink(ring);
+
+    const image =
+      "data:image/png;base64," +
+      Buffer.alloc(6_500_000).toString("base64");
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        model: "gpt-4",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what is this?" },
+              { type: "image_url", image_url: { url: image } },
+            ],
+          },
+        ],
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await waitForTraces(1);
+
+    const bodies = ring.get(traces[0].requestId);
+    for (const snap of [
+      bodies?.source,
+      bodies?.canonical,
+      bodies?.target[0],
+    ]) {
+      expect(snap?.truncated).toBe(true);
+      expect(typeof snap?.value).toBe("string");
+      expect(
+        Buffer.byteLength(snap!.value as string, "utf8"),
+      ).toBeLessThanOrEqual(1_048_576);
+    }
+
+    // ~360 KB of NDJSON upstream — the tap holds 256 KB of it.
+    const chunk = (i: number) =>
+      JSON.stringify({
+        model: "llama3",
+        created_at: "t",
+        message: {
+          role: "assistant",
+          content: `CHUNK-${i}-` + "x".repeat(60_000),
+        },
+        done: false,
+      });
+    const lines = [0, 1, 2, 3, 4, 5].map(chunk);
+    lines.push(
+      JSON.stringify({
+        model: "llama3",
+        created_at: "t",
+        message: { role: "assistant", content: "" },
+        done: true,
+        done_reason: "stop",
+        prompt_eval_count: 5,
+        eval_count: 5,
+      }),
+    );
+    server.use(
+      http.post(`${MOCK_BASE_URLS.ollama}/api/chat`, () =>
+        HttpResponse.text(lines.join("\n") + "\n", {
+          headers: { "content-type": "application/x-ndjson" },
+        }),
+      ),
+    );
+
+    const before = traces.length;
+    const stream = await postStream("/v1/chat/completions", {
+      ...openaiFixtures.requests.basic,
+      stream: true,
+    } as object);
+    expect(stream.status).toBe(200);
+    // The tap changed nothing the client sees — the tail arrived.
+    expect(stream.body).toContain("CHUNK-5-");
+    expect(stream.body).toContain("[DONE]");
+    await waitForTraces(before + 1);
+
+    const wire = ring.get(traces[before].requestId)?.response?.wire;
+    expect(wire?.truncated).toBe(true);
+    expect(typeof wire?.value).toBe("string");
+    expect(
+      Buffer.byteLength(wire!.value as string, "utf8"),
+    ).toBeLessThanOrEqual(262_144);
   });
 });

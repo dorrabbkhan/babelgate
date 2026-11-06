@@ -34,6 +34,20 @@ export interface GatewayConfig {
   upstreamStreamIdleMs: number;
   registry: ProviderRegistry;
   routing: RoutingConfig;
+  observe: ObserveConfig;
+}
+
+/**
+ * Observe-layer settings (spec §3.11). Task 7 grows this with the
+ * usage-store, metrics and UI keys; Task 6 adds the inspector ring.
+ */
+export interface ObserveConfig {
+  /**
+   * Inspector ring size — the last N chat traces keep their body
+   * snapshots (spec §3.5, D3). `INSPECTOR_BUFFER`, default 50;
+   * 0 disables snapshotting entirely.
+   */
+  inspectorBuffer: number;
 }
 
 /**
@@ -157,6 +171,7 @@ export function loadConfig(): EnvConfig {
     targetContextWindow,
     registry,
     routing,
+    observe: { inspectorBuffer: parseInspectorBuffer(process.env) },
     deprecatedEnv:
       process.env.SOURCE_API !== undefined ? ["SOURCE_API"] : [],
   };
@@ -181,6 +196,23 @@ function parseTargetMaxOutputTokens(): number | undefined {
   if (!Number.isInteger(value) || value <= 0) {
     throw new ConfigurationError(
       "TARGET_MAX_OUTPUT_TOKENS must be a positive integer",
+    );
+  }
+  return value;
+}
+
+/**
+ * `INSPECTOR_BUFFER` (spec §3.11): a non-negative integer, default 50;
+ * 0 disables the inspector ring. Applies in YAML mode too — shared by
+ * loadConfig and loadYamlConfig (env wins, spec §3.11).
+ */
+export function parseInspectorBuffer(env: NodeJS.ProcessEnv): number {
+  const raw = env.INSPECTOR_BUFFER;
+  if (raw === undefined || raw === "") return 50;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new ConfigurationError(
+      "INSPECTOR_BUFFER must be a non-negative integer",
     );
   }
   return value;

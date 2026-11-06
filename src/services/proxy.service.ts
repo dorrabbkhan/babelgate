@@ -5,6 +5,8 @@ import {
   type Provider,
 } from "../transformers";
 import { findSourceRoute } from "../transformers/adapters";
+import { currentTrace, snapshot } from "../observe/context";
+import { getBodyRing } from "../observe/sinks/body-ring";
 import { planRoute } from "../routing/plan-route";
 import { estimateInputTokens } from "../utils/token-estimate";
 import { canonicalRequestSchema } from "../types/canonical.schema";
@@ -109,6 +111,20 @@ export async function proxyRequest(
     throw new NotSupportedError(`${methodFromPath(path)} is not supported`);
   }
 
+  // §3.5: when the inspector ring is on (INSPECTOR_BUFFER ≠ 0) this
+  // request's trace gets a bodies object — every snapshot() below is a
+  // no-op unless it exists. The scope itself only exists for chat
+  // routes (observeMiddleware), so count_tokens/models never capture.
+  const trace = currentTrace();
+  if (
+    trace !== undefined &&
+    trace.bodies === undefined &&
+    getBodyRing() !== undefined
+  ) {
+    trace.bodies = { target: [] };
+  }
+  snapshot("source", body);
+
   // Source → Canonical. A count_tokens body may wrap the real chat
   // request (Gemini's `generateContentRequest` form) — the route
   // unwraps it before decode. The adapter may throw on malformed
@@ -138,6 +154,7 @@ export async function proxyRequest(
       })),
     });
   }
+  snapshot("canonical", parsed.data);
 
   // The model comes from the source path when the provider puts it there
   // (Gemini), otherwise from the canonical request. An explicitly empty

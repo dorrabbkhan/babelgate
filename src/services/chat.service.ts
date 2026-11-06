@@ -7,7 +7,7 @@ import {
 import type { RoutePlan } from "../routing/plan-route";
 import { authHeaders } from "../routing/registry";
 import type { Hop } from "../routing/route-log";
-import { currentTrace } from "../observe/context";
+import { currentTrace, snapshot } from "../observe/context";
 import { finishTrace } from "../observe/emit";
 import type {
   CanonicalRequest,
@@ -65,6 +65,8 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
         const targetBody = adapters[entry.type].fromCanonicalRequest(
           canonicalForTarget(canonical, entry, target),
         );
+        // §3.5: one target snapshot per hop (fallbacks included).
+        snapshot("target", targetBody);
         const targetRoute = PROVIDER_ROUTES[entry.type].find(
           (r) => r.kind === "chat",
         )!;
@@ -108,6 +110,10 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     throw err;
   }
 
+  // §3.5: the upstream JSON body lands in the ring even when decoding
+  // it below throws.
+  snapshot("response.wire", result.value.body);
+
   // Target → Canonical → Source. §3.5: replies carry the model name the
   // client asked for, not the routed name sent upstream. A throwing
   // decode or source encode after a won attempt is still traced.
@@ -133,6 +139,7 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     }
 
     body = adapters[source].fromCanonicalResponse(canonicalResp);
+    snapshot("response.canonical", canonicalResp);
   } catch (err) {
     await finishTrace({
       reason: plan.reason,

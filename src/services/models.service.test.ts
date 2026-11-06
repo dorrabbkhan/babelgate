@@ -53,6 +53,7 @@ function gatewayConfig(
     upstreamStreamIdleMs: 300_000,
     registry: createRegistry(providers),
     routing: { defaultProvider, aliases, rules: [] },
+    observe: { inspectorBuffer: 50 },
   };
 }
 

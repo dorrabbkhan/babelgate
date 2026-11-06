@@ -17,6 +17,7 @@ import {
   formatSse,
 } from "../../utils/sse";
 import { logger } from "../../utils/logger";
+import { recordNote } from "../../observe/context";
 import { estimateInputTokens } from "../../utils/token-estimate";
 import {
   fromCanonicalError,
@@ -83,13 +84,22 @@ export function createStreamDecoder(
   // wire content-block index → block kind / canonical tool index
   const toolIndexByWire = new Map<number, number>();
   const openCalls: number[] = [];
-  // §3.5: dropped thinking types are named once per stream at debug.
+  // §3.5: dropped thinking types are noted once per stream, named by
+  // their wire block/delta type.
   const loggedDrops = new Set<string>();
 
   function logDrop(type: string): void {
     if (loggedDrops.has(type)) return;
     loggedDrops.add(type);
-    logger.debug(`Dropping stream block "${type}" (no canonical equivalent)`);
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "stream_block_dropped",
+        path: type,
+      },
+      `Dropping stream block "${type}" (no canonical equivalent)`,
+    );
   }
 
   function closeAll(out: CanonicalStreamEvent[]): void {

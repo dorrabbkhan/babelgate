@@ -10,7 +10,7 @@ import type {
   CanonicalTool,
 } from "../types/canonical.types";
 import { ProxyError, UpstreamError } from "../utils/errors";
-import { logger } from "../utils/logger";
+import { recordNote } from "../observe/context";
 import type { TraceFinish } from "../observe/emit";
 import { toClientError } from "./upstream-errors";
 
@@ -129,7 +129,12 @@ function stripCacheHints(
   }
 
   if (stripped && target !== "ollama") {
-    logger.debug(
+    recordNote(
+      {
+        stage: "encode",
+        adapter: target,
+        code: "cache_control_dropped",
+      },
       `Dropping cache hints (target provider "${target}" has no cache_hints)`,
     );
   }

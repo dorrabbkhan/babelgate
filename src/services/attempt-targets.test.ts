@@ -10,6 +10,8 @@ import type { ProviderEntry } from "../routing/registry";
 import type { RoutePlan } from "../routing/plan-route";
 import type { CanonicalRequest } from "../types/canonical.types";
 import { UpstreamError } from "../utils/errors";
+import { runWithTrace } from "../observe/context";
+import { newTrace } from "../observe/trace";
 
 const registry = () =>
   createRegistry([
@@ -367,5 +369,26 @@ describe("cache hints (spec §3.2)", () => {
     expect(out.systemPrompt).toEqual(inRequest.systemPrompt);
     expect(out.messages).toEqual(inRequest.messages);
     expect(out.tools).toEqual(inRequest.tools);
+  });
+
+  // §3.5: the strip records a cache_control_dropped note on the trace —
+  // the target provider is the note's adapter.
+  it("stripped hints record cache_control_dropped", () => {
+    const trace = newTrace({
+      requestId: "r1",
+      startedAt: 0,
+      client: "other",
+      sourceApi: "anthropic",
+    });
+
+    runWithTrace(trace, () => {
+      canonicalForTarget(hinted(), provider("openai"), target);
+    });
+
+    expect(trace.notes).toContainEqual({
+      stage: "encode",
+      adapter: "openai",
+      code: "cache_control_dropped",
+    });
   });
 });

@@ -5,6 +5,9 @@ import {
   toCanonicalResponse,
   fromCanonicalResponse,
 } from './anthropic.adapter';
+import { createStreamDecoder } from './anthropic.stream';
+import { runWithTrace } from '../../observe/context';
+import { newTrace, type RequestTrace } from '../../observe/trace';
 import { ValidationError } from '../../utils/errors';
 import type {
   CanonicalRequest,
@@ -35,6 +38,18 @@ function createTestMessage(
     },
     ...overrides,
   } as Message;
+}
+
+/** Run `fn` inside a trace scope and return the filled trace (§3.5). */
+function traced<T>(fn: () => T): RequestTrace {
+  const trace = newTrace({
+    requestId: 'r1',
+    startedAt: 0,
+    client: 'other',
+    sourceApi: 'anthropic',
+  });
+  runWithTrace(trace, fn);
+  return trace;
 }
 
 describe('Anthropic Adapter', () => {
@@ -1163,6 +1178,176 @@ describe('Anthropic Adapter', () => {
       expect(result.max_tokens).toBe(original.max_tokens);
       expect(result.temperature).toBe(original.temperature);
       expect(result.system).toBe(original.system);
+    });
+  });
+
+  // §3.5: every lossy-translation drop site records a TranslationNote
+  // on the ambient trace (code + JSON path, never content). One case
+  // per site.
+  describe('translation notes (spec §3.5)', () => {
+    it('thinking request field records thinking_dropped', () => {
+      const input = {
+        model: 'claude-3-opus-20240229',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        thinking: { type: 'enabled', budget_tokens: 2000 },
+      } as unknown as MessageCreateParams;
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'thinking_dropped',
+        path: 'thinking',
+      });
+    });
+
+    it('metadata request field records metadata_dropped', () => {
+      const input: MessageCreateParams = {
+        model: 'claude-3-opus-20240229',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        metadata: { user_id: 'u1' },
+      };
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'metadata_dropped',
+        path: 'metadata',
+      });
+    });
+
+    it('uncarried cache_control records cache_control_dropped', () => {
+      // cache_control on a block kind canonical can't carry (tool_use)
+      const input = {
+        model: 'claude-3-opus-20240229',
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 't1',
+                name: 'n',
+                input: {},
+                cache_control: { type: 'ephemeral' },
+              },
+            ],
+          },
+        ],
+        max_tokens: 1024,
+      } as unknown as MessageCreateParams;
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'cache_control_dropped',
+        path: 'cache_control',
+      });
+    });
+
+    it('thinking content block records thinking_dropped with its path', () => {
+      const input = {
+        model: 'claude-3-opus-20240229',
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              { type: 'thinking', thinking: 'hmm', signature: 'sig' },
+              { type: 'text', text: 'answer' },
+            ],
+          },
+        ],
+        max_tokens: 1024,
+      } as unknown as MessageCreateParams;
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'thinking_dropped',
+        path: 'messages[0].content[0]',
+      });
+    });
+
+    it('disable_parallel_tool_use records its own code', () => {
+      const input = {
+        model: 'claude-3-opus-20240229',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        tool_choice: { type: 'auto', disable_parallel_tool_use: true },
+      } as unknown as MessageCreateParams;
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'disable_parallel_tool_use_dropped',
+        path: 'tool_choice.disable_parallel_tool_use',
+      });
+    });
+
+    it('more than 4 breakpoints records cache_limit on encode', () => {
+      const input: CanonicalRequest = {
+        model: 'claude-3-opus-20240229',
+        systemPrompt: [
+          { type: 'text', text: 'first', cache: {} },
+          { type: 'text', text: 'second', cache: { ttl: '1h' } },
+        ],
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'm1', cache: {} },
+              { type: 'text', text: 'm2', cache: {} },
+              { type: 'text', text: 'm3', cache: {} },
+            ],
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather' },
+            cache: { ttl: '1h' },
+          },
+        ],
+        config: { maxTokens: 1024 },
+      };
+
+      const trace = traced(() => fromCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'cache_limit',
+        path: 'cache_control',
+      });
+    });
+
+    it('stream block drop records stream_block_dropped', () => {
+      const decoder = createStreamDecoder('claude-3-opus-20240229');
+      const chunk = new TextEncoder().encode(
+        'event: content_block_start\n' +
+          'data: {"type":"content_block_start","index":0,' +
+          '"content_block":{"type":"thinking","thinking":"hmm"}}\n\n',
+      );
+
+      const trace = traced(() => decoder.feed(chunk));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'stream_block_dropped',
+        path: 'thinking',
+      });
     });
   });
 });

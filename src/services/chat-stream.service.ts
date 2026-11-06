@@ -4,7 +4,7 @@ import {
 } from "../transformers";
 import { authHeaders } from "../routing/registry";
 import type { Hop } from "../routing/route-log";
-import { currentTrace } from "../observe/context";
+import { currentTrace, snapshot } from "../observe/context";
 import { finishTrace } from "../observe/emit";
 import type {
   CanonicalStreamEvent,
@@ -14,6 +14,7 @@ import type {
 import { UpstreamError } from "../utils/errors";
 import { postStream } from "./http-client";
 import { runStreamPipeline } from "./stream-pipeline";
+import { reassembleStream } from "../utils/stream-reassemble";
 import {
   attemptTargets,
   canonicalForTarget,
@@ -69,6 +70,8 @@ export async function proxyChatStream(
         const targetBody = adapters[entry.type].fromCanonicalRequest(
           canonicalForTarget(canonical, entry, target),
         );
+        // §3.5: one target snapshot per hop (fallbacks included).
+        snapshot("target", targetBody);
         const targetRoute = PROVIDER_ROUTES[entry.type].find(
           (r) => r.kind === "chat",
         )!;
@@ -150,6 +153,20 @@ export async function proxyChatStream(
    */
   const finish = async (clientStatus?: number): Promise<void> => {
     upstreamAc.abort();
+    // §3.5: the reassembled response goes to the inspector ring — a
+    // stream that ended mid-flight or on an error event doesn't
+    // reassemble; the wire tap still shows what the upstream sent.
+    // With the ring off (no trace bodies) reassembly is skipped too —
+    // it only feeds the snapshot.
+    if (currentTrace()?.bodies !== undefined) {
+      try {
+        const canonicalResp = reassembleStream(observed);
+        canonicalResp.model = requestedModel;
+        snapshot("response.canonical", canonicalResp);
+      } catch {
+        // partial or errored streams have no canonical response
+      }
+    }
     const last = observed.at(-1);
     const usageEvent = observed.find((e) => e.type === "usage");
     await finishTrace({
