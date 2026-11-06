@@ -2839,3 +2839,91 @@ unchanged.
 - `src/services/proxy.service.ts` — `ProxyResult.stream` gained the
   `finish(clientStatus?)` member; `chunks` stays
   `AsyncIterable<string>`.
+
+## v1.3 Task 6 — Translation notes, body snapshots, body ring (2026-11-06)
+
+- **Note codes and paths (spec §3.5).** The 8 adapter drop sites (E6),
+  the Task 4 breakpoint-limit line, and the Task 4 `stripCacheHints`
+  line (its own decisions entry already promised the note) map to:
+
+  | site | code | stage | path |
+  |---|---|---|---|
+  | anthropic `thinking` field | `thinking_dropped` | decode | `thinking` |
+  | anthropic `metadata` field | `metadata_dropped` | decode | `metadata` |
+  | anthropic uncarried `cache_control` | `cache_control_dropped` | decode | `cache_control` |
+  | anthropic thinking/redacted_thinking blocks | `thinking_dropped` | decode | `messages[i].content[j]` |
+  | anthropic `disable_parallel_tool_use` | `disable_parallel_tool_use_dropped` | decode | `tool_choice.disable_parallel_tool_use` |
+  | anthropic stream thinking/signature blocks+δ | `stream_block_dropped` | decode | the wire block/delta type |
+  | anthropic >4 breakpoints (encode) | `cache_limit` | encode | `cache_control` |
+  | openai `parallel_tool_calls` | `parallel_tool_calls_dropped` | decode | `parallel_tool_calls` |
+  | openai tool `strict` | `tool_strict_dropped` | decode | `tools[i].function.strict` |
+  | `canonicalForTarget` hint strip | `cache_control_dropped` | encode | — (adapter = target provider type) |
+
+  For a content array filtered before conversion (tool_result/tool_use
+  split out first), `content[j]` is the index in the converted block
+  list — usually the wire index. `stream_block_dropped` `path` is the
+  dropped wire type (`thinking`, `redacted_thinking`, `thinking_delta`,
+  `signature_delta`) since a stream event has no JSON path.
+- **`recordNote(note)` also writes the debug line** — one derived line,
+  `Dropping "<path-or-code>" (<adapter> <stage>: <code>)`, replacing
+  the per-site sentences. One existing openai adapter test asserted
+  `stringContaining('"strict"')`; the derived line now names the fuller
+  path `tools[0].function.strict`, so that single assertion was updated
+  (flagged, not loosened — `"parallel_tool_calls"` matches verbatim,
+  the call count and the never-log-content assertions are unchanged).
+  The dropped-breakpoint *count* has no slot in `TranslationNote`
+  (code/path only) and is no longer in the debug line.
+- **`snapshot()`'s "ring enabled" gate is per-request.** `proxyRequest`
+  sets `trace.bodies = { target: [] }` only when a trace scope exists
+  (chat routes only) and `getBodyRing()` is non-undefined
+  (`observe.inspectorBuffer` > 0); `snapshot()` writes only into an
+  existing `bodies`. This keeps `context.ts` config-free — adapters may
+  import `recordNote`/`snapshot` without transitively importing config
+  (Global Constraint: adapters stay config-free).
+- **`getBodyRing()` reads `observe.inspectorBuffer` per call** so
+  `INSPECTOR_BUFFER=0` disables capture even once the singleton exists;
+  a non-zero size never recreates it (size changes need a restart).
+  `emitTrace` strips `bodies` for every sink not named `body-ring` /
+  `usage-store` — the inspector never sees headers.
+- **`GatewayConfig.observe` is required** (`ObserveConfig` with
+  `inspectorBuffer` for now; Task 7 extends it). `INSPECTOR_BUFFER` is
+  parsed by `parseInspectorBuffer` in env-config and applied in both
+  env and YAML mode (env wins, §3.11); the `observe:` YAML section
+  itself arrives in Task 7.
+- **Snapshots are taken where the stages already exist:**
+  `source` = the parsed client body before decode; `canonical` = the
+  validated canonical request; `target[]` = each encoded upstream body
+  (inside the attempt callback, so a fallback records each hop);
+  `response.wire` = the upstream JSON body (snapshotted before decode
+  so a throwing decode still leaves it) or, for streams, the tapped
+  upstream text; `response.canonical` = the decoded response (JSON) or
+  `reassembleStream(observed)` with `model` set to the requested name —
+  a stream that ended mid-flight or on an `error` event doesn't
+  reassemble and simply has no canonical snapshot.
+- **The stream wire tap** accumulates decoded upstream text only until
+  it passes `STREAM_WIRE_CAP_BYTES`, flushes the incremental UTF-8
+  decoder at end, and snapshots in the pipeline's `finally` — partial
+  captures on abort/error are kept; the client stream is untouched
+  (asserted: tail chunks and `[DONE]` still arrive). The 1 MB /
+  256 KB caps are byte caps (1 048 576 / 262 144); over-cap values are
+  replaced by the first cap bytes as a string + `truncated: true`.
+- **Changed assertion (flagged, not loosened):** the openai adapter
+  test's `'"strict"'` expectation became `'tools[0].function.strict'`
+  (see above). No fixture, snapshot or wire expected value changed.
+
+**Files outside the Files block:**
+- `src/config/yaml-config.ts` — `GatewayConfig.observe` is required and
+  `INSPECTOR_BUFFER` applies in YAML mode too (env scalars win, §3.11).
+- `src/config/env-config.test.ts` — pins the `INSPECTOR_BUFFER`
+  default (50), the 0-disable and the non-negative-integer error.
+- `src/services/models.service.test.ts` — its `gatewayConfig` helper
+  builds a `GatewayConfig` literal and needed the required `observe`.
+- `src/services/attempt-targets.ts` — the Task 4 `stripCacheHints`
+  debug line becomes the `cache_control_dropped` note, as Task 4's own
+  decisions entry recorded.
+- `src/services/attempt-targets.test.ts` — the strip-site's note case
+  ("one adapter test per site" — this site lives in services).
+- `src/transformers/adapters/anthropic.adapter.test.ts` and
+  `openai.adapter.test.ts` — the per-site note cases Step 1 names
+  (`"each drop site records its code"`); the Test list's named files
+  cover context, ring and integration only.

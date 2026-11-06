@@ -8,6 +8,7 @@ import type {
 } from "../../types/canonical.types";
 import { parseToolArguments } from "../../utils/tool-args";
 import { ValidationError } from "../../utils/errors";
+import { recordNote } from "../../observe/context";
 import { logger } from "../../utils/logger";
 import { toCacheControl, toCacheHint } from "./anthropic.cache";
 import type {
@@ -37,8 +38,12 @@ type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
  * a user message's tool_result blocks become one canonical tool message
  * each (in order), followed by a user message for any remaining
  * text/image blocks. Assistant tool_use blocks become toolCalls.
+ * `messageIndex` is the wire index, for note paths (§3.5).
  */
-export function toCanonicalMessage(m: MessageParam): CanonicalMessage[] {
+export function toCanonicalMessage(
+  m: MessageParam,
+  messageIndex = 0,
+): CanonicalMessage[] {
   if (typeof m.content === "string" || !Array.isArray(m.content)) {
     return [
       {
@@ -67,14 +72,17 @@ export function toCanonicalMessage(m: MessageParam): CanonicalMessage[] {
       ...(r.is_error === true && { isError: true }),
     }));
     if (rest.length > 0) {
-      out.push({ role: "user", content: extractContent(rest) });
+      out.push({
+        role: "user",
+        content: extractContent(rest, messageIndex),
+      });
     }
     return out;
   }
 
   const msg: CanonicalMessage = {
     role: m.role as CanonicalMessage["role"],
-    content: extractContent(rest),
+    content: extractContent(rest, messageIndex),
   };
   if (toolUses.length > 0) {
     msg.toolCalls = toolUses.map(toolUseToCanonical);
@@ -149,9 +157,12 @@ export function toCanonicalToolChoice(choice: ToolChoice): CanonicalToolChoice {
     "disable_parallel_tool_use" in choice &&
     choice.disable_parallel_tool_use !== undefined
   ) {
-    logger.debug(
-      'Dropping tool_choice field "disable_parallel_tool_use" (no canonical equivalent)',
-    );
+    recordNote({
+      stage: "decode",
+      adapter: "anthropic",
+      code: "disable_parallel_tool_use_dropped",
+      path: "tool_choice.disable_parallel_tool_use",
+    });
   }
   switch (choice.type) {
     case "auto":
@@ -166,20 +177,21 @@ export function toCanonicalToolChoice(choice: ToolChoice): CanonicalToolChoice {
 }
 
 /**
- * §3.5: `thinking`/`redacted_thinking` blocks are dropped safely (debug
- * log names the type only); any other unrecognised block type is a 400
+ * §3.5: `thinking`/`redacted_thinking` blocks are dropped safely (the
+ * note names the path only); any other unrecognised block type is a 400
  * naming it — Claude Code blocks we can't honour must fail loudly, not
  * silently turn into empty text.
  */
 function extractContent(
   content: MessageParam["content"],
+  messageIndex = 0,
 ): string | CanonicalContentPart[] {
   if (typeof content === "string") {
     return content;
   }
 
   const parts: CanonicalContentPart[] = [];
-  for (const block of content) {
+  for (const [blockIndex, block] of content.entries()) {
     if (block.type === "text") {
       parts.push({
         type: "text",
@@ -213,9 +225,12 @@ function extractContent(
       continue;
     }
     if (block.type === "thinking" || block.type === "redacted_thinking") {
-      logger.debug(
-        `Dropping content block "${block.type}" (no canonical equivalent)`,
-      );
+      recordNote({
+        stage: "decode",
+        adapter: "anthropic",
+        code: "thinking_dropped",
+        path: `messages[${messageIndex}].content[${blockIndex}]`,
+      });
       continue;
     }
     throw new ValidationError(

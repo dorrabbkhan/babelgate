@@ -7,11 +7,25 @@ import {
   fromCanonicalModelList,
 } from './openai.adapter';
 import { toCanonicalRequest as anthropicToCanonicalRequest } from './anthropic.adapter';
+import { runWithTrace } from '../../observe/context';
+import { newTrace, type RequestTrace } from '../../observe/trace';
 import { UpstreamError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import type { CanonicalRequest, CanonicalResponse } from '../../types/canonical.types';
 import type { ChatCompletionRequest, ChatCompletionResponse } from '../../types/openai.types';
 import type { MessageCreateParams } from '../../types/anthropic.types';
+
+/** Run `fn` inside a trace scope and return the filled trace (§3.5). */
+function traced<T>(fn: () => T): RequestTrace {
+  const trace = newTrace({
+    requestId: 'r1',
+    startedAt: 0,
+    client: 'other',
+    sourceApi: 'openai',
+  });
+  runWithTrace(trace, fn);
+  return trace;
+}
 
 describe('OpenAI Adapter', () => {
   describe('toCanonicalRequest', () => {
@@ -574,7 +588,7 @@ describe('OpenAI Adapter', () => {
       // The request still decodes — the drop is only made visible.
       expect(canonical.tools?.[0]?.function.name).toBe('get_weather');
       expect(debugSpy).toHaveBeenCalledWith(
-        expect.stringContaining('"strict"'),
+        expect.stringContaining('tools[0].function.strict'),
       );
       expect(debugSpy).toHaveBeenCalledWith(
         expect.stringContaining('"parallel_tool_calls"'),
@@ -684,6 +698,60 @@ describe('OpenAI Adapter', () => {
 
       const restored = fromCanonicalRequest(canonical);
       expect(restored.tools).toEqual(tools);
+    });
+  });
+
+  // §3.5: every lossy-translation drop site records a TranslationNote
+  // on the ambient trace (code + JSON path, never content). One case
+  // per site.
+  describe('translation notes (spec §3.5)', () => {
+    it('parallel_tool_calls records its own code', () => {
+      const input = {
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        parallel_tool_calls: false,
+      } as unknown as ChatCompletionRequest;
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'openai',
+        code: 'parallel_tool_calls_dropped',
+        path: 'parallel_tool_calls',
+      });
+    });
+
+    it('tool strict records tool_strict_dropped with its index', () => {
+      const input: ChatCompletionRequest = {
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hello' }],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'a', strict: true },
+          },
+          {
+            type: 'function',
+            function: { name: 'b', strict: false },
+          },
+        ],
+      };
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'openai',
+        code: 'tool_strict_dropped',
+        path: 'tools[0].function.strict',
+      });
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'openai',
+        code: 'tool_strict_dropped',
+        path: 'tools[1].function.strict',
+      });
     });
   });
 });

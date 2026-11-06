@@ -18,7 +18,7 @@ import {
   makeCanonicalError,
 } from "../../utils/canonical-error";
 import { UpstreamError, ValidationError } from "../../utils/errors";
-import { logger } from "../../utils/logger";
+import { recordNote } from "../../observe/context";
 import { systemText } from "../system-text";
 import type {
   ChatCompletionRequest,
@@ -66,9 +66,12 @@ export function toCanonicalRequest(
   // non-goal) — make the drop visible instead of silent, same as
   // Anthropic's `disable_parallel_tool_use` (task 9).
   if (request.parallel_tool_calls !== undefined) {
-    logger.debug(
-      'Dropping request field "parallel_tool_calls" (no canonical equivalent)',
-    );
+    recordNote({
+      stage: "decode",
+      adapter: "openai",
+      code: "parallel_tool_calls_dropped",
+      path: "parallel_tool_calls",
+    });
   }
 
   return {
@@ -112,7 +115,7 @@ export function toCanonicalRequest(
 function toCanonicalTools(
   tools: NonNullable<ChatCompletionRequest["tools"]>,
 ): CanonicalRequest["tools"] {
-  return tools.map((tool) => {
+  return tools.map((tool, index) => {
     if (tool.type !== "function" || !("function" in tool)) {
       throw new ValidationError(
         `Unsupported OpenAI tool type "${String(tool.type)}"`,
@@ -120,9 +123,12 @@ function toCanonicalTools(
     }
     // `strict` has no canonical equivalent — dropped, but visibly.
     if (tool.function.strict != null) {
-      logger.debug(
-        'Dropping tool field "strict" (no canonical equivalent)',
-      );
+      recordNote({
+        stage: "decode",
+        adapter: "openai",
+        code: "tool_strict_dropped",
+        path: `tools[${index}].function.strict`,
+      });
     }
     return {
       type: "function" as const,

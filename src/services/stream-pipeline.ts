@@ -4,7 +4,12 @@ import type {
   StreamDecoder,
   StreamEncoder,
 } from "../types/canonical.types";
+import {
+  snapshot,
+  STREAM_WIRE_CAP_BYTES,
+} from "../observe/context";
 import { makeCanonicalError } from "../utils/canonical-error";
+import { createUtf8Decoder } from "../utils/sse";
 
 export interface StreamPipelineOptions {
   /** The upstream response body — bytes as they arrive off the socket */
@@ -37,6 +42,13 @@ export async function* runStreamPipeline(
 ): AsyncIterable<string> {
   const { upstream, decoder, encoder, idleMs, signal } = opts;
   const reader = upstream.getReader();
+
+  // §3.5: tap the upstream bytes for the inspector ring — read-only,
+  // capped a little past the snapshot limit so the wire snapshot can
+  // mark `truncated`; a no-op unless the trace carries bodies.
+  const wireUtf8 = createUtf8Decoder();
+  let wireText = "";
+  let wireCapped = false;
 
   const cancel = () => {
     reader.cancel().catch(() => {});
@@ -119,6 +131,11 @@ export async function* runStreamPipeline(
         return;
       }
 
+      if (!wireCapped) {
+        wireText += wireUtf8(chunk.value);
+        if (wireText.length > STREAM_WIRE_CAP_BYTES) wireCapped = true;
+      }
+
       try {
         events = decoder.feed(chunk.value);
       } catch {
@@ -138,5 +155,7 @@ export async function* runStreamPipeline(
   } finally {
     signal.removeEventListener("abort", cancel);
     cancel();
+    if (!wireCapped) wireText += wireUtf8(new Uint8Array(0));
+    if (wireText !== "") snapshot("response.wire", wireText);
   }
 }

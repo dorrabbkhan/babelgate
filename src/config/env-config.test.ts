@@ -134,6 +134,22 @@ describe("Environment Configuration", () => {
     expect(() => loadConfig()).toThrow("TARGET_MAX_OUTPUT_TOKENS");
   });
 
+  it("INSPECTOR_BUFFER defaults to 50, 0 disables (spec §3.11)", () => {
+    process.env.TARGET_API = "ollama";
+
+    expect(loadConfig().observe.inspectorBuffer).toBe(50);
+
+    process.env.INSPECTOR_BUFFER = "0";
+    expect(loadConfig().observe.inspectorBuffer).toBe(0);
+  });
+
+  it("INSPECTOR_BUFFER must be a non-negative integer", () => {
+    process.env.TARGET_API = "ollama";
+    process.env.INSPECTOR_BUFFER = "-1";
+
+    expect(() => loadConfig()).toThrow("INSPECTOR_BUFFER");
+  });
+
   it("should use default port when PORT is not set", () => {
     process.env.SOURCE_API = "openai";
     process.env.TARGET_API = "ollama";

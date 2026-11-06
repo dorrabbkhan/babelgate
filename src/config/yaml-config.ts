@@ -9,7 +9,7 @@ import type {
 } from "../routing/plan-route";
 import { parseTarget } from "../routing/rules";
 import { ConfigurationError } from "../utils/errors";
-import type { GatewayConfig } from "./env-config";
+import { parseInspectorBuffer, type GatewayConfig } from "./env-config";
 import { gatewayFileSchema } from "./gateway.schema";
 
 /**
@@ -220,5 +220,8 @@ export function loadYamlConfig(
       : 300_000,
     registry: createRegistry(entries),
     routing,
+    // §3.11: env scalars apply in YAML mode too — the observe:
+    // section's YAML keys arrive with the usage store (Task 7).
+    observe: { inspectorBuffer: parseInspectorBuffer(env) },
   };
 }

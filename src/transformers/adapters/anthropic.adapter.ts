@@ -14,7 +14,7 @@ import {
   kindFromStatus,
   makeCanonicalError,
 } from "../../utils/canonical-error";
-import { logger } from "../../utils/logger";
+import { recordNote } from "../../observe/context";
 import type {
   MessageCreateParams,
   Message,
@@ -61,17 +61,33 @@ export const anthropicAdapter: ProviderAdapter<MessageCreateParams, Message> = {
 
 /**
  * Claude Code fields with no canonical equivalent are dropped safely
- * (spec §3.5) — a debug line names the dropped thing, never its content.
+ * (spec §3.5) — a translation note names the dropped thing's code and
+ * path, never its content.
  */
 function logDropped(request: MessageCreateParams): void {
   if (request.thinking !== undefined) {
-    logger.debug('Dropping request field "thinking" (no canonical equivalent)');
+    recordNote({
+      stage: "decode",
+      adapter: "anthropic",
+      code: "thinking_dropped",
+      path: "thinking",
+    });
   }
   if (request.metadata !== undefined) {
-    logger.debug('Dropping request field "metadata" (no canonical equivalent)');
+    recordNote({
+      stage: "decode",
+      adapter: "anthropic",
+      code: "metadata_dropped",
+      path: "metadata",
+    });
   }
   if (hasUncarriedCacheControl(request)) {
-    logger.debug('Dropping "cache_control" fields (no canonical equivalent)');
+    recordNote({
+      stage: "decode",
+      adapter: "anthropic",
+      code: "cache_control_dropped",
+      path: "cache_control",
+    });
   }
 }
 
@@ -80,8 +96,8 @@ export function toCanonicalRequest(
 ): CanonicalRequest {
   logDropped(request);
 
-  const messages: CanonicalMessage[] = request.messages.flatMap((m) =>
-    toCanonicalMessage(m),
+  const messages: CanonicalMessage[] = request.messages.flatMap((m, i) =>
+    toCanonicalMessage(m, i),
   );
 
   // §3.5: a system array's text blocks join with a blank line — unless a
@@ -181,13 +197,15 @@ export function fromCanonicalRequest(
   }
 
   // §3.2: Anthropic accepts at most 4 cache breakpoints — the last 4
-  // in tools → system → messages order are kept. Task 6 turns this
-  // debug line into a `cache_limit` translation note.
+  // in tools → system → messages order are kept.
   const dropped = limitCacheBreakpoints(result);
   if (dropped > 0) {
-    logger.debug(
-      `Dropping ${dropped} cache_control breakpoint(s): Anthropic allows at most 4`,
-    );
+    recordNote({
+      stage: "encode",
+      adapter: "anthropic",
+      code: "cache_limit",
+      path: "cache_control",
+    });
   }
 
   return result;
