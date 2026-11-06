@@ -20,14 +20,16 @@ export function currentTrace(): RequestTrace | undefined {
 
 /**
  * §3.5: record a lossy-translation note — the debug line the call site
- * used to write, plus a structured TranslationNote on the ambient
- * trace. Notes carry codes and field paths, never content. Adapter
- * signatures do not change; outside a scope (unit tests, non-chat
- * paths) the note only reaches the debug log.
+ * used to write (`message`, verbatim), plus a structured
+ * TranslationNote on the ambient trace. Notes carry codes and field
+ * paths, never content. Adapter signatures do not change; outside a
+ * scope (unit tests, non-chat paths) the note only reaches the debug
+ * log.
  */
-export function recordNote(note: TranslationNote): void {
+export function recordNote(note: TranslationNote, message?: string): void {
   logger.debug(
-    `Dropping "${note.path ?? note.code}" (${note.adapter} ${note.stage}: ${note.code})`,
+    message ??
+      `Dropping "${note.path ?? note.code}" (${note.adapter} ${note.stage}: ${note.code})`,
   );
   currentTrace()?.notes.push(note);
 }
@@ -45,9 +47,9 @@ export const STREAM_WIRE_CAP_BYTES = 262_144;
 
 /**
  * Serialized values over the stage's cap are replaced by the first
- * cap bytes as a string with `truncated: true` — the subarray cut is
- * byte-accurate, so a split multi-byte character ends as U+FFFD rather
- * than a lone surrogate. A string `response.wire` is upstream stream
+ * cap bytes as a string with `truncated: true`. The cut backs off to a
+ * UTF-8 character boundary, so the snapshot never exceeds the cap and
+ * never ends in U+FFFD. A string `response.wire` is upstream stream
  * text (256 KB cap); anything else serializes to JSON (1 MB cap).
  */
 function capSnapshot(stage: SnapshotStage, value: unknown): BodySnapshot {
@@ -59,10 +61,12 @@ function capSnapshot(stage: SnapshotStage, value: unknown): BodySnapshot {
   if (text === undefined || Buffer.byteLength(text, "utf8") <= cap) {
     return { value };
   }
-  return {
-    value: Buffer.from(text, "utf8").subarray(0, cap).toString("utf8"),
-    truncated: true,
-  };
+  const buf = Buffer.from(text, "utf8");
+  let end = cap;
+  // A continuation byte (10xxxxxx) means the cut splits a character —
+  // back off to its lead byte so the decoded string stays ≤ cap bytes.
+  while (end > 0 && (buf[end] & 0xc0) === 0x80) end -= 1;
+  return { value: buf.subarray(0, end).toString("utf8"), truncated: true };
 }
 
 /**

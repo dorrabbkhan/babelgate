@@ -156,12 +156,16 @@ export async function proxyChatStream(
     // §3.5: the reassembled response goes to the inspector ring — a
     // stream that ended mid-flight or on an error event doesn't
     // reassemble; the wire tap still shows what the upstream sent.
-    try {
-      const canonicalResp = reassembleStream(observed);
-      canonicalResp.model = requestedModel;
-      snapshot("response.canonical", canonicalResp);
-    } catch {
-      // partial or errored streams have no canonical response
+    // With the ring off (no trace bodies) reassembly is skipped too —
+    // it only feeds the snapshot.
+    if (currentTrace()?.bodies !== undefined) {
+      try {
+        const canonicalResp = reassembleStream(observed);
+        canonicalResp.model = requestedModel;
+        snapshot("response.canonical", canonicalResp);
+      } catch {
+        // partial or errored streams have no canonical response
+      }
     }
     const last = observed.at(-1);
     const usageEvent = observed.find((e) => e.type === "usage");

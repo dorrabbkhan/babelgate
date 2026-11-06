@@ -157,12 +157,15 @@ export function toCanonicalToolChoice(choice: ToolChoice): CanonicalToolChoice {
     "disable_parallel_tool_use" in choice &&
     choice.disable_parallel_tool_use !== undefined
   ) {
-    recordNote({
-      stage: "decode",
-      adapter: "anthropic",
-      code: "disable_parallel_tool_use_dropped",
-      path: "tool_choice.disable_parallel_tool_use",
-    });
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "disable_parallel_tool_use_dropped",
+        path: "tool_choice.disable_parallel_tool_use",
+      },
+      'Dropping tool_choice field "disable_parallel_tool_use" (no canonical equivalent)',
+    );
   }
   switch (choice.type) {
     case "auto":
@@ -225,12 +228,15 @@ function extractContent(
       continue;
     }
     if (block.type === "thinking" || block.type === "redacted_thinking") {
-      recordNote({
-        stage: "decode",
-        adapter: "anthropic",
-        code: "thinking_dropped",
-        path: `messages[${messageIndex}].content[${blockIndex}]`,
-      });
+      recordNote(
+        {
+          stage: "decode",
+          adapter: "anthropic",
+          code: "thinking_dropped",
+          path: `messages[${messageIndex}].content[${blockIndex}]`,
+        },
+        `Dropping content block "${block.type}" (no canonical equivalent)`,
+      );
       continue;
     }
     throw new ValidationError(

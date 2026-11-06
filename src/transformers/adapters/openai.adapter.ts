@@ -66,12 +66,15 @@ export function toCanonicalRequest(
   // non-goal) — make the drop visible instead of silent, same as
   // Anthropic's `disable_parallel_tool_use` (task 9).
   if (request.parallel_tool_calls !== undefined) {
-    recordNote({
-      stage: "decode",
-      adapter: "openai",
-      code: "parallel_tool_calls_dropped",
-      path: "parallel_tool_calls",
-    });
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "openai",
+        code: "parallel_tool_calls_dropped",
+        path: "parallel_tool_calls",
+      },
+      'Dropping request field "parallel_tool_calls" (no canonical equivalent)',
+    );
   }
 
   return {
@@ -123,12 +126,15 @@ function toCanonicalTools(
     }
     // `strict` has no canonical equivalent — dropped, but visibly.
     if (tool.function.strict != null) {
-      recordNote({
-        stage: "decode",
-        adapter: "openai",
-        code: "tool_strict_dropped",
-        path: `tools[${index}].function.strict`,
-      });
+      recordNote(
+        {
+          stage: "decode",
+          adapter: "openai",
+          code: "tool_strict_dropped",
+          path: `tools[${index}].function.strict`,
+        },
+        'Dropping tool field "strict" (no canonical equivalent)',
+      );
     }
     return {
       type: "function" as const,

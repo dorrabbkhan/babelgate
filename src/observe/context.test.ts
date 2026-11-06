@@ -45,6 +45,36 @@ describe("recordNote (spec §3.5)", () => {
     expect(debugSpy).toHaveBeenCalledTimes(2);
     debugSpy.mockRestore();
   });
+
+  it("recordNote keeps the call site's debug line", () => {
+    const debugSpy = vi.spyOn(logger, "debug").mockImplementation(() => logger);
+    const trace = makeTrace();
+
+    runWithTrace(trace, () => {
+      recordNote(
+        {
+          stage: "decode",
+          adapter: "anthropic",
+          code: "thinking_dropped",
+          path: "thinking",
+        },
+        'Dropping request field "thinking" (no canonical equivalent)',
+      );
+    });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      'Dropping request field "thinking" (no canonical equivalent)',
+    );
+    expect(trace.notes).toEqual([
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "thinking_dropped",
+        path: "thinking",
+      },
+    ]);
+    debugSpy.mockRestore();
+  });
 });
 
 describe("snapshot (spec §3.5)", () => {
@@ -104,6 +134,32 @@ describe("snapshot (spec §3.5)", () => {
     expect(
       Buffer.byteLength(wire.value as string, "utf8"),
     ).toBeLessThanOrEqual(262_144);
+  });
+
+  it("truncation never exceeds the cap on a multi-byte boundary", () => {
+    const trace = makeTrace();
+    trace.bodies = { target: [] };
+    runWithTrace(trace, () => {
+      // 300 000 bytes of 3-byte chars — 262 144 is not a multiple of
+      // 3, so a naive byte cut splits a char (and U+FFFD costs 3).
+      snapshot("response.wire", "€".repeat(100_000));
+      // 2-byte "é" run inside JSON: the cut lands mid-character.
+      snapshot("canonical", { s: "a" + "é".repeat(600_000) });
+    });
+
+    const wire = trace.bodies!.response!.wire!;
+    expect(wire.truncated).toBe(true);
+    expect(
+      Buffer.byteLength(wire.value as string, "utf8"),
+    ).toBeLessThanOrEqual(262_144);
+    expect(wire.value as string).not.toContain("�");
+
+    const canonical = trace.bodies!.canonical!;
+    expect(canonical.truncated).toBe(true);
+    expect(
+      Buffer.byteLength(canonical.value as string, "utf8"),
+    ).toBeLessThanOrEqual(1_048_576);
+    expect(canonical.value as string).not.toContain("�");
   });
 
   it("values under the cap keep their object form", () => {

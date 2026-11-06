@@ -5,6 +5,7 @@ import type {
   StreamEncoder,
 } from "../types/canonical.types";
 import {
+  currentTrace,
   snapshot,
   STREAM_WIRE_CAP_BYTES,
 } from "../observe/context";
@@ -45,8 +46,12 @@ export async function* runStreamPipeline(
 
   // §3.5: tap the upstream bytes for the inspector ring — read-only,
   // capped a little past the snapshot limit so the wire snapshot can
-  // mark `truncated`; a no-op unless the trace carries bodies.
-  const wireUtf8 = createUtf8Decoder();
+  // mark `truncated`. Decided once at pipeline start: no trace bodies
+  // (ring off, INSPECTOR_BUFFER=0) → no decoder, no accumulation, no
+  // snapshot — the tap does zero work.
+  const wireUtf8 =
+    currentTrace()?.bodies !== undefined ? createUtf8Decoder() : undefined;
+  const tapWire = wireUtf8 !== undefined;
   let wireText = "";
   let wireCapped = false;
 
@@ -131,7 +136,7 @@ export async function* runStreamPipeline(
         return;
       }
 
-      if (!wireCapped) {
+      if (tapWire && !wireCapped) {
         wireText += wireUtf8(chunk.value);
         if (wireText.length > STREAM_WIRE_CAP_BYTES) wireCapped = true;
       }
@@ -155,7 +160,9 @@ export async function* runStreamPipeline(
   } finally {
     signal.removeEventListener("abort", cancel);
     cancel();
-    if (!wireCapped) wireText += wireUtf8(new Uint8Array(0));
-    if (wireText !== "") snapshot("response.wire", wireText);
+    if (tapWire) {
+      if (!wireCapped) wireText += wireUtf8(new Uint8Array(0));
+      if (wireText !== "") snapshot("response.wire", wireText);
+    }
   }
 }

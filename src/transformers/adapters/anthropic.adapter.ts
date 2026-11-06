@@ -66,28 +66,37 @@ export const anthropicAdapter: ProviderAdapter<MessageCreateParams, Message> = {
  */
 function logDropped(request: MessageCreateParams): void {
   if (request.thinking !== undefined) {
-    recordNote({
-      stage: "decode",
-      adapter: "anthropic",
-      code: "thinking_dropped",
-      path: "thinking",
-    });
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "thinking_dropped",
+        path: "thinking",
+      },
+      'Dropping request field "thinking" (no canonical equivalent)',
+    );
   }
   if (request.metadata !== undefined) {
-    recordNote({
-      stage: "decode",
-      adapter: "anthropic",
-      code: "metadata_dropped",
-      path: "metadata",
-    });
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "metadata_dropped",
+        path: "metadata",
+      },
+      'Dropping request field "metadata" (no canonical equivalent)',
+    );
   }
   if (hasUncarriedCacheControl(request)) {
-    recordNote({
-      stage: "decode",
-      adapter: "anthropic",
-      code: "cache_control_dropped",
-      path: "cache_control",
-    });
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "cache_control_dropped",
+        path: "cache_control",
+      },
+      'Dropping "cache_control" fields (no canonical equivalent)',
+    );
   }
 }
 
@@ -200,12 +209,15 @@ export function fromCanonicalRequest(
   // in tools → system → messages order are kept.
   const dropped = limitCacheBreakpoints(result);
   if (dropped > 0) {
-    recordNote({
-      stage: "encode",
-      adapter: "anthropic",
-      code: "cache_limit",
-      path: "cache_control",
-    });
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "anthropic",
+        code: "cache_limit",
+        path: "cache_control",
+      },
+      `Dropping ${dropped} cache_control breakpoint(s): Anthropic allows at most 4`,
+    );
   }
 
   return result;

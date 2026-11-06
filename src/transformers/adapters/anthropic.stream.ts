@@ -91,12 +91,15 @@ export function createStreamDecoder(
   function logDrop(type: string): void {
     if (loggedDrops.has(type)) return;
     loggedDrops.add(type);
-    recordNote({
-      stage: "decode",
-      adapter: "anthropic",
-      code: "stream_block_dropped",
-      path: type,
-    });
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "stream_block_dropped",
+        path: type,
+      },
+      `Dropping stream block "${type}" (no canonical equivalent)`,
+    );
   }
 
   function closeAll(out: CanonicalStreamEvent[]): void {

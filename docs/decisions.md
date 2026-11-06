@@ -2864,15 +2864,12 @@ unchanged.
   list — usually the wire index. `stream_block_dropped` `path` is the
   dropped wire type (`thinking`, `redacted_thinking`, `thinking_delta`,
   `signature_delta`) since a stream event has no JSON path.
-- **`recordNote(note)` also writes the debug line** — one derived line,
-  `Dropping "<path-or-code>" (<adapter> <stage>: <code>)`, replacing
-  the per-site sentences. One existing openai adapter test asserted
-  `stringContaining('"strict"')`; the derived line now names the fuller
-  path `tools[0].function.strict`, so that single assertion was updated
-  (flagged, not loosened — `"parallel_tool_calls"` matches verbatim,
-  the call count and the never-log-content assertions are unchanged).
-  The dropped-breakpoint *count* has no slot in `TranslationNote`
-  (code/path only) and is no longer in the debug line.
+- **`recordNote(note, message)` also writes the debug line** — every
+  converted site passes its original `logger.debug("Dropping …")`
+  sentence verbatim (the breakpoint-limit line keeps the dropped
+  count); the derived `Dropping "<path-or-code>" (<adapter> <stage>:
+  <code>)` line is only the fallback for a site with no message. No
+  existing expected value or assertion changed.
 - **`snapshot()`'s "ring enabled" gate is per-request.** `proxyRequest`
   sets `trace.bodies = { target: [] }` only when a trace scope exists
   (chat routes only) and `getBodyRing()` is non-undefined
@@ -2900,16 +2897,23 @@ unchanged.
   `reassembleStream(observed)` with `model` set to the requested name —
   a stream that ended mid-flight or on an `error` event doesn't
   reassemble and simply has no canonical snapshot.
-- **The stream wire tap** accumulates decoded upstream text only until
+- **The stream wire tap** is decided once at pipeline start
+  (`tapWire = currentTrace()?.bodies !== undefined`): with the ring off
+  (`INSPECTOR_BUFFER=0`) there is no decoder, no accumulation and no
+  snapshot — the tap does zero work, and `finish` likewise skips
+  `reassembleStream`, which only feeds the `response.canonical`
+  snapshot. When on, it accumulates decoded upstream text only until
   it passes `STREAM_WIRE_CAP_BYTES`, flushes the incremental UTF-8
   decoder at end, and snapshots in the pipeline's `finally` — partial
   captures on abort/error are kept; the client stream is untouched
   (asserted: tail chunks and `[DONE]` still arrive). The 1 MB /
   256 KB caps are byte caps (1 048 576 / 262 144); over-cap values are
-  replaced by the first cap bytes as a string + `truncated: true`.
-- **Changed assertion (flagged, not loosened):** the openai adapter
-  test's `'"strict"'` expectation became `'tools[0].function.strict'`
-  (see above). No fixture, snapshot or wire expected value changed.
+  replaced by the first cap bytes as a string + `truncated: true`,
+  with the cut backed off to a UTF-8 character boundary so a snapshot
+  never exceeds the cap and never ends in U+FFFD.
+- **No existing assertion changed:** the openai adapter test's
+  `'"strict"'` expectation and every other expected value on main are
+  byte-identical; no fixture, snapshot or wire expected value changed.
 
 **Files outside the Files block:**
 - `src/config/yaml-config.ts` — `GatewayConfig.observe` is required and

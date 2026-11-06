@@ -688,6 +688,49 @@ describe("body snapshots and the inspector ring (spec §3.5)", () => {
     expect(seen).toEqual([undefined]);
   });
 
+  // "0 disables snapshotting entirely" (spec §3.5): with the ring off
+  // a streamed request carries no bodies, the tap does no work, and
+  // the client stream is identical to the ring-on stream.
+  it("INSPECTOR_BUFFER=0 does no capture work on streams", async () => {
+    const ring = createBodyRing(50);
+    registerSink(ring);
+
+    const on = await postStream("/v1/chat/completions", {
+      ...openaiFixtures.requests.basic,
+      stream: true,
+    } as object);
+    expect(on.status).toBe(200);
+    await waitForTraces(1);
+    // The tap really ran — the ring holds a wire snapshot.
+    expect(
+      ring.get(traces[0].requestId)?.response?.wire,
+    ).toBeDefined();
+
+    process.env.INSPECTOR_BUFFER = "0";
+    resetConfig();
+    const seen: (BodySnapshots | undefined)[] = [];
+    registerSink({
+      name: "body-ring",
+      accept: (t) => seen.push(t.bodies),
+    });
+
+    const off = await postStream("/v1/chat/completions", {
+      ...openaiFixtures.requests.basic,
+      stream: true,
+    } as object);
+    expect(off.status).toBe(200);
+    await waitForTraces(2);
+
+    expect(seen).toEqual([undefined]);
+    // Mask per-request volatility (chunk id, created timestamp) —
+    // every other byte must match the ring-on stream.
+    const mask = (s: string) =>
+      s
+        .replace(/"id":"[^"]*"/g, '"id":""')
+        .replace(/"created":\d+/g, '"created":0');
+    expect(mask(off.body as string)).toBe(mask(on.body as string));
+  });
+
   // Review Focus 3: a request carrying a ~8.7 MB base64 image leaves
   // ≤1 MB snapshots marked truncated; a >256 KB upstream stream leaves
   // a ≤256 KB wire snapshot — and the client gets the stream whole.

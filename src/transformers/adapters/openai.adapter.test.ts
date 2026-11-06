@@ -588,7 +588,7 @@ describe('OpenAI Adapter', () => {
       // The request still decodes — the drop is only made visible.
       expect(canonical.tools?.[0]?.function.name).toBe('get_weather');
       expect(debugSpy).toHaveBeenCalledWith(
-        expect.stringContaining('tools[0].function.strict'),
+        expect.stringContaining('"strict"'),
       );
       expect(debugSpy).toHaveBeenCalledWith(
         expect.stringContaining('"parallel_tool_calls"'),

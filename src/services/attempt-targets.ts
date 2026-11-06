@@ -129,11 +129,14 @@ function stripCacheHints(
   }
 
   if (stripped && target !== "ollama") {
-    recordNote({
-      stage: "encode",
-      adapter: target,
-      code: "cache_control_dropped",
-    });
+    recordNote(
+      {
+        stage: "encode",
+        adapter: target,
+        code: "cache_control_dropped",
+      },
+      `Dropping cache hints (target provider "${target}" has no cache_hints)`,
+    );
   }
   return out;
 }
