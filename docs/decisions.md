@@ -3162,6 +3162,13 @@ unchanged.
 - **New runtime dependency `prom-client@15.1.3`** (plan Tech Stack; latest
   stable, published 2024-06-27). `registry.metrics()` is async in v15 —
   the route awaits it.
+- **`prom-client` is deprecated on npm** ("prom-client has been replaced
+  by @prometheus-io/client"; registry change 2026-08-25;
+  `@prometheus-io/client` was at 0.16.1, pre-1.0). Owner decision
+  (2026-11-07, PR #73): keep `prom-client@15.1.3` for v1.3; follow-up
+  after 1.3.0: evaluate moving to `@prometheus-io/client` once it is
+  stable. Metric names and the text exposition don't depend on the
+  library, so a later swap doesn't change `/metrics` for scrapers.
 - **The metrics sink is created lazily** by `getMetricsSink()` — the
   `/metrics` route, the `incAux` call sites and `reportSinkError` all go
   through it, so `METRICS=off` means no prom-client objects exist at
