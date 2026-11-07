@@ -21,12 +21,18 @@ export function observeMiddleware(): RequestHandler {
       return next();
     }
     const { client, userAgent } = clientId(req.headers);
+    // §3.8: an incoming W3C traceparent is stored on the trace so the
+    // OTel sink can parent the server span to the caller's trace.
+    const traceparent = req.headers.traceparent;
     const trace = newTrace({
       requestId: String(req.id),
       startedAt: Date.now(),
       client,
       userAgent,
       sourceApi,
+      ...(typeof traceparent === "string"
+        ? { parentTraceparent: traceparent }
+        : {}),
     });
     runWithTrace(trace, () => next());
   };

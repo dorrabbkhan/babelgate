@@ -100,6 +100,12 @@ export interface RequestTrace extends RouteLogRecord {
   repairs: ToolCallRepair[];
   /** only while the ring is enabled (Task 6) */
   bodies?: BodySnapshots;
+  /**
+   * The incoming W3C `traceparent` header, if any — it becomes the
+   * OTel server span's remote parent (spec §3.8). Never injected
+   * upstream, never logged.
+   */
+  parentTraceparent?: string;
 }
 
 /**
@@ -113,6 +119,7 @@ export function newTrace(init: {
   client: ClientId;
   userAgent?: string;
   sourceApi: Provider;
+  parentTraceparent?: string;
 }): RequestTrace {
   return {
     requestId: init.requestId,
@@ -124,6 +131,9 @@ export function newTrace(init: {
     startedAt: init.startedAt,
     client: init.client,
     ...(init.userAgent !== undefined && { userAgent: init.userAgent }),
+    ...(init.parentTraceparent !== undefined && {
+      parentTraceparent: init.parentTraceparent,
+    }),
     status: "ok",
     httpStatus: 0,
     costUsd: null,

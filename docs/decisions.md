@@ -3206,3 +3206,89 @@ unchanged.
   catch, the retention catch and the `getUsageStore()` disable path
   (failures that never reach `emitTrace`); `emit.test.ts` was not
   touched — existing tests still pass unchanged.
+
+## v1.3 Task 11 — OpenTelemetry traces (2026-11-07) · OWNER GATE
+
+- **New runtime dependencies** (plan Tech Stack; consistent
+  2026-10-06 release family, every version ≥ 7 days old):
+  `@opentelemetry/api@1.9.1` (api 1.10.0 is out but
+  `sdk-trace-base@2.12.0` peers `>=1.3.0 <1.10.0`),
+  `@opentelemetry/sdk-trace-base@2.12.0`,
+  `@opentelemetry/resources@2.12.0`,
+  `@opentelemetry/exporter-trace-otlp-http@0.223.0`. The
+  0.300.0/3.x generation was skipped: it was published 2026-11-05
+  (under 7 days) and `sdk-trace-base` has no 3.x stable — it was
+  split into `sdk-trace` (3.x) plus a shim (2.12.x), so the named
+  package pins the 2.x family. Follow-up: revisit when
+  sdk-trace-base ships a 3.x stable or the plan switches to
+  `@opentelemetry/sdk-trace`.
+- **Semconv pin (Step 0):** verified every spec §3.8 attribute name
+  against `open-telemetry/semantic-conventions-genai`
+  `docs/gen-ai/` at `e6658f14c9d9ea0760825f029cb82e7673f48fab`
+  (2026-11-06, newest commit touching docs/gen-ai on 2026-11-07).
+  No renames; all four provider names (`openai`, `anthropic`,
+  `gcp.gemini`, `ollama`) are well-known `gen_ai.provider.name`
+  values there.
+- **The sink is registered in `index.ts`** when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set — `createOtelSink` is the only
+  place the @opentelemetry packages are imported (dynamic import;
+  the module's other OTel references are type-only, so `import
+  otel.ts` alone loads nothing). A sink that cannot initialize warns
+  and disables itself. `BasicTracerProvider` + `envDetector` honour
+  the standard `OTEL_*` variables (sampling, `OTEL_SERVICE_NAME`,
+  `OTEL_RESOURCE_ATTRIBUTES`); the exporter reads
+  `OTEL_EXPORTER_OTLP_*` itself. The provider is NOT registered as
+  the global tracer provider — babelgate does not hijack a host
+  app's tracing.
+- **Span timing is reconstructed, not measured** (spec: spans are
+  built after the fact). Server span = `[startedAt,
+  startedAt + totalMs]`; each hop span = `[cursor, cursor + hop.ms]`
+  chained from `startedAt`, because `Hop` records only `ms` — the
+  decode/plan time before the first attempt folds into the first
+  hop's span. Note: `span.end(ms)`/`startTime: ms` treat numbers
+  below `performance.timeOrigin/2` as relative clock readings, so
+  tests must use realistic epoch timestamps.
+- **Attribute placement** (spec lists the names, not the split):
+  `gen_ai.*` on the CLIENT hop spans (`gen_ai.request.model` = the
+  hop's routed model; `gen_ai.response.model` = the hop model, the
+  only responder we know); the SERVER span repeats request-level
+  facts (`gen_ai.request.model` = the requested string, usage,
+  finish reasons, winner's provider name). `babelgate.provider` =
+  the configured provider NAME on each hop span and the winner on
+  the server span (the type already goes in `gen_ai.provider.name`);
+  `babelgate.fallback_hops` = `hops.length - 1` (0 for direct or
+  unrouted requests); `babelgate.cost_usd` only when `costUsd` is
+  non-null (a local $0 row emits `0`, a distinct value from
+  absent).
+- **Trace usage/finish facts belong to the winning hop only**: the
+  last hop with outcome `ok` gets `gen_ai.usage.*`,
+  `gen_ai.response.finish_reasons`, `gen_ai.response.model` and
+  `gen_ai.request.max_tokens`; failed hops get `error.type`
+  (upstream HTTP status for `http_error`, else the outcome name
+  `timeout`/`transport`) and ERROR status. `gen_ai.request.max_tokens`
+  is `maxTokensClamp.to` — the trace only carries the request's
+  max_tokens when a clamp applied, so the attribute is absent
+  otherwise.
+- **`traceparent` becomes the remote parent** by storing the raw
+  header on `trace.parentTraceparent` in observeMiddleware (spec
+  name for the field), then `parseTraceparent` → `setSpanContext` —
+  no global propagator needed. W3C validity rules applied
+  (lowercase hex, version ≠ `ff`, non-zero ids; only the sampled
+  flag is propagated). Nothing is injected upstream.
+- **Aborted requests are not span errors**: `error.type` / ERROR
+  status only for `status: "error"` — a client disconnect is a
+  cancellation, not a server fault.
+- **Content is never exported**: the sink reads only the §3.8 field
+  list; `bodies` is already stripped by emitTrace, and
+  `OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT` is deliberately
+  ignored (sentinel test).
+- **Tests use a `RecordingExporter`, not `InMemorySpanExporter`** —
+  the latter's `shutdown()` clears its span list, which would erase
+  the flushed batch before assertions.
+- **The JS OTLP/HTTP exporter posts `application/json`** (not
+  protobuf) to `/v1/traces` — verified end-to-end against a local
+  receiver with a real request (incoming traceparent → child server
+  span → hop span, all attributes exported). The plan's Jaeger
+  screenshot step stays with the conductor — Docker cannot run in
+  this sandbox.
+- **Files outside the Files block:** none.
