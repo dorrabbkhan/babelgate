@@ -7,6 +7,7 @@ import {
 import { findSourceRoute } from "../transformers/adapters";
 import { currentTrace, snapshot } from "../observe/context";
 import { getBodyRing } from "../observe/sinks/body-ring";
+import { getMetricsSink } from "../observe/sinks/metrics";
 import { planRoute } from "../routing/plan-route";
 import { estimateInputTokens } from "../utils/token-estimate";
 import { canonicalRequestSchema } from "../types/canonical.schema";
@@ -101,6 +102,7 @@ export async function proxyRequest(
   if (!route) return null;
 
   if (route.kind === "models") {
+    getMetricsSink()?.incAux(sourceApi, "models");
     return proxyModelList(sourceApi, route, config, requestId);
   }
 
@@ -176,6 +178,7 @@ export async function proxyRequest(
   // estimate header, never an upstream call. The reply shape is the
   // source provider's (Anthropic input_tokens, Gemini totalTokens).
   if (route.kind === "count_tokens") {
+    getMetricsSink()?.incAux(sourceApi, "count_tokens");
     logger.info({ requestId, sourceApi }, "count_tokens answered locally");
     return {
       body: route.countTokensBody(estimatedInputTokens),

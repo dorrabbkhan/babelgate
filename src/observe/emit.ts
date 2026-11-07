@@ -6,6 +6,7 @@ import type { CanonicalUsage } from "../types/canonical.types";
 import { logger } from "../utils/logger";
 import { currentTrace } from "./context";
 import { createLogSink } from "./sinks/log";
+import { getMetricsSink } from "./sinks/metrics";
 import type { RequestTrace } from "./trace";
 
 /** §3.1.1: one trace consumer, isolated from every other. */
@@ -53,7 +54,25 @@ const warnedAt = new Map<string, number>();
 const emitted = new WeakSet<RequestTrace>();
 
 export function registerSink(sink: TraceSink): void {
-  sinks.push(sink);
+  // Idempotent — a lazily created singleton sink (metrics) re-registers
+  // itself on every accessor call without duplicating.
+  if (!sinks.includes(sink)) sinks.push(sink);
+}
+
+/**
+ * §3.8: count a sink failure under
+ * `babelgate_sink_errors_total{sink=…}` — emitTrace's own catch calls
+ * this, and so do the usage store's flush/retention/open paths, whose
+ * failures never reach emitTrace. With METRICS=off (or a metrics sink
+ * that itself is broken) the call is a no-op: reporting a sink error
+ * must never throw.
+ */
+export function reportSinkError(sink: string): void {
+  try {
+    getMetricsSink()?.incSinkError(sink);
+  } catch {
+    // never propagate — least of all inside emitTrace's catch
+  }
 }
 
 /** Test helper: drop every sink (including the default log sink). */
@@ -73,6 +92,14 @@ export function emitTrace(
   trace: RequestTrace,
   now: () => number = Date.now,
 ): void {
+  // §3.8: the metrics sink is created lazily — make sure it exists
+  // before the fan-out or every trace before the first scrape goes
+  // uncounted. METRICS=off or an unconfigured environment → no-op.
+  try {
+    getMetricsSink();
+  } catch {
+    // metrics is optional — a sink never affects a response
+  }
   let stripped: Omit<RequestTrace, "bodies"> | undefined;
   for (const sink of sinks) {
     try {
@@ -86,6 +113,8 @@ export function emitTrace(
         sink.accept(stripped);
       }
     } catch (err) {
+      // §3.8: every failure counts, even when the warning is throttled.
+      reportSinkError(sink.name);
       const t = now();
       const last = warnedAt.get(sink.name);
       if (last === undefined || t - last >= WARN_THROTTLE_MS) {
