@@ -8,6 +8,7 @@ import {
 import { newTrace, type RequestTrace } from "./trace";
 import { runWithTrace } from "./context";
 import { logger } from "../utils/logger";
+import { resetConfig } from "../config/env-config";
 
 function makeTrace(over: Partial<RequestTrace> = {}): RequestTrace {
   return {
@@ -134,12 +135,13 @@ describe("finishTrace (spec §3.1)", () => {
       sourceApi: "openai",
     });
 
-    await runWithTrace(trace, async () => {
-      await finishTrace(finish);
-      await finishTrace(finish); // second call is a no-op
+    runWithTrace(trace, () => {
+      finishTrace(finish);
+      finishTrace(finish); // second call is a no-op
     });
 
-    expect(seen).toHaveLength(1);
+    // Emit happens in the background, once pricing settles.
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
     expect(seen[0]).toMatchObject({
       requestId: "r1",
       requestedModel: "gpt-4",
@@ -157,7 +159,51 @@ describe("finishTrace (spec §3.1)", () => {
   it("outside a trace scope it is a no-op", async () => {
     const seen: RequestTrace[] = [];
     registerSink({ name: "recorder", accept: (t) => seen.push(t) });
-    await finishTrace(finish);
+    finishTrace(finish);
     expect(seen).toHaveLength(0);
+  });
+
+  // §3.6: finishTrace prices the winning hop — here an ollama winner
+  // is local $0, and a missing config never breaks the emit.
+  it("sets cost fields from the winning hop", async () => {
+    process.env.TARGET_API = "ollama";
+    process.env.OLLAMA_API_BASE_URL = "http://ollama.test";
+    resetConfig();
+    try {
+      const seen: RequestTrace[] = [];
+      registerSink({ name: "recorder", accept: (t) => seen.push(t) });
+      const trace = newTrace({
+        requestId: "r1",
+        startedAt: Date.now(),
+        client: "other",
+        sourceApi: "openai",
+      });
+
+      runWithTrace(trace, () =>
+        finishTrace({
+          ...finish,
+          hops: [
+            {
+              provider: "ollama",
+              model: "llama3",
+              outcome: "ok",
+              ms: 5,
+            },
+          ],
+          winner: "ollama",
+        }),
+      );
+
+      await vi.waitFor(() => expect(seen).toHaveLength(1));
+      expect(seen[0]).toMatchObject({
+        costUsd: 0,
+        priceSource: "local",
+        costEstimated: false,
+      });
+    } finally {
+      delete process.env.TARGET_API;
+      delete process.env.OLLAMA_API_BASE_URL;
+      resetConfig();
+    }
   });
 });

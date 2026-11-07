@@ -1,3 +1,8 @@
+import { getConfig } from "../config/env-config";
+import { computeCost } from "../cost/compute";
+import { lookupPrice } from "../cost/price-table";
+import { parseTarget } from "../routing/rules";
+import type { CanonicalUsage } from "../types/canonical.types";
 import { logger } from "../utils/logger";
 import { currentTrace } from "./context";
 import { createLogSink } from "./sinks/log";
@@ -31,6 +36,7 @@ export type TraceFinish = Pick<
       | "finishReason"
       | "maxTokensClamp"
       | "ttfbMs"
+      | "costEstimated"
     >
   >;
 
@@ -94,17 +100,103 @@ export function emitTrace(
 }
 
 /**
- * Merge the pipeline's finish fields into the ambient trace, stamp
- * totalMs, and emit it exactly once — a second call for the same
- * trace (e.g. an error path plus the stream's finally) is a no-op.
- * Outside a trace scope it is a no-op: the caller decides nothing —
- * the middleware decides what is traced.
+ * §3.6: price the winning hop's (provider, model) — never the alias
+ * or requested string — from the trace's own usage (real or, for a
+ * usage-less successful stream, the caller's estimate). A local row
+ * priced at $0 also gets `wouldCostUsd` when observe
+ * .wouldCostReference resolves through the registry. Unknown price
+ * leaves costUsd null, never 0; any failure here leaves the trace
+ * unpriced — pricing never reaches the client.
  */
-export async function finishTrace(update: TraceFinish): Promise<void> {
+async function priceTrace(trace: RequestTrace): Promise<void> {
+  try {
+    const config = getConfig();
+    const okHop =
+      trace.winner === undefined
+        ? undefined
+        : [...trace.hops]
+            .reverse()
+            .find(
+              (h) =>
+                h.provider === trace.winner && h.outcome === "ok",
+            );
+    if (okHop === undefined) return;
+    const { inputTokens, outputTokens } = trace;
+    if (inputTokens === undefined || outputTokens === undefined) return;
+    const usage: CanonicalUsage = {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      ...(trace.cacheReadTokens !== undefined
+        ? { cacheReadTokens: trace.cacheReadTokens }
+        : {}),
+      ...(trace.cacheWriteTokens !== undefined
+        ? { cacheWriteTokens: trace.cacheWriteTokens }
+        : {}),
+    };
+
+    const hit = await lookupPrice(
+      config.registry.get(okHop.provider),
+      okHop.model,
+      config,
+    );
+    if (hit === undefined) return;
+    const cost = computeCost(usage, hit.price);
+    trace.costUsd = cost.usd;
+    trace.priceSource = hit.source;
+    trace.costEstimated = trace.costEstimated || cost.estimated;
+
+    if (
+      hit.source === "local" &&
+      config.observe.wouldCostReference !== undefined
+    ) {
+      const ref = parseTarget(
+        config.observe.wouldCostReference,
+        new Set(config.registry.names()),
+      );
+      if (ref !== undefined) {
+        const refHit = await lookupPrice(
+          config.registry.get(ref.provider),
+          ref.model,
+          config,
+        );
+        if (refHit !== undefined) {
+          trace.wouldCostUsd = computeCost(usage, refHit.price).usd;
+        }
+      }
+    }
+  } catch (err) {
+    logger.debug(
+      { requestId: trace.requestId, err },
+      "Cost lookup failed; trace emitted unpriced",
+    );
+  }
+}
+
+/**
+ * Merge the pipeline's finish fields into the ambient trace, stamp
+ * totalMs, then price (§3.6) and emit it exactly once — a second call
+ * for the same trace (e.g. an error path plus the stream's finally)
+ * is a no-op. Pricing can await upstream I/O (a cold live-price model
+ * list takes up to the upstream timeout), so it runs in the
+ * background: this function returns without waiting for it (Global
+ * Constraints — no sink work blocks the request path), and the trace
+ * is still priced before it reaches the sinks. Outside a trace scope
+ * it is a no-op: the caller decides nothing — the middleware decides
+ * what is traced.
+ */
+export function finishTrace(update: TraceFinish): void {
   const trace = currentTrace();
   if (trace === undefined || emitted.has(trace)) return;
   emitted.add(trace);
   Object.assign(trace, update);
   trace.totalMs = Date.now() - trace.startedAt;
-  emitTrace(trace);
+  const emit = (): void => emitTrace(trace);
+  void priceTrace(trace).then(emit, (err: unknown) => {
+    logger.debug(
+      { requestId: trace.requestId, err },
+      "Cost lookup failed; trace emitted unpriced",
+    );
+    emit();
+  });
 }

@@ -21,6 +21,17 @@ dotenv.config({ quiet: true });
 const VALID_PROVIDERS: Provider[] = ["openai", "gemini", "ollama", "anthropic"];
 
 /**
+ * One `prices:` override row (spec §3.6): USD per 1M tokens, matched
+ * against `provider/model` by glob (same rules as routes).
+ */
+export interface PriceOverride {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
+/**
  * Gateway-shaped config (spec §3.1): scalars plus the provider registry
  * and routing table the services consume. There is no configured
  * source format — the request path decides the client dialect
@@ -37,6 +48,8 @@ export interface GatewayConfig {
   registry: ProviderRegistry;
   routing: RoutingConfig;
   observe: ObserveConfig;
+  /** Top-level `prices:` overrides (spec §3.6); YAML only. */
+  prices?: Record<string, PriceOverride>;
 }
 
 /**

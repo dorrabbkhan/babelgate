@@ -162,6 +162,12 @@ export function loadYamlConfig(
         ...(provider.cache_hints === undefined
           ? {}
           : { cacheHints: provider.cache_hints }),
+        ...(provider.live_prices === undefined
+          ? {}
+          : { livePrices: provider.live_prices }),
+        ...(provider.local === undefined
+          ? {}
+          : { local: provider.local }),
         timeoutMs: provider.timeout_ms,
         streamIdleMs: provider.stream_idle_ms,
       };
@@ -206,6 +212,27 @@ export function loadYamlConfig(
     rules,
   };
 
+  // §3.6: `provider/model`-glob → USD/1M overrides; snake_case keys in
+  // the file become camelCase PriceOverride fields.
+  const prices: GatewayConfig["prices"] =
+    file.prices === undefined
+      ? undefined
+      : Object.fromEntries(
+          Object.entries(file.prices).map(([glob, p]) => [
+            glob,
+            {
+              input: p.input,
+              output: p.output,
+              ...(p.cache_read !== undefined
+                ? { cacheRead: p.cache_read }
+                : {}),
+              ...(p.cache_write !== undefined
+                ? { cacheWrite: p.cache_write }
+                : {}),
+            },
+          ]),
+        );
+
   return {
     port: env.PORT ? parseInt(env.PORT, 10) : 3000,
     proxyApiKey: env.PROXY_API_KEY || undefined,
@@ -223,5 +250,6 @@ export function loadYamlConfig(
     // §3.11: the observe: section's keys, with env vars winning over
     // the keys that have an env counterpart.
     observe: parseObserve(env, file.observe),
+    prices,
   };
 }

@@ -247,6 +247,90 @@ describe("loadYamlConfig", () => {
     }
   });
 
+  it("live_prices, local and top-level prices: parse (spec §3.6)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-prices-"));
+    try {
+      const good = join(dir, "good.yaml");
+      writeFileSync(
+        good,
+        [
+          "default: ollama",
+          "providers:",
+          "  ollama:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          "  openrouter:",
+          "    type: openai",
+          "    base_url: https://openrouter.test",
+          "    api_key_env: BABELGATE_TEST_KEY",
+          "    live_prices: true",
+          "  homebox:",
+          "    type: openai",
+          "    base_url: http://homebox.test",
+          "    api_key_env: BABELGATE_TEST_KEY",
+          "    local: true",
+          "prices:",
+          "  openrouter/qwen/*: {input: 0.22, output: 0.95}",
+          "  'homebox/*': {input: 0, output: 0, cache_read: 0.1}",
+          "",
+        ].join("\n"),
+      );
+      const config = loadYamlConfig(good, { BABELGATE_TEST_KEY: "k" });
+      expect(config.registry.get("openrouter").livePrices).toBe(true);
+      expect(config.registry.get("homebox").local).toBe(true);
+      expect(config.registry.get("ollama").livePrices).toBeUndefined();
+      expect(config.registry.get("ollama").local).toBeUndefined();
+      expect(config.prices).toEqual({
+        "openrouter/qwen/*": { input: 0.22, output: 0.95 },
+        "homebox/*": { input: 0, output: 0, cacheRead: 0.1 },
+      });
+
+      // Bad shapes are startup errors naming the key.
+      for (const [name, lines, needle] of [
+        [
+          "prices value not an object",
+          ["prices:", "  'a/b': 3"],
+          "prices",
+        ],
+        [
+          "prices missing input",
+          ["prices:", "  'a/b': {output: 1}"],
+          "input",
+        ],
+        [
+          "live_prices not a bool",
+          [
+            "  broken:",
+            "    type: ollama",
+            "    base_url: http://x",
+            '    live_prices: "yes"',
+          ],
+          "live_prices",
+        ],
+      ] as const) {
+        const bad = join(dir, `${name}.yaml`);
+        writeFileSync(
+          bad,
+          [
+            "default: ollama",
+            "providers:",
+            "  ollama:",
+            "    type: ollama",
+            "    base_url: http://localhost:11434",
+            ...lines,
+            "",
+          ].join("\n"),
+        );
+        expect(() => loadYamlConfig(bad, {}), name).toThrowError(
+          ConfigurationError,
+        );
+        expect(() => loadYamlConfig(bad, {}), name).toThrowError(needle);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("observe: keys map to ObserveConfig and env wins (spec §3.11)", () => {
     const dir = mkdtempSync(join(tmpdir(), "babelgate-observe-"));
     try {

@@ -7,6 +7,7 @@ import {
 } from "../transformers";
 import { authHeaders, type ProviderEntry } from "../routing/registry";
 import { hopOutcome } from "../routing/fallback";
+import { currentTrace } from "../observe/context";
 import { canonicalModelListSchema } from "../types/canonical.schema";
 import type {
   CanonicalModel,
@@ -25,10 +26,13 @@ const MODEL_LIST_TTL_MS = 60_000;
  * Per-provider model-list cache keyed on provider name + base URL
  * (spec §3.6). Successful fetches only; `now` is injectable so tests
  * can pin the TTL boundary (fetched at t → fresh until t + ttlMs).
+ * Task 8: the cache holds the RAW upstream body — proxyModelList
+ * decodes it per provider on read, and live prices read `pricing`
+ * fields the canonical decode would drop.
  */
 export interface ModelListCache {
-  get(provider: string, baseUrl: string): CanonicalModelList | undefined;
-  set(provider: string, baseUrl: string, list: CanonicalModelList): void;
+  get(provider: string, baseUrl: string): unknown;
+  set(provider: string, baseUrl: string, body: unknown): void;
   clear(): void;
 }
 
@@ -36,20 +40,17 @@ export function createModelListCache(
   ttlMs = MODEL_LIST_TTL_MS,
   now: () => number = Date.now,
 ): ModelListCache {
-  const entries = new Map<
-    string,
-    { list: CanonicalModelList; fetchedAt: number }
-  >();
+  const entries = new Map<string, { body: unknown; fetchedAt: number }>();
   return {
     get(provider, baseUrl) {
       const hit = entries.get(`${provider} ${baseUrl}`);
       if (hit === undefined || now() - hit.fetchedAt >= ttlMs) {
         return undefined;
       }
-      return hit.list;
+      return hit.body;
     },
-    set(provider, baseUrl, list) {
-      entries.set(`${provider} ${baseUrl}`, { list, fetchedAt: now() });
+    set(provider, baseUrl, body) {
+      entries.set(`${provider} ${baseUrl}`, { body, fetchedAt: now() });
     },
     clear() {
       entries.clear();
@@ -65,16 +66,16 @@ export function resetModelListCache(): void {
 }
 
 /**
- * One provider's model list, decoded by that provider's own adapter
- * into canonical. Non-2xx upstream replies become an UpstreamError
- * carrying upstreamStatus, exactly as the v1.1 single-provider flow.
+ * One provider's model-list body as the upstream sent it. Non-2xx
+ * upstream replies become an UpstreamError carrying upstreamStatus,
+ * exactly as the v1.1 single-provider flow.
  */
-async function fetchProviderModels(
+async function fetchRawModelList(
   entry: ProviderEntry,
-  source: Provider,
   config: GatewayConfig,
   requestId: string,
-): Promise<CanonicalModelList> {
+  source?: Provider,
+): Promise<unknown> {
   const targetRoute = PROVIDER_ROUTES[entry.type].find(
     (r) => r.kind === "models",
   )!;
@@ -83,7 +84,7 @@ async function fetchProviderModels(
   logger.info(
     {
       requestId,
-      sourceApi: source,
+      ...(source !== undefined ? { sourceApi: source } : {}),
       provider: entry.name,
       targetApi: entry.type,
       url,
@@ -109,7 +110,30 @@ async function fetchProviderModels(
     throw err;
   }
 
-  return adapters[entry.type].toCanonicalModelList(upstream.body);
+  return upstream.body;
+}
+
+/**
+ * The raw model-list body, 60 s cached per provider (spec §3.6): the
+ * /models flow decodes it per provider, live prices (Task 8) read
+ * `pricing` straight off it.
+ */
+export async function getRawModelList(
+  entry: ProviderEntry,
+  config: GatewayConfig,
+  requestId: string,
+  source?: Provider,
+): Promise<unknown> {
+  const cached = sharedCache.get(entry.name, entry.baseUrl);
+  if (cached !== undefined) return cached;
+  const body = await fetchRawModelList(
+    entry,
+    config,
+    requestId,
+    source ?? currentTrace()?.sourceApi,
+  );
+  sharedCache.set(entry.name, entry.baseUrl, body);
+  return body;
 }
 
 /**
@@ -134,11 +158,9 @@ export async function proxyModelList(
   const fetchCached = async (
     entry: ProviderEntry,
   ): Promise<CanonicalModelList> => {
-    const cached = sharedCache.get(entry.name, entry.baseUrl);
-    if (cached !== undefined) return cached;
-    const list = await fetchProviderModels(entry, source, config, requestId);
-    sharedCache.set(entry.name, entry.baseUrl, list);
-    return list;
+    return adapters[entry.type].toCanonicalModelList(
+      await getRawModelList(entry, config, requestId, source),
+    );
   };
 
   const settled = await Promise.allSettled(

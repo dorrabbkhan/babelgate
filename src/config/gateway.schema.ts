@@ -12,6 +12,8 @@ export interface GatewayFileProvider {
   context_window?: number;
   max_output_tokens?: number;
   cache_hints?: boolean;
+  live_prices?: boolean;
+  local?: boolean;
   timeout_ms?: number;
   stream_idle_ms?: number;
 }
@@ -34,6 +36,17 @@ export interface GatewayFileObserve {
   would_cost_reference?: string;
 }
 
+/**
+ * One `prices:` override row (spec §3.6): USD per 1M tokens, keyed by
+ * a `provider/model` glob under the top-level `prices:` map.
+ */
+export interface GatewayFilePrice {
+  input: number;
+  output: number;
+  cache_read?: number;
+  cache_write?: number;
+}
+
 /** A parsed babelgate.yaml file, before targets are resolved (spec §3.5). */
 export interface GatewayFile {
   default: string;
@@ -41,6 +54,7 @@ export interface GatewayFile {
   aliases?: Record<string, string>;
   routes?: GatewayFileRoute[];
   observe?: GatewayFileObserve;
+  prices?: Record<string, GatewayFilePrice>;
 }
 
 const PROVIDER_NAME = /^[a-z0-9][a-z0-9_-]*$/;
@@ -53,6 +67,8 @@ const providerEntrySchema = z
     context_window: z.number().int().positive().optional(),
     max_output_tokens: z.number().int().positive().optional(),
     cache_hints: z.boolean().optional(),
+    live_prices: z.boolean().optional(),
+    local: z.boolean().optional(),
     timeout_ms: z.number().int().positive().optional(),
     stream_idle_ms: z.number().int().positive().optional(),
   })
@@ -103,5 +119,16 @@ export const gatewayFileSchema: z.ZodType<GatewayFile> = z.strictObject({
       log_bodies: z.boolean().optional(),
       would_cost_reference: z.string().min(1).optional(),
     })
+    .optional(),
+  prices: z
+    .record(
+      z.string().min(1),
+      z.strictObject({
+        input: z.number().nonnegative(),
+        output: z.number().nonnegative(),
+        cache_read: z.number().nonnegative().optional(),
+        cache_write: z.number().nonnegative().optional(),
+      }),
+    )
     .optional(),
 });

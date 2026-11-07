@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "record:streams": "ts-node -r dotenv/config scripts/record-streams.ts",
+    "update:prices": "ts-node scripts/update-prices.ts",
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:watch": "vitest",
     "prepublishOnly": "./scripts/check.sh"

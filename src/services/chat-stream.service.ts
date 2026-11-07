@@ -12,6 +12,10 @@ import type {
   StreamEncoder,
 } from "../types/canonical.types";
 import { UpstreamError } from "../utils/errors";
+import {
+  estimateInputTokens,
+  estimateOutputTokens,
+} from "../utils/token-estimate";
 import { postStream } from "./http-client";
 import { runStreamPipeline } from "./stream-pipeline";
 import { reassembleStream } from "../utils/stream-reassemble";
@@ -169,19 +173,25 @@ export async function proxyChatStream(
     }
     const last = observed.at(-1);
     const usageEvent = observed.find((e) => e.type === "usage");
+    const status = signal.aborted
+      ? ("aborted" as const)
+      : !iterated
+        ? ("error" as const)
+        : last?.type === "error"
+          ? ("error" as const)
+          : ("ok" as const);
+    const usage =
+      usageEvent?.type === "usage" ? usageEvent.usage : undefined;
+    // §3.6: a successful stream with no usage event is costed on the
+    // local chars/4 estimate instead of real counts.
+    const estimated = status === "ok" && usage === undefined;
     await finishTrace({
       reason: plan.reason,
       requestedModel,
       hops: result.hops,
       winner: result.target.provider,
       stream: true,
-      status: signal.aborted
-        ? "aborted"
-        : !iterated
-          ? "error"
-          : last?.type === "error"
-            ? "error"
-            : "ok",
+      status,
       httpStatus: iterated
         ? 200
         : signal.aborted
@@ -192,21 +202,14 @@ export async function proxyChatStream(
           ? last.error.kind
           : undefined,
       inputTokens:
-        usageEvent?.type === "usage"
-          ? usageEvent.usage.inputTokens
-          : undefined,
+        usage?.inputTokens ??
+        (estimated ? estimateInputTokens(canonical) : undefined),
       outputTokens:
-        usageEvent?.type === "usage"
-          ? usageEvent.usage.outputTokens
-          : undefined,
-      cacheReadTokens:
-        usageEvent?.type === "usage"
-          ? usageEvent.usage.cacheReadTokens
-          : undefined,
-      cacheWriteTokens:
-        usageEvent?.type === "usage"
-          ? usageEvent.usage.cacheWriteTokens
-          : undefined,
+        usage?.outputTokens ??
+        (estimated ? estimateOutputTokens(observed) : undefined),
+      cacheReadTokens: usage?.cacheReadTokens,
+      cacheWriteTokens: usage?.cacheWriteTokens,
+      ...(estimated ? { costEstimated: true } : {}),
       finishReason:
         last?.type === "message_end" ? last.finishReason : undefined,
       maxTokensClamp: maxTokensClampOf(canonical, result.entry),

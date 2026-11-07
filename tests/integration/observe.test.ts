@@ -54,6 +54,7 @@ import {
   OPENAI2_BASE_URL,
   DEAD_BASE_URL,
 } from "../mocks/upstreams";
+import bundledPrices from "../../src/cost/prices.json";
 import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import anthropicFixtures from "../fixtures/anthropic.json";
@@ -182,6 +183,7 @@ describe("request trace (spec §3.1)", () => {
     } as object);
     expect(stream.status).toBe(200);
 
+    await waitForTraces(2);
     expect(traces).toHaveLength(2);
     expect(traces[0]).toMatchObject({
       requestId: expect.any(String),
@@ -197,7 +199,9 @@ describe("request trace (spec §3.1)", () => {
       inputTokens: 10,
       outputTokens: 8,
       finishReason: "stop",
-      costUsd: null,
+      // Task 8: an ollama winner is local — $0, never "unknown".
+      costUsd: 0,
+      priceSource: "local",
     });
     expect(traces[0].hops).toHaveLength(1);
     expect(traces[0].hops[0]).toMatchObject({
@@ -229,6 +233,7 @@ describe("request trace (spec §3.1)", () => {
       .send(openaiFixtures.requests.basic as object);
     expect(res.status).toBe(400);
 
+    await waitForTraces(1);
     expect(traces).toHaveLength(1);
     expect(traces[0].winner).toBeUndefined();
     expect(traces[0]).toMatchObject({
@@ -289,6 +294,7 @@ describe("request trace (spec §3.1)", () => {
       .send(openaiFixtures.requests.basic as object);
     expect(res.status).toBe(502);
 
+    await waitForTraces(1);
     expect(traces).toHaveLength(1);
     expect(traces[0]).toMatchObject({
       status: "error",
@@ -310,6 +316,7 @@ describe("request trace (spec §3.1)", () => {
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(capturedRequests2).toHaveLength(1);
 
+    await waitForTraces(1);
     expect(traces).toHaveLength(1);
     expect(traces[0]).toMatchObject({
       requestedModel: "gpt-4",
@@ -829,6 +836,248 @@ describe("body snapshots and the inspector ring (spec §3.5)", () => {
     expect(
       Buffer.byteLength(wire!.value as string, "utf8"),
     ).toBeLessThanOrEqual(262_144);
+  });
+});
+
+describe("cost on the trace (spec §3.6)", () => {
+  /** Prices wiring for these tests: `prices:` overrides + a ref provider. */
+  const PRICES_YAML = `default: local
+providers:
+  local:
+    type: ollama
+    base_url: ${MOCK_BASE_URLS.ollama}
+  openrouter:
+    type: openai
+    base_url: ${OPENAI2_BASE_URL}
+    api_key_env: OPENAI2_API_KEY
+  ref:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+aliases:
+  fast: local/qwen3-coder:30b
+routes:
+  - match: flaky
+    to: local/qwen3-coder:30b
+    fallback: [openrouter/qwen/qwen3-coder]
+  - match: "*"
+    to: local/llama3
+observe:
+  would_cost_reference: ref/gpt-4o
+prices:
+  openrouter/qwen/*: {input: 1, output: 2}
+`;
+
+  it("unknown price is null, never 0", async () => {
+    // An openai-type winner whose model is in no price source —
+    // override list empty, no live_prices, not in the bundled table.
+    process.env.TARGET_API = "openai";
+    resetConfig();
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        ...openaiFixtures.requests.basic,
+        model: "definitely-not-a-real-model-9f3a",
+      } as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await waitForTraces(1);
+
+    expect(traces[0].costUsd).toBeNull();
+    expect(traces[0].priceSource).toBeUndefined();
+  });
+
+  // Review Focus 4: the alias "fast", explicit
+  // "openrouter/qwen/qwen3-coder" syntax, a fallback hop winning and
+  // the ":" model id — every request is priced at the WINNING hop's
+  // (provider, model), never the requested string.
+  it("prices the winning hop", async () => {
+    writeFileSync(TMP_CONFIG, PRICES_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+
+    // Alias → ollama's colon model wins: priced local, never "fast".
+    const alias = await request(app)
+      .post("/v1/chat/completions")
+      .send({ ...openaiFixtures.requests.basic, model: "fast" } as object);
+    expect(alias.status, JSON.stringify(alias.body)).toBe(200);
+
+    // Rule target 503s → the openrouter fallback wins and prices
+    // itself through the prices: glob.
+    responseOverrides.ollama = { status: 503, body: { error: "down" } };
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({ ...openaiFixtures.requests.basic, model: "flaky" } as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // Explicit provider/model syntax resolves to the same winner.
+    const explicit = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        ...openaiFixtures.requests.basic,
+        model: "openrouter/qwen/qwen3-coder",
+      } as object);
+    expect(explicit.status, JSON.stringify(explicit.body)).toBe(200);
+
+    await waitForTraces(3);
+    expect(traces).toHaveLength(3);
+
+    expect(traces[0]).toMatchObject({
+      requestedModel: "fast",
+      reason: "alias:fast",
+      winner: "local",
+      costUsd: 0,
+      priceSource: "local",
+    });
+    expect(traces[0].hops[0]).toMatchObject({
+      provider: "local",
+      model: "qwen3-coder:30b",
+      outcome: "ok",
+    });
+
+    // The mocks serve 10 in / 8 out: (10×1 + 8×2) USD per 1M.
+    const expected = (10 * 1 + 8 * 2) / 1e6;
+    for (const [i, requested] of [
+      [1, "flaky"],
+      [2, "openrouter/qwen/qwen3-coder"],
+    ] as const) {
+      expect(traces[i]).toMatchObject({
+        requestedModel: requested,
+        winner: "openrouter",
+        priceSource: "override",
+      });
+      expect(traces[i].costUsd).toBeCloseTo(expected, 12);
+      expect(traces[i].hops.at(-1)).toMatchObject({
+        provider: "openrouter",
+        model: "qwen/qwen3-coder",
+        outcome: "ok",
+      });
+    }
+  });
+
+  it("would-have-cost on local rows", async () => {
+    writeFileSync(TMP_CONFIG, PRICES_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await waitForTraces(1);
+
+    const t = traces[0];
+    // local ollama row: real cost $0, but the same tokens priced at
+    // ref/gpt-4o's bundled price land in wouldCostUsd.
+    expect(t).toMatchObject({
+      winner: "local",
+      costUsd: 0,
+      priceSource: "local",
+    });
+    const ref = bundledPrices.models["gpt-4o"];
+    expect(ref).toBeDefined();
+    expect(t.wouldCostUsd).toBeCloseTo(
+      (10 * ref.input + 8 * ref.output) / 1e6,
+      12,
+    );
+  });
+
+  // Global Constraints: a cold live-price model list can take the
+  // whole upstream timeout, and no sink work may delay the response.
+  // The mocked /models below is 1.5 s slow; both requests answer in
+  // <1 s, and the traces arrive — priced — once the background lookup
+  // settles.
+  it("live price fetch never delays the response", async () => {
+    writeFileSync(
+      TMP_CONFIG,
+      `default: live
+providers:
+  live:
+    type: openai
+    base_url: ${OPENAI2_BASE_URL}
+    api_key_env: OPENAI2_API_KEY
+    live_prices: true
+routes:
+  - match: "*"
+    to: live/priced-model
+`,
+    );
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+
+    server.use(
+      http.get(`${OPENAI2_BASE_URL}/v1/models`, async () => {
+        await new Promise((r) => setTimeout(r, 1500));
+        return HttpResponse.json({
+          data: [
+            {
+              id: "priced-model",
+              pricing: {
+                prompt: "0.000001",
+                completion: "0.000002",
+              },
+            },
+          ],
+        });
+      }),
+      http.post(
+        `${OPENAI2_BASE_URL}/v1/chat/completions`,
+        async ({ request }) => {
+          const body = (await request.json()) as { stream?: boolean };
+          if (body.stream === true) {
+            // An OpenAI-dialect stream whose final usage chunk serves
+            // the same 10 in / 8 out as the non-stream mock.
+            return HttpResponse.text(
+              [
+                'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"priced-model","choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":null}]}',
+                "",
+                'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"priced-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+                "",
+                'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"priced-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":8,"total_tokens":18}}',
+                "",
+                "data: [DONE]",
+                "",
+              ].join("\n"),
+              { headers: { "content-type": "text/event-stream" } },
+            );
+          }
+          return HttpResponse.json(openaiFixtures.responses.basic);
+        },
+      ),
+    );
+
+    const jsonStart = Date.now();
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(Date.now() - jsonStart).toBeLessThan(1000);
+
+    const streamStart = Date.now();
+    const streamRes = await postStream("/v1/chat/completions", {
+      ...openaiFixtures.requests.basic,
+      stream: true,
+    } as object);
+    expect(streamRes.status).toBe(200);
+    expect(Date.now() - streamStart).toBeLessThan(1000);
+
+    // Exactly one trace per request — emitted once the still-running
+    // background price lookup settles: live-priced $1/$2 per 1M on
+    // the mock's 10 in / 8 out usage.
+    await waitForTraces(2, 5000);
+    expect(traces).toHaveLength(2);
+    const expected = (10 * 1 + 8 * 2) / 1e6;
+    for (const stream of [false, true] as const) {
+      const trace = traces.find((t) => t.stream === stream);
+      expect(trace).toMatchObject({
+        winner: "live",
+        stream,
+        priceSource: "live",
+        inputTokens: 10,
+        outputTokens: 8,
+      });
+      expect(trace!.costUsd).toBeCloseTo(expected, 12);
+    }
   });
 });
 
