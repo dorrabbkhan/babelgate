@@ -227,7 +227,11 @@ export async function createOtelSink(
 
       // Hops run sequentially but carry only a duration: each hop's
       // start is the previous hop's end, anchored at the request start
-      // (decode/plan time folds into the first hop's span).
+      // (decode/plan time folds into the first hop's span). For a
+      // streamed request the winning hop's `ms` is only
+      // time-to-headers (postStream resolves there), while the GenAI
+      // client-span convention covers the call until the response is
+      // fully received — so that span ends at the request end.
       const hopCtx = api.trace.setSpan(api.ROOT_CONTEXT, server);
       let cursor = trace.startedAt;
       for (const [index, hop] of trace.hops.entries()) {
@@ -240,7 +244,10 @@ export async function createOtelSink(
           },
           hopCtx,
         );
-        const end = cursor + hop.ms;
+        const end =
+          trace.stream && index === winner
+            ? trace.startedAt + trace.totalMs
+            : cursor + hop.ms;
         if (hop.outcome !== "ok") {
           span.setStatus({ code: api.SpanStatusCode.ERROR });
         }

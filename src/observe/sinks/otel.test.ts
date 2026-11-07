@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SpanKind, SpanStatusCode, type HrTime } from "@opentelemetry/api";
-import { ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import type {
   ReadableSpan,
   SpanExporter,
@@ -9,6 +8,13 @@ import { resetConfig } from "../../config/env-config";
 import { GENAI_PROVIDER_NAMES } from "../genai-attributes";
 import { newTrace, type RequestTrace } from "../trace";
 import { createOtelSink } from "./otel";
+
+/**
+ * ExportResult without importing @opentelemetry/core — it is a
+ * transitive-only dependency, so the type is taken off the
+ * SpanExporter.export callback signature instead.
+ */
+type ExportResult = Parameters<Parameters<SpanExporter["export"]>[1]>[0];
 
 /**
  * The in-memory exporter: InMemorySpanExporter's own shutdown() resets
@@ -22,7 +28,7 @@ class RecordingExporter implements SpanExporter {
     done: (result: ExportResult) => void,
   ): void {
     this.spans.push(...batch);
-    done({ code: ExportResultCode.SUCCESS });
+    done({ code: 0 }); // ExportResultCode.SUCCESS
   }
   async shutdown(): Promise<void> {}
 }
@@ -129,6 +135,39 @@ describe("otel sink (spec §3.8)", () => {
     expect(h0.status.code).toBe(SpanStatusCode.ERROR);
     expect(h0.attributes["error.type"]).toBe("timeout");
     expect(h1.status.code).toBe(SpanStatusCode.UNSET);
+  });
+
+  it("streamed winner span ends with the request", async () => {
+    const exporter = new RecordingExporter();
+    const sink = await createOtelSink(exporter);
+
+    // A streamed hop's ms is time-to-headers only; the winner's
+    // client span must cover the whole upstream response, i.e. end
+    // where the request (and the server span) ends.
+    sink.accept(
+      makeTrace({
+        stream: true,
+        startedAt: 1_700_000_000_000,
+        totalMs: 5_000,
+        hops: [
+          { provider: "ollama", model: "llama3", outcome: "timeout", ms: 40 },
+          { provider: "ollama", model: "qwen3", outcome: "ok", ms: 60 },
+        ],
+      }),
+    );
+    await sink.shutdown();
+
+    const spans = exporter.spans;
+    const server = spans.find((s) => s.kind === SpanKind.SERVER)!;
+    const h0 = spans.find((s) => s.name === "chat llama3")!;
+    const h1 = spans.find((s) => s.name === "chat qwen3")!;
+    expect(ms(server.startTime)).toBe(1_700_000_000_000);
+    expect(ms(server.endTime)).toBe(1_700_000_005_000);
+    expect(ms(h0.startTime)).toBe(1_700_000_000_000);
+    expect(ms(h0.endTime)).toBe(1_700_000_000_040);
+    expect(h0.status.code).toBe(SpanStatusCode.ERROR);
+    expect(ms(h1.startTime)).toBe(1_700_000_000_040);
+    expect(ms(h1.endTime)).toBe(1_700_000_005_000);
   });
 
   it("genai attributes on the client span", async () => {

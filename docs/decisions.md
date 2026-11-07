@@ -3245,9 +3245,17 @@ unchanged.
   startedAt + totalMs]`; each hop span = `[cursor, cursor + hop.ms]`
   chained from `startedAt`, because `Hop` records only `ms` — the
   decode/plan time before the first attempt folds into the first
-  hop's span. Note: `span.end(ms)`/`startTime: ms` treat numbers
-  below `performance.timeOrigin/2` as relative clock readings, so
-  tests must use realistic epoch timestamps.
+  hop's span. Exception: when `trace.stream` is true the winning
+  hop's `ms` is only time-to-headers (`postStream` resolves at the
+  upstream headers), so its span ends at `startedAt + totalMs` —
+  the request end, same as the server span — per the GenAI
+  client-span convention that the span covers the call until the
+  response is fully received. All other hops, and every hop of a
+  non-stream trace, still chain by `ms`; an aborted stream ends the
+  winner's span at request end too, with no ERROR status. Note:
+  `span.end(ms)`/`startTime: ms` treat numbers below
+  `performance.timeOrigin/2` as relative clock readings, so tests
+  must use realistic epoch timestamps.
 - **Attribute placement** (spec lists the names, not the split):
   `gen_ai.*` on the CLIENT hop spans (`gen_ai.request.model` = the
   hop's routed model; `gen_ai.response.model` = the hop model, the
