@@ -1,4 +1,5 @@
 import { logger } from "../utils/logger";
+import { reportSinkError } from "./emit";
 
 /**
  * Retention (spec §3.4): rows whose `started_at` is older than
@@ -24,6 +25,8 @@ export function startRetention(
     try {
       store.pruneBefore(Date.now() - days * 86_400_000);
     } catch (err) {
+      // §3.8: a failed prune counts as a usage-store sink failure.
+      reportSinkError("usage-store");
       const t = Date.now();
       if (t - lastWarn >= WARN_THROTTLE_MS) {
         lastWarn = t;

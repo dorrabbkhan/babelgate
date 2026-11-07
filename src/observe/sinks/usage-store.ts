@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { getConfig } from "../../config/env-config";
 import type { Hop } from "../../routing/route-log";
 import { logger } from "../../utils/logger";
-import { registerSink, type TraceSink } from "../emit";
+import { registerSink, reportSinkError, type TraceSink } from "../emit";
 import { startRetention } from "../retention";
 import { openDatabase } from "../sqlite";
 import type { RequestTrace } from "../trace";
@@ -168,6 +168,9 @@ export function createUsageStore(opts: {
       } catch {
         // nothing to roll back
       }
+      // §3.8: every dropped batch counts, even when the warning is
+      // throttled — this catch never reaches emitTrace.
+      reportSinkError("usage-store");
       const t = now();
       if (t - lastWarn >= WARN_THROTTLE_MS) {
         lastWarn = t;
@@ -233,6 +236,8 @@ export function getUsageStore(): UsageStore | undefined {
     });
   } catch (err) {
     disabled = true;
+    // §3.8: a store that cannot be opened counts as a sink failure.
+    reportSinkError("usage-store");
     logger.warn(
       { err, usageDb: observe.usageDb },
       "Usage store disabled — the usage DB cannot be used; fix " +
