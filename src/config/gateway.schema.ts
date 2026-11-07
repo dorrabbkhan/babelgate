@@ -14,6 +14,7 @@ export interface GatewayFileProvider {
   cache_hints?: boolean;
   live_prices?: boolean;
   local?: boolean;
+  repair_tool_calls?: boolean;
   timeout_ms?: number;
   stream_idle_ms?: number;
 }
@@ -69,6 +70,7 @@ const providerEntrySchema = z
     cache_hints: z.boolean().optional(),
     live_prices: z.boolean().optional(),
     local: z.boolean().optional(),
+    repair_tool_calls: z.boolean().optional(),
     timeout_ms: z.number().int().positive().optional(),
     stream_idle_ms: z.number().int().positive().optional(),
   })

@@ -50,6 +50,7 @@ import {
   resetOverrides,
   resetStreamCase,
   responseOverrides,
+  responseOverrides2,
   MOCK_BASE_URLS,
   OPENAI2_BASE_URL,
   DEAD_BASE_URL,
@@ -1150,5 +1151,251 @@ describe("usage store resilience (spec §3.4, Review Focus 2)", () => {
       resetConfig();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("tool-call diagnostics and repair (spec §3.7)", () => {
+  /**
+   * `fix` repairs tool-call arguments; `plain` (default) only
+   * diagnoses. Both are openai-type mocks.
+   */
+  const REPAIR_YAML = `default: plain
+providers:
+  plain:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+  fix:
+    type: openai
+    base_url: ${OPENAI2_BASE_URL}
+    api_key_env: OPENAI2_API_KEY
+    repair_tool_calls: true
+routes:
+  - match: fix-*
+    to: fix/m
+  - match: "*"
+    to: plain/m
+`;
+
+  const WEATHER_TOOL = {
+    type: "function",
+    function: {
+      name: "get_weather",
+      description: "Weather for a city",
+      parameters: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"],
+      },
+    },
+  };
+
+  const FENCED_ARGS = '```json\n{"city": "SENTINEL-9z"}\n```';
+
+  function openaiToolReply(args: string): unknown {
+    return {
+      id: "chatcmpl-tc",
+      object: "chat.completion",
+      created: 1,
+      model: "m",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "get_weather",
+                  arguments: args,
+                },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
+    };
+  }
+
+  const requestBody = (
+    model: string,
+    stream = false,
+  ): Record<string, unknown> => ({
+    model,
+    stream,
+    messages: [{ role: "user", content: "weather?" }],
+    tools: [WEATHER_TOOL],
+  });
+
+  beforeEach(() => {
+    writeFileSync(TMP_CONFIG, REPAIR_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+  });
+
+  it("repair on: client receives fixed arguments; trace records repair", async () => {
+    responseOverrides2.body = openaiToolReply(FENCED_ARGS);
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(requestBody("fix-x"));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(
+      res.body.choices[0].message.tool_calls[0].function.arguments,
+    ).toBe('{"city": "SENTINEL-9z"}');
+
+    await waitForTraces(1);
+    // Diagnostics describe the original (fenced) arguments.
+    expect(traces[0].diagnostics).toEqual([
+      { toolCallId: "call_1", name: "get_weather", code: "fenced_json" },
+    ]);
+    expect(traces[0].repairs).toEqual([
+      { toolCallId: "call_1", steps: ["strip_fence"] },
+    ]);
+  });
+
+  it("ring keeps original arguments when repair is on", async () => {
+    const ring = createBodyRing(50);
+    registerSink(ring);
+    // The ring's canonical snapshot stores the response object — dig
+    // out the first tool call's arguments.
+    const ringArgs = (requestId: string): string | undefined =>
+      (
+        ring.get(requestId)?.response?.canonical?.value as
+          | {
+              message?: {
+                toolCalls?: { function: { arguments: string } }[];
+              };
+            }
+          | undefined
+      )?.message?.toolCalls?.[0]?.function.arguments;
+
+    // Non-stream: the client gets the repaired string…
+    responseOverrides2.body = openaiToolReply(FENCED_ARGS);
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(requestBody("fix-x"));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(
+      res.body.choices[0].message.tool_calls[0].function.arguments,
+    ).toBe('{"city": "SENTINEL-9z"}');
+
+    // …while the ring's response.canonical keeps the fenced original.
+    await waitForTraces(1);
+    expect(ringArgs(traces[0].requestId)).toBe(FENCED_ARGS);
+
+    // Stream: same contract — the merged repaired delta reaches the
+    // client, the ring's reassembled response keeps the original.
+    server.use(
+      http.post(`${OPENAI2_BASE_URL}/v1/chat/completions`, () =>
+        HttpResponse.text(
+          [
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"```json\\n{\\"city\\": \\"SENTINEL-9z\\"}"}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\n```"}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+            "",
+            "data: [DONE]",
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    );
+
+    const stream = await postStream(
+      "/v1/chat/completions",
+      requestBody("fix-x", true),
+    );
+    expect(stream.status).toBe(200);
+    // The held deltas were released as ONE repaired delta — the exact
+    // repaired string, no fenced text.
+    expect(stream.body as string).toContain(
+      '"arguments":"{\\"city\\": \\"SENTINEL-9z\\"}"',
+    );
+    expect(stream.body as string).not.toContain("```");
+
+    await waitForTraces(2);
+    expect(ringArgs(traces[1].requestId)).toBe(FENCED_ARGS);
+  });
+
+  it("repair off: client receives original; trace records fenced_json", async () => {
+    responseOverrides.openai = { body: openaiToolReply(FENCED_ARGS) };
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(requestBody("other"));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(
+      res.body.choices[0].message.tool_calls[0].function.arguments,
+    ).toBe(FENCED_ARGS);
+
+    await waitForTraces(1);
+    expect(traces[0].diagnostics).toEqual([
+      { toolCallId: "call_1", name: "get_weather", code: "fenced_json" },
+    ]);
+    expect(traces[0].repairs).toEqual([]);
+  });
+
+  it("repair off leaves the stream byte-identical", async () => {
+    // OpenAI-dialect upstream stream: fenced arguments split into two
+    // deltas. With no repair flag the transform is not inserted —
+    // both deltas reach the client exactly as the upstream sent them.
+    server.use(
+      http.post(`${MOCK_BASE_URLS.openai}/v1/chat/completions`, () =>
+        HttpResponse.text(
+          [
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"```json\\n{\\"city\\": \\"x\\""}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}\\n```"}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+            "",
+            "data: [DONE]",
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    );
+
+    const res = await postStream(
+      "/v1/chat/completions",
+      requestBody("s", true),
+    );
+    expect(res.status).toBe(200);
+    // The WHOLE client body, byte for byte: deltas in upstream order,
+    // none merged, none added. The encoder generates `created` from
+    // Date.now(), so that one field is masked to 0 before comparing;
+    // `id` is the upstream chunk's ("c"), not generated.
+    const EXPECTED =
+      [
+        'data: {"id":"c","object":"chat.completion.chunk","created":0,"model":"s","choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}',
+        'data: {"id":"c","object":"chat.completion.chunk","created":0,"model":"s","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"logprobs":null,"finish_reason":null}]}',
+        'data: {"id":"c","object":"chat.completion.chunk","created":0,"model":"s","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"```json\\n{\\"city\\": \\"x\\""}}]},"logprobs":null,"finish_reason":null}]}',
+        'data: {"id":"c","object":"chat.completion.chunk","created":0,"model":"s","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}\\n```"}}]},"logprobs":null,"finish_reason":null}]}',
+        'data: {"id":"c","object":"chat.completion.chunk","created":0,"model":"s","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"tool_calls"}]}',
+        "data: [DONE]",
+      ].join("\n\n") + "\n\n";
+    expect((res.body as string).replace(/"created":\d+/g, '"created":0')).toBe(
+      EXPECTED,
+    );
+
+    await waitForTraces(1);
+    // Diagnostics still run — on the reassembled ORIGINAL arguments.
+    expect(traces[0].diagnostics).toEqual([
+      { toolCallId: "call_1", name: "get_weather", code: "fenced_json" },
+    ]);
+    expect(traces[0].repairs).toEqual([]);
   });
 });

@@ -37,7 +37,7 @@ export interface TranslationNote {
   path?: string;
 }
 
-/** §3.7: one diagnosed tool call (Task 9 fills the array). */
+/** §3.7: one diagnosed tool call. */
 export interface ToolCallDiagnostic {
   toolCallId: string;
   name: string;
@@ -51,7 +51,7 @@ export interface ToolCallDiagnostic {
   detail?: string;
 }
 
-/** §3.7: the repair steps applied to one tool call (Task 9). */
+/** §3.7: the repair steps applied to one tool call. */
 export interface ToolCallRepair {
   toolCallId: string;
   steps: ("strip_fence" | "extract_object" | "trailing_comma")[];

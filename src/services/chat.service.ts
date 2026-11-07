@@ -9,6 +9,10 @@ import { authHeaders } from "../routing/registry";
 import type { Hop } from "../routing/route-log";
 import { currentTrace, snapshot } from "../observe/context";
 import { finishTrace } from "../observe/emit";
+import {
+  diagnoseToolCalls,
+  repairArguments,
+} from "../observe/tool-diagnostics";
 import type {
   CanonicalRequest,
   CanonicalResponse,
@@ -126,6 +130,39 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     );
     canonicalResp.model = requestedModel;
 
+    // §3.5 + §3.7: the ring's response.canonical shows the ORIGINAL
+    // arguments — snapshot() stores the object by reference, so a deep
+    // copy is taken before the repair loop rewrites them (skipped when
+    // the ring is off: snapshot() would no-op anyway).
+    const preRepair =
+      currentTrace()?.bodies === undefined
+        ? canonicalResp
+        : structuredClone(canonicalResp);
+
+    // §3.7: diagnose on the decoded (original) arguments; repair is
+    // opt-in per provider and rewrites them before the client encode,
+    // so fixed arguments are what the client receives. Diagnostics and
+    // repairs land on the ambient trace — the recordNote pattern.
+    {
+      const trace = currentTrace();
+      const calls = canonicalResp.message.toolCalls ?? [];
+      trace?.diagnostics.push(
+        ...diagnoseToolCalls(calls, canonical.tools),
+      );
+      if (result.entry.repairToolCalls === true) {
+        for (const call of calls) {
+          const repair = repairArguments(call.function.arguments);
+          if (repair !== undefined) {
+            call.function.arguments = repair.args;
+            trace?.repairs.push({
+              toolCallId: call.id,
+              steps: repair.steps,
+            });
+          }
+        }
+      }
+    }
+
     // Adapter bug detection (non-production only): canonical response
     // should always be schema-valid
     if (process.env.NODE_ENV !== "production") {
@@ -139,7 +176,7 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     }
 
     body = adapters[source].fromCanonicalResponse(canonicalResp);
-    snapshot("response.canonical", canonicalResp);
+    snapshot("response.canonical", preRepair);
   } catch (err) {
     await finishTrace({
       reason: plan.reason,
