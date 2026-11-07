@@ -130,6 +130,15 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     );
     canonicalResp.model = requestedModel;
 
+    // §3.5 + §3.7: the ring's response.canonical shows the ORIGINAL
+    // arguments — snapshot() stores the object by reference, so a deep
+    // copy is taken before the repair loop rewrites them (skipped when
+    // the ring is off: snapshot() would no-op anyway).
+    const preRepair =
+      currentTrace()?.bodies === undefined
+        ? canonicalResp
+        : structuredClone(canonicalResp);
+
     // §3.7: diagnose on the decoded (original) arguments; repair is
     // opt-in per provider and rewrites them before the client encode,
     // so fixed arguments are what the client receives. Diagnostics and
@@ -167,7 +176,7 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     }
 
     body = adapters[source].fromCanonicalResponse(canonicalResp);
-    snapshot("response.canonical", canonicalResp);
+    snapshot("response.canonical", preRepair);
   } catch (err) {
     await finishTrace({
       reason: plan.reason,

@@ -3151,3 +3151,8 @@ unchanged.
 - **`src/observe/trace.ts` needed no type changes** — Task 5 already
   declared `ToolCallDiagnostic`/`ToolCallRepair` exactly as the
   Interfaces spell them; the edit only drops the "(Task 9)" comments.
+- **The inspector's `response.canonical` shows the ORIGINAL arguments
+  on both paths** — non-stream snapshots a deep copy taken before the
+  repair loop rewrites the decoded response (the stream path already
+  reassembles the pre-transform `observed` events); the repair itself
+  is recorded on `trace.repairs`.
