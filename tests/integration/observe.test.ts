@@ -50,6 +50,7 @@ import {
   resetOverrides,
   resetStreamCase,
   responseOverrides,
+  responseOverrides2,
   MOCK_BASE_URLS,
   OPENAI2_BASE_URL,
   DEAD_BASE_URL,
@@ -1150,5 +1151,172 @@ describe("usage store resilience (spec §3.4, Review Focus 2)", () => {
       resetConfig();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("tool-call diagnostics and repair (spec §3.7)", () => {
+  /**
+   * `fix` repairs tool-call arguments; `plain` (default) only
+   * diagnoses. Both are openai-type mocks.
+   */
+  const REPAIR_YAML = `default: plain
+providers:
+  plain:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+  fix:
+    type: openai
+    base_url: ${OPENAI2_BASE_URL}
+    api_key_env: OPENAI2_API_KEY
+    repair_tool_calls: true
+routes:
+  - match: fix-*
+    to: fix/m
+  - match: "*"
+    to: plain/m
+`;
+
+  const WEATHER_TOOL = {
+    type: "function",
+    function: {
+      name: "get_weather",
+      description: "Weather for a city",
+      parameters: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"],
+      },
+    },
+  };
+
+  const FENCED_ARGS = '```json\n{"city": "SENTINEL-9z"}\n```';
+
+  function openaiToolReply(args: string): unknown {
+    return {
+      id: "chatcmpl-tc",
+      object: "chat.completion",
+      created: 1,
+      model: "m",
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "get_weather",
+                  arguments: args,
+                },
+              },
+            ],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
+    };
+  }
+
+  const requestBody = (
+    model: string,
+    stream = false,
+  ): Record<string, unknown> => ({
+    model,
+    stream,
+    messages: [{ role: "user", content: "weather?" }],
+    tools: [WEATHER_TOOL],
+  });
+
+  beforeEach(() => {
+    writeFileSync(TMP_CONFIG, REPAIR_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+  });
+
+  it("repair on: client receives fixed arguments; trace records repair", async () => {
+    responseOverrides2.body = openaiToolReply(FENCED_ARGS);
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(requestBody("fix-x"));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(
+      res.body.choices[0].message.tool_calls[0].function.arguments,
+    ).toBe('{"city": "SENTINEL-9z"}');
+
+    await waitForTraces(1);
+    // Diagnostics describe the original (fenced) arguments.
+    expect(traces[0].diagnostics).toEqual([
+      { toolCallId: "call_1", name: "get_weather", code: "fenced_json" },
+    ]);
+    expect(traces[0].repairs).toEqual([
+      { toolCallId: "call_1", steps: ["strip_fence"] },
+    ]);
+  });
+
+  it("repair off: client receives original; trace records fenced_json", async () => {
+    responseOverrides.openai = { body: openaiToolReply(FENCED_ARGS) };
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(requestBody("other"));
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(
+      res.body.choices[0].message.tool_calls[0].function.arguments,
+    ).toBe(FENCED_ARGS);
+
+    await waitForTraces(1);
+    expect(traces[0].diagnostics).toEqual([
+      { toolCallId: "call_1", name: "get_weather", code: "fenced_json" },
+    ]);
+    expect(traces[0].repairs).toEqual([]);
+  });
+
+  it("repair off leaves the stream byte-identical", async () => {
+    // OpenAI-dialect upstream stream: fenced arguments split into two
+    // deltas. With no repair flag the transform is not inserted —
+    // both deltas reach the client exactly as the upstream sent them.
+    server.use(
+      http.post(`${MOCK_BASE_URLS.openai}/v1/chat/completions`, () =>
+        HttpResponse.text(
+          [
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"```json\\n{\\"city\\": \\"x\\""}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}\\n```"}}]},"finish_reason":null}]}',
+            "",
+            'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+            "",
+            "data: [DONE]",
+            "",
+          ].join("\n"),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    );
+
+    const res = await postStream(
+      "/v1/chat/completions",
+      requestBody("s", true),
+    );
+    expect(res.status).toBe(200);
+    const text = res.body as string;
+    expect(text).toContain(
+      '"arguments":"```json\\n{\\"city\\": \\"x\\""',
+    );
+    expect(text).toContain('"arguments":"}\\n```"');
+
+    await waitForTraces(1);
+    // Diagnostics still run — on the reassembled ORIGINAL arguments.
+    expect(traces[0].diagnostics).toEqual([
+      { toolCallId: "call_1", name: "get_weather", code: "fenced_json" },
+    ]);
+    expect(traces[0].repairs).toEqual([]);
   });
 });

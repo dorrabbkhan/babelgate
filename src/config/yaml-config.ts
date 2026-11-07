@@ -168,6 +168,9 @@ export function loadYamlConfig(
         ...(provider.local === undefined
           ? {}
           : { local: provider.local }),
+        ...(provider.repair_tool_calls === undefined
+          ? {}
+          : { repairToolCalls: provider.repair_tool_calls }),
         timeoutMs: provider.timeout_ms,
         streamIdleMs: provider.stream_idle_ms,
       };

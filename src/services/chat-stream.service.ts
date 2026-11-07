@@ -6,7 +6,10 @@ import { authHeaders } from "../routing/registry";
 import type { Hop } from "../routing/route-log";
 import { currentTrace, snapshot } from "../observe/context";
 import { finishTrace } from "../observe/emit";
+import { diagnoseToolCalls } from "../observe/tool-diagnostics";
+import { createRepairTransform } from "../observe/tool-repair-stream";
 import type {
+  CanonicalResponse,
   CanonicalStreamEvent,
   StreamDecoder,
   StreamEncoder,
@@ -138,6 +141,23 @@ export async function proxyChatStream(
     },
   };
 
+  // §3.7: with repair_tool_calls on, argument deltas are held per call
+  // and released merged (repaired when possible) before each end. The
+  // transform sits AFTER recordingDecoder so `observed` — and the
+  // diagnostics computed from it — see the original arguments.
+  const repairTransform =
+    result.entry.repairToolCalls === true
+      ? createRepairTransform()
+      : undefined;
+  const pipelineDecoder: StreamDecoder =
+    repairTransform === undefined
+      ? recordingDecoder
+      : {
+          feed: (chunk) =>
+            recordingDecoder.feed(chunk).flatMap(repairTransform),
+          end: () => recordingDecoder.end().flatMap(repairTransform),
+        };
+
   const signal = opts?.signal ?? new AbortController().signal;
 
   // True once the route starts consuming chunks — which it only does
@@ -157,19 +177,38 @@ export async function proxyChatStream(
    */
   const finish = async (clientStatus?: number): Promise<void> => {
     upstreamAc.abort();
-    // §3.5: the reassembled response goes to the inspector ring — a
+    // §3.5 + §3.7: reassemble the ORIGINAL events — the inspector
+    // ring's canonical response (snapshot is a no-op with the ring
+    // off) and the tool-call diagnostics the trace always gets. A
     // stream that ended mid-flight or on an error event doesn't
-    // reassemble; the wire tap still shows what the upstream sent.
-    // With the ring off (no trace bodies) reassembly is skipped too —
-    // it only feeds the snapshot.
-    if (currentTrace()?.bodies !== undefined) {
-      try {
-        const canonicalResp = reassembleStream(observed);
-        canonicalResp.model = requestedModel;
-        snapshot("response.canonical", canonicalResp);
-      } catch {
-        // partial or errored streams have no canonical response
+    // reassemble; its held calls were already released with a
+    // diagnostic by the repair transform, and the wire tap still
+    // shows what the upstream sent.
+    try {
+      const canonicalResp: CanonicalResponse =
+        reassembleStream(observed);
+      canonicalResp.model = requestedModel;
+      snapshot("response.canonical", canonicalResp);
+      const trace = currentTrace();
+      if (trace !== undefined) {
+        // Dedupe against diagnostics the repair transform already
+        // recorded for held calls released at a terminal event.
+        const seen = new Set(
+          trace.diagnostics.map(
+            (d) => `${d.toolCallId} ${d.code} ${d.detail ?? ""}`,
+          ),
+        );
+        for (const d of diagnoseToolCalls(
+          canonicalResp.message.toolCalls ?? [],
+          canonical.tools,
+        )) {
+          if (!seen.has(`${d.toolCallId} ${d.code} ${d.detail ?? ""}`)) {
+            trace.diagnostics.push(d);
+          }
+        }
       }
+    } catch {
+      // partial or errored streams have no canonical response
     }
     const last = observed.at(-1);
     const usageEvent = observed.find((e) => e.type === "usage");
@@ -222,7 +261,7 @@ export async function proxyChatStream(
       let ttfbSet = false;
       for await (const chunk of runStreamPipeline({
         upstream: upstream.body,
-        decoder: recordingDecoder,
+        decoder: pipelineDecoder,
         encoder,
         idleMs: result.entry.streamIdleMs ?? config.upstreamStreamIdleMs,
         signal,

@@ -3102,3 +3102,52 @@ unchanged.
   models) are treated as absent — a negative `prompt`/`completion`
   drops the live row so the lookup falls back to bundled (§3.6
   3→4); a negative cache price falls back to `input` at compute time.
+
+## v1.3 Task 9 — Tool-call diagnostics and opt-in repair (2026-11-07)
+
+- **Diagnostics and repairs reach the trace through the ambient
+  scope** (`currentTrace()` push), the same pattern `recordNote`
+  established for `notes` in Task 6 — `TraceFinish`/`emit.ts` is
+  untouched, which also removes any overwrite hazard: the stream
+  transform pushes repairs and held-call diagnostics mid-stream,
+  before `finishTrace` runs. "diagnostics/repairs into finishTrace"
+  is satisfied because they sit on the trace it emits.
+- **`diagnoseArguments` treats `""` as `{}`** — the providers' "no
+  arguments" convention `parseToolArguments` already encodes — so an
+  empty argument string is never `invalid_json` (though a declared
+  `required` list still makes it `missing_required`).
+- **`fenced_json` requires JSON inside the fences**: a fence around
+  non-JSON is `invalid_json` — the spec's condition is "JSON inside
+  markdown fences".
+- **`unknown_tool` fires whenever the call's name is absent from the
+  request's `tools`** — including a request that declared no tools at
+  all (the name is then trivially "not in the request's tools").
+- **`repairArguments` never runs on parseable input** — the first
+  check is `JSON.parse`, so for any valid JSON (including
+  non-objects) it returns undefined; a repaired result must still
+  parse to an object or nothing is applied (partial repairs are
+  never shipped).
+- **The stream transform sits AFTER the recording decoder**, so
+  `observed` — and the reassembled response finish() diagnoses —
+  keeps the original arguments, as §3.7 requires ("Diagnostics are
+  computed on the original arguments").
+- **Stream reassembly now runs unconditionally in `finish()`** (was
+  gated on the ring): §3.7 needs the reassembled response for
+  diagnostics either way. `snapshot()` still no-ops when the ring is
+  off, so ring-off streams do no capture work beyond the reassemble
+  itself.
+- **Held-at-end calls are released unrepaired** — a truncated stream
+  gets no repair pass — with an argument-shape diagnostic when one
+  applies (a held call whose text happens to parse to an object needs
+  none). Released per index in index order before `message_end`/`error`.
+- **`repairArguments` lives in `tool-diagnostics.ts`** — the plan's
+  Interfaces list the two produced files without assigning each
+  function; diagnose and repair are §3.7's two halves and the
+  non-stream path uses both, while `tool-repair-stream.ts` holds the
+  canonical-event transform.
+- **`repair_tool_calls` is YAML-only** (no env var): the task's Files
+  block does not name `env-config.ts`, and the flag is per-provider
+  in the registry, so env-only mode simply never enables repair.
+- **`src/observe/trace.ts` needed no type changes** — Task 5 already
+  declared `ToolCallDiagnostic`/`ToolCallRepair` exactly as the
+  Interfaces spell them; the edit only drops the "(Task 9)" comments.

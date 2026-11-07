@@ -9,6 +9,10 @@ import { authHeaders } from "../routing/registry";
 import type { Hop } from "../routing/route-log";
 import { currentTrace, snapshot } from "../observe/context";
 import { finishTrace } from "../observe/emit";
+import {
+  diagnoseToolCalls,
+  repairArguments,
+} from "../observe/tool-diagnostics";
 import type {
   CanonicalRequest,
   CanonicalResponse,
@@ -125,6 +129,30 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
       result.target.model,
     );
     canonicalResp.model = requestedModel;
+
+    // §3.7: diagnose on the decoded (original) arguments; repair is
+    // opt-in per provider and rewrites them before the client encode,
+    // so fixed arguments are what the client receives. Diagnostics and
+    // repairs land on the ambient trace — the recordNote pattern.
+    {
+      const trace = currentTrace();
+      const calls = canonicalResp.message.toolCalls ?? [];
+      trace?.diagnostics.push(
+        ...diagnoseToolCalls(calls, canonical.tools),
+      );
+      if (result.entry.repairToolCalls === true) {
+        for (const call of calls) {
+          const repair = repairArguments(call.function.arguments);
+          if (repair !== undefined) {
+            call.function.arguments = repair.args;
+            trace?.repairs.push({
+              toolCallId: call.id,
+              steps: repair.steps,
+            });
+          }
+        }
+      }
+    }
 
     // Adapter bug detection (non-production only): canonical response
     // should always be schema-valid

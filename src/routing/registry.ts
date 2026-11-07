@@ -28,6 +28,11 @@ export interface ProviderEntry {
   livePrices?: boolean;
   /** Price this provider's requests at $0 (self-hosted), §3.6. */
   local?: boolean;
+  /**
+   * Repair malformed tool-call arguments before they reach the
+   * client (spec §3.7, D5) — opt-in per provider, default off.
+   */
+  repairToolCalls?: boolean;
   timeoutMs?: number;
   streamIdleMs?: number;
 }
