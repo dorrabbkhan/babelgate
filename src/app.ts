@@ -4,6 +4,7 @@ import { detectSourceMiddleware } from "./middleware/detect-source";
 import { errorHandler } from "./middleware/error-handler";
 import { requireApiKey } from "./middleware/require-api-key";
 import { observeMiddleware } from "./observe/middleware";
+import { getMetricsSink } from "./observe/sinks/metrics";
 import { proxyRouter } from "./routes/proxy";
 
 const app = express();
@@ -29,13 +30,23 @@ app.get("/health", (_req, res) => {
 // /health above stays open for probes.
 app.use(requireApiKey(process.env.PROXY_API_KEY || undefined));
 
-// 3b. Request trace (spec §3.1) — chat requests get an
+// 3b. /metrics (spec §3.8) — Prometheus text exposition, mounted
+// after requireApiKey so it asks for PROXY_API_KEY when one is set.
+// METRICS=off → no sink → falls through to the 404 handler.
+app.get("/metrics", async (_req, res, next) => {
+  const sink = getMetricsSink();
+  if (sink === undefined) return next();
+  res.set("Content-Type", sink.registry.contentType);
+  res.send(await sink.registry.metrics());
+});
+
+// 3c. Request trace (spec §3.1) — chat requests get an
 // AsyncLocalStorage scope holding their RequestTrace; finishTrace in
 // the services emits it once. Mounted after auth so pre-route
 // rejections are never traced.
 app.use(observeMiddleware());
 
-// 3c. Proxy routes - transforms and forwards LLM API requests
+// 3d. Proxy routes - transforms and forwards LLM API requests
 app.use(proxyRouter);
 
 // 4. 404 handler - catch unmatched routes

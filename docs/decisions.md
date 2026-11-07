@@ -3156,3 +3156,46 @@ unchanged.
   repair loop rewrites the decoded response (the stream path already
   reassembles the pre-transform `observed` events); the repair itself
   is recorded on `trace.repairs`.
+
+## v1.3 Task 10 — `/metrics` Prometheus endpoint (2026-11-07)
+
+- **New runtime dependency `prom-client@15.1.3`** (plan Tech Stack; latest
+  stable, published 2024-06-27). `registry.metrics()` is async in v15 —
+  the route awaits it.
+- **The metrics sink is created lazily** by `getMetricsSink()` — the
+  `/metrics` route, the `incAux` call sites and `reportSinkError` all go
+  through it, so `METRICS=off` means no prom-client objects exist at
+  all. `registerSink` is now idempotent so the singleton re-registers
+  after `resetSinks()` instead of silently detaching (sinks registered
+  during an `emitTrace` iteration are a no-op duplication risk, not a
+  bug).
+- **`reportSinkError` lives in `emit.ts`** (owner decision): it calls
+  `getMetricsSink()?.incSinkError` inside a try/catch — `METRICS=off` or
+  an unconfigured environment makes it a no-op, and it can never throw
+  inside `emitTrace`'s own catch. The store/retention modules import
+  only `emit.ts`, never `metrics.ts` or `prom-client`.
+- **`provider`/`model` labels come from the routed hop** — the winning
+  hop when one exists, else the last attempted (spec: "the routed
+  model, never the raw requested string"). A trace with zero hops
+  (failure before the attempt loop) emits empty provider/model labels.
+- **`babelgate_fallbacks_total` counts fallback edges**: each hop
+  attempted after a failure increments `{from_provider: <previous
+  hop>, outcome: <this hop's outcome>}` — the spec names the labels but
+  not the counting rule; pairwise edges keep "did falling back from X
+  work" answerable.
+- **`babelgate_tool_call_repairs_total`'s `code` is the repair step**
+  (`strip_fence`/`extract_object`/`trailing_comma`), parallel to the
+  failures counter's diagnostic codes.
+- **Tokens/cost count the winning hop only; `babelgate_unpriced_requests_total`
+  increments only when a winner exists and `costUsd` is null** — an
+  unrouted request has no routed model to label, and a failed request
+  is counted by status, not as unpriced.
+- **`capLabel` keeps a process-wide 100-value budget per label name**;
+  `resetMetricsSink()` clears it for test isolation (same pattern as
+  `resetUsageStore`).
+- **Files outside the Files block:** `src/observe/sinks/usage-store.ts`
+  and `src/observe/retention.ts` — the owner decision for Review Focus
+  2 requires `reportSinkError("usage-store")` at the batch-dropped
+  catch, the retention catch and the `getUsageStore()` disable path
+  (failures that never reach `emitTrace`); `emit.test.ts` was not
+  touched — existing tests still pass unchanged.

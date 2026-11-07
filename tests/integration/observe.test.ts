@@ -36,6 +36,11 @@ import {
   getUsageStore,
   resetUsageStore,
 } from "../../src/observe/sinks/usage-store";
+import {
+  getMetricsSink,
+  resetMetricsSink,
+} from "../../src/observe/sinks/metrics";
+import * as sqlite from "../../src/observe/sqlite";
 import { openDatabase } from "../../src/observe/sqlite";
 import type {
   BodySnapshots,
@@ -145,6 +150,7 @@ beforeEach(() => {
   resetModelListCache();
   resetConfig();
   resetSinks();
+  resetMetricsSink();
   registerSink(createLogSink());
   registerSink(recorder);
   traces.length = 0;
@@ -158,6 +164,7 @@ afterEach(() => {
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.BABELGATE_CONFIG;
   delete process.env.INSPECTOR_BUFFER;
+  delete process.env.METRICS;
   delete process.env.USAGE_DB;
   delete process.env.USAGE_STORE;
   resetUsageStore();
@@ -1397,5 +1404,128 @@ routes:
       { toolCallId: "call_1", name: "get_weather", code: "fenced_json" },
     ]);
     expect(traces[0].repairs).toEqual([]);
+  });
+});
+
+describe("/metrics (spec §3.8)", () => {
+  it("/metrics requires key when set", async () => {
+    // PROXY_API_KEY is read when the app module is built — fresh
+    // module graph, as in gateway.test.ts.
+    vi.stubEnv("PROXY_API_KEY", "metrics-key");
+    vi.resetModules();
+    const { app: authed } = await import("../../src/app");
+    try {
+      const noKey = await request(authed).get("/metrics");
+      expect(noKey.status).toBe(401);
+
+      const ok = await request(authed)
+        .get("/metrics")
+        .set("authorization", "Bearer metrics-key");
+      expect(ok.status).toBe(200);
+      expect(ok.headers["content-type"]).toContain("text/plain");
+      expect(ok.text).toContain("babelgate_requests_total");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("METRICS=off answers 404", async () => {
+    process.env.METRICS = "off";
+    resetConfig();
+
+    const res = await request(app).get("/metrics");
+    expect(res.status).toBe(404);
+  });
+
+  it("no prompt text in /metrics", async () => {
+    // The sink is created lazily — register it so this request's
+    // trace reaches it.
+    getMetricsSink();
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        model: "gpt-4",
+        messages: [
+          { role: "user", content: "repeat SENTINEL-metrics-4 back" },
+        ],
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    // The prompt did reach the upstream — only /metrics must not see it.
+    expect(JSON.stringify(capturedRequests.ollama)).toContain(
+      "SENTINEL-metrics-4",
+    );
+    await waitForTraces(1);
+
+    const m = await request(app).get("/metrics");
+    expect(m.status).toBe(200);
+    expect(m.text).toContain(
+      'babelgate_requests_total{source="openai",provider="ollama",model="gpt-4"',
+    );
+    expect(m.text).toContain('status="ok"');
+    expect(m.text).not.toContain("SENTINEL-metrics-4");
+  });
+
+  it("aux requests are counted", async () => {
+    const count = await request(app)
+      .post("/v1beta/models/llama3:countTokens")
+      .send(geminiFixtures.requests.basic as object);
+    expect(count.status, JSON.stringify(count.body)).toBe(200);
+
+    const models = await request(app).get("/v1/models");
+    expect(models.status, JSON.stringify(models.body)).toBe(200);
+
+    const m = await request(app).get("/metrics");
+    expect(m.status).toBe(200);
+    expect(m.text).toContain(
+      'babelgate_aux_requests_total{source="gemini",kind="count_tokens"} 1',
+    );
+    expect(m.text).toContain(
+      'babelgate_aux_requests_total{source="openai",kind="models"} 1',
+    );
+  });
+
+  // Review Focus 2 (owner decision, v1.3 Task 10): a dropped usage
+  // store flush happens on the store's 250 ms timer — it never reaches
+  // emitTrace, so the store reports it to the sink-error counter
+  // itself.
+  it("usage-store failures count", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bg-usage-metrics-"));
+    try {
+      // A transaction already open on the store's own connection
+      // makes flush()'s BEGIN fail (as in Task 7's "flush never
+      // throws") — the batch drops and the failure is counted.
+      const openSpy = vi.spyOn(sqlite, "openDatabase");
+      const store = createUsageStore({
+        path: join(dir, "usage.db"),
+        logBodies: false,
+      });
+      const db = openSpy.mock.results[0]!
+        .value as ReturnType<typeof openDatabase>;
+      registerSink(store);
+      db.exec("BEGIN");
+
+      const res = await request(app)
+        .post("/v1/chat/completions")
+        .send(openaiFixtures.requests.basic as object);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      await waitForTraces(1);
+
+      expect(() => store.flush()).not.toThrow();
+
+      const m = await request(app).get("/metrics");
+      expect(m.status).toBe(200);
+      expect(m.text).toContain(
+        'babelgate_sink_errors_total{sink="usage-store"} 1',
+      );
+
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // flush's catch already rolled the transaction back
+      }
+      store.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
