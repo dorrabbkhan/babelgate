@@ -238,6 +238,23 @@ describe("GET /ui/api/requests", () => {
     expect(badCursor.status).toBe(400);
   });
 
+  it("limit above 500 is refused", async () => {
+    getUsageStore();
+    const res = await request(app)
+      .get("/ui/api/requests?limit=501")
+      .set(UI);
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  it("limit 500 is accepted", async () => {
+    getUsageStore();
+    const res = await request(app)
+      .get("/ui/api/requests?limit=500")
+      .set(UI);
+    expect(res.status).toBe(200);
+  });
+
   it("store off answers empty rows", async () => {
     process.env.USAGE_STORE = "off";
     resetConfig();

@@ -13,6 +13,7 @@ import { uiError } from "./access";
  */
 
 const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 500;
 
 /** One optional string query parameter. */
 function strParam(value: unknown): string | undefined {
@@ -33,6 +34,14 @@ export function requestsRouter(): Router {
           400,
           "VALIDATION_ERROR",
           "limit must be a positive integer",
+        );
+      }
+      if (parsed > MAX_LIMIT) {
+        return uiError(
+          res,
+          400,
+          "VALIDATION_ERROR",
+          "limit must be an integer from 1 to 500",
         );
       }
       limit = parsed;

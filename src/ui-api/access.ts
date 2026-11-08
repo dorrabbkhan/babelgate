@@ -33,13 +33,22 @@ export function uiError(
   res.status(status).json({ error: { code, message } });
 }
 
-/** Host header → hostname, lowercased, port and brackets handled. */
+/**
+ * Host header → hostname, lowercased, port and brackets handled.
+ * A bracketed host must be exactly `[addr]` or `[addr]:<digits>` —
+ * anything else after `]` is malformed, and the whole header is
+ * returned so it never matches a loopback or allowed name.
+ */
 function hostnameOf(host: string | undefined): string {
   if (host === undefined) return "";
   const h = host.trim().toLowerCase();
   if (h.startsWith("[")) {
     const end = h.indexOf("]");
-    return end === -1 ? h : h.slice(0, end + 1);
+    if (end === -1) return h;
+    const rest = h.slice(end + 1);
+    return rest === "" || /^:\d+$/.test(rest)
+      ? h.slice(0, end + 1)
+      : h;
   }
   const colon = h.lastIndexOf(":");
   return colon === -1 ? h : h.slice(0, colon);

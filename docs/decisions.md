@@ -3360,7 +3360,8 @@ unchanged.
   usage → `{groups}` with each `UsageGroup` plus `cacheHitRatio`
   (`cacheRead/input`, null at 0 input — `inputTokens` include
   cached tokens per §3.6's formula); plan → the `RoutePlan` itself.
-  `limit` defaults to 50 with no cap; `from`/`to` default to all
+  `limit` defaults to 50, max 500 (400 above: the store read is
+  synchronous); `from`/`to` default to all
   time; `group` defaults to `day`.
 - **A disabled usage store answers empty** (`{rows: []}`,
   `{groups: []}`, 404 on detail): the Requests and Usage screens

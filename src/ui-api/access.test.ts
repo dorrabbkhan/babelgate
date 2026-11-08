@@ -132,6 +132,22 @@ describe("uiAccess through the app", () => {
     expect(res.status).toBe(200);
   });
 
+  it("a bracketed Host with junk after ] is refused", async () => {
+    const res = await request(app)
+      .get("/ui/api/requests")
+      .set(UI)
+      .set("Host", "[::1]junk");
+    expect(res.status).toBe(403);
+  });
+
+  it("a bracketed Host with a numeric port is accepted", async () => {
+    const res = await request(app)
+      .get("/ui/api/requests")
+      .set(UI)
+      .set("Host", "[::1]:3000");
+    expect(res.status).toBe(200);
+  });
+
   it("UI_ALLOWED_HOSTS admits a named host", async () => {
     process.env.UI_ALLOWED_HOSTS = "gateway.lan";
     resetConfig();
