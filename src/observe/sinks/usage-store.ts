@@ -1,6 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import { getConfig } from "../../config/env-config";
-import type { Hop } from "../../routing/route-log";
 import { logger } from "../../utils/logger";
 import { registerSink, reportSinkError, type TraceSink } from "../emit";
 import { startRetention } from "../retention";
@@ -8,6 +7,7 @@ import { openDatabase } from "../sqlite";
 import type { RequestTrace } from "../trace";
 import {
   createUsageQueries,
+  traceToRow,
   type UsageQueries,
 } from "./usage-queries";
 
@@ -84,11 +84,6 @@ function migrate(db: DatabaseSync): void {
   }
 }
 
-/** provider/model columns describe the winning hop; a request that won nothing stores NULL. */
-function winningHop(trace: RequestTrace): Hop | undefined {
-  return [...trace.hops].reverse().find((h) => h.outcome === "ok");
-}
-
 export function createUsageStore(opts: {
   path: string;
   logBodies: boolean;
@@ -126,36 +121,36 @@ export function createUsageStore(opts: {
     try {
       db.exec("BEGIN");
       for (const trace of batch) {
-        const winner = winningHop(trace);
+        const row = traceToRow(trace);
         insertRequest.run(
-          trace.requestId,
-          trace.startedAt,
-          trace.client,
-          trace.userAgent ?? null,
-          trace.sourceApi,
-          trace.requestedModel,
-          trace.reason,
-          trace.winner ?? null,
-          winner?.model ?? null,
-          trace.stream ? 1 : 0,
-          trace.status,
-          trace.httpStatus,
-          trace.errorType ?? null,
-          trace.inputTokens ?? null,
-          trace.outputTokens ?? null,
-          trace.cacheReadTokens ?? null,
-          trace.cacheWriteTokens ?? null,
-          trace.costUsd,
-          trace.wouldCostUsd ?? null,
-          trace.costEstimated ? 1 : 0,
-          trace.priceSource ?? null,
-          trace.ttfbMs ?? null,
-          trace.totalMs,
-          trace.finishReason ?? null,
-          JSON.stringify(trace.hops),
-          JSON.stringify(trace.notes),
-          JSON.stringify(trace.diagnostics),
-          JSON.stringify(trace.repairs),
+          row.id,
+          row.startedAt,
+          row.client,
+          row.userAgent,
+          row.sourceApi,
+          row.requestedModel,
+          row.routeReason,
+          row.provider,
+          row.model,
+          row.stream ? 1 : 0,
+          row.status,
+          row.httpStatus,
+          row.errorType,
+          row.inputTokens,
+          row.outputTokens,
+          row.cacheReadTokens,
+          row.cacheWriteTokens,
+          row.costUsd,
+          row.wouldCostUsd,
+          row.costEstimated ? 1 : 0,
+          row.priceSource,
+          row.ttfbMs,
+          row.totalMs,
+          row.finishReason,
+          JSON.stringify(row.hops),
+          JSON.stringify(row.notes),
+          JSON.stringify(row.diagnostics),
+          JSON.stringify(row.repairs),
         );
         if (opts.logBodies && trace.bodies !== undefined) {
           insertBody.run(trace.requestId, JSON.stringify(trace.bodies));

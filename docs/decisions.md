@@ -3310,3 +3310,77 @@ unchanged.
   non-recording spans (parent-based sampling, OTel default), so
   nothing is exported for that request.
 - **Files outside the Files block:** none.
+
+## v1.3 Task 12 — `/ui/api` + access control (2026-11-08)
+
+- **`src/config/env-config.ts` needed no change** though the Files block
+  names it: `UI`, `UI_ALLOW_REMOTE` and `UI_ALLOWED_HOSTS` were
+  already parsed by `parseObserve` in Task 7 (env-only keys, no YAML
+  `observe:` counterparts — spec §3.11 names env vars for these
+  four).
+- **`traceStarted(requestedModel)`** is the emit.ts `started` hook:
+  `onTraceStarted(listener)` subscribes, `traceStarted` reads the
+  ambient trace and fires `{id, client, sourceApi, requestedModel,
+  startedAt}`. It is invoked at the one point the model is known —
+  `proxyRequest` right after `modelFromPath ?? canonical.model`,
+  before `planRoute`, so `/live` shows the request in flight before
+  the first upstream call. Listeners are try/catch'd: a hook never
+  affects a response; `resetSinks()` clears them.
+- **`finished` reuses the sink fan-out** rather than a second hook:
+  live.ts registers a `"live"` `TraceSink` — not in `BODY_SINKS`, so
+  emitTrace hands it the bodies-stripped copy — and maps trace →
+  `RequestRow` via the shared `traceToRow` in
+  `src/observe/sinks/usage-queries.ts` (`provider` = `trace.winner`,
+  `model` = last `ok` hop's model) — the same mapping the usage
+  store inserts. A disabled usage store does not affect the feed.
+- **Files outside the Files block:** `src/services/proxy.service.ts`
+  — one line calling `traceStarted(requestedModel)`. Required
+  because the started event carries `requestedModel`, which only
+  exists after the body is decoded; the observe middleware (the
+  other candidate call site) only knows the placeholder. No other
+  pipeline file was touched. Fix round 2 added
+  `src/middleware/require-api-key.ts` (export `safeEqual`, imported
+  by ui-api/access.ts), `src/observe/sinks/usage-queries.ts` and
+  `src/observe/sinks/usage-store.ts` (the shared `traceToRow`) —
+  refactors removing duplicated logic, no behaviour change.
+- **Error payloads** are `{error: {code, message}}` from the
+  routes themselves (codes: `VALIDATION_ERROR` 400, `FORBIDDEN` 403,
+  `NOT_FOUND` 404); UI=off answers the global 404's exact body
+  (`{error: {message, code, status}}`) so a probe cannot tell the UI
+  exists. Key failures are 403 (the plan's only non-400/404 status);
+  the SPA treats 401/403 alike (Task 13's contract).
+- **The accepted key styles are a subset of the proxy's**: Bearer
+  and `x-api-key` only — `?key=` and `x-goog-api-key` are not
+  accepted on `/ui/api`, per spec §3.9's wording and to keep keys
+  out of URLs/logs.
+- **The Host check compares the port-stripped hostname**
+  (case-insensitive) against `localhost`, `127.0.0.1`, `[::1]` or
+  `UI_ALLOWED_HOSTS` (an entry with a port matches the full Host
+  header too). A missing Host is refused. Only these three literal
+  loopback names — not `*.localhost` or other `127/8` addresses —
+  match the spec list.
+- **Envelopes the spec table left open:** list →
+  `{rows, nextCursor?}` (the `UsageQueries` return verbatim);
+  detail → `{row, bodies, reason?}` per the plan's interface;
+  usage → `{groups}` with each `UsageGroup` plus `cacheHitRatio`
+  (`cacheRead/input`, null at 0 input — `inputTokens` include
+  cached tokens per §3.6's formula); plan → the `RoutePlan` itself.
+  `limit` defaults to 50, max 500 (400 above: the store read is
+  synchronous); `from`/`to` default to all
+  time; `group` defaults to `day`.
+- **A disabled usage store answers empty** (`{rows: []}`,
+  `{groups: []}`, 404 on detail): the Requests and Usage screens
+  load with USAGE_STORE=off.
+- **Dry-run plans pass `estimatedInputTokens: 0`**: without a body
+  there is no estimate, so a `when.min_input_tokens` rule never
+  matches — documented on the route.
+- **Tests are colocated (`src/ui-api/*.test.ts`) and self-contained**:
+  `tsconfig.json` `rootDir: ./src` bars imports of `tests/mocks` and
+  `tests/fixtures`, so each file carries a minimal local msw ollama /
+  catch-all counter instead of the shared upstream mocks.
+- **Verified live**: `ts-node src/index.ts` against a stub ollama —
+  chat → `/requests` row → detail bodies (all four stages) →
+  `/usage`, `/routing`, `/routing/plan`, `/live` (started+finished
+  SSE), and the three refusals (missing header 403, foreign Host
+  403, OPTIONS with no access-control-allow-* headers). Transcript
+  in the PR.

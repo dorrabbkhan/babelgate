@@ -2,12 +2,13 @@ import { getConfig } from "../config/env-config";
 import { computeCost } from "../cost/compute";
 import { lookupPrice } from "../cost/price-table";
 import { parseTarget } from "../routing/rules";
+import type { Provider } from "../transformers";
 import type { CanonicalUsage } from "../types/canonical.types";
 import { logger } from "../utils/logger";
 import { currentTrace } from "./context";
 import { createLogSink } from "./sinks/log";
 import { getMetricsSink } from "./sinks/metrics";
-import type { RequestTrace } from "./trace";
+import type { ClientId, RequestTrace } from "./trace";
 
 /** §3.1.1: one trace consumer, isolated from every other. */
 export interface TraceSink {
@@ -53,6 +54,59 @@ const sinks: TraceSink[] = [createLogSink()];
 const warnedAt = new Map<string, number>();
 const emitted = new WeakSet<RequestTrace>();
 
+/**
+ * The §3.9 `/ui/api/live` `started` event: the moment a chat request's
+ * model is resolved (before the upstream call), so the feed shows the
+ * request in flight.
+ */
+export interface TraceStarted {
+  id: string;
+  client: ClientId;
+  sourceApi: Provider;
+  requestedModel: string;
+  startedAt: number;
+}
+
+const startedListeners = new Set<(started: TraceStarted) => void>();
+
+/**
+ * Subscribe to trace starts — /ui/api/live is the only consumer.
+ * Returns an unsubscribe. Same-reference listeners are stored once.
+ */
+export function onTraceStarted(
+  listener: (started: TraceStarted) => void,
+): () => void {
+  startedListeners.add(listener);
+  return () => {
+    startedListeners.delete(listener);
+  };
+}
+
+/**
+ * Fire the `started` event for the ambient trace — called once by
+ * proxy.service when `requestedModel` is resolved. A throwing
+ * listener is swallowed: a hook never affects a response. Outside a
+ * trace scope it is a no-op.
+ */
+export function traceStarted(requestedModel: string): void {
+  const trace = currentTrace();
+  if (trace === undefined || startedListeners.size === 0) return;
+  const started: TraceStarted = {
+    id: trace.requestId,
+    client: trace.client,
+    sourceApi: trace.sourceApi,
+    requestedModel,
+    startedAt: trace.startedAt,
+  };
+  for (const listener of startedListeners) {
+    try {
+      listener(started);
+    } catch {
+      // a hook never affects a response
+    }
+  }
+}
+
 export function registerSink(sink: TraceSink): void {
   // Idempotent — a lazily created singleton sink (metrics) re-registers
   // itself on every accessor call without duplicating.
@@ -79,6 +133,7 @@ export function reportSinkError(sink: string): void {
 export function resetSinks(): void {
   sinks.length = 0;
   warnedAt.clear();
+  startedListeners.clear();
 }
 
 /**

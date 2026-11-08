@@ -8,6 +8,8 @@ import type { BodySnapshots, RequestTrace } from "../trace";
  * queries return it (camelCased, JSON columns parsed), newest-first
  * cursor paging, and the usage aggregation the UI and /metrics
  * consume. Writes live in usage-store.ts — a query never mutates.
+ * `traceToRow` is the one trace → `RequestRow` mapping shared by the
+ * write path and /ui/api/live.
  */
 
 /** The `requests` row as queries return it: camelCased, JSON columns parsed. */
@@ -111,6 +113,48 @@ function toRequestRow(raw: RawRow): RequestRow {
       raw.diagnostics as string,
     ) as RequestTrace["diagnostics"],
     repairs: JSON.parse(raw.repairs as string) as RequestTrace["repairs"],
+  };
+}
+
+/**
+ * The one finished-trace → `RequestRow` mapping — what the usage
+ * store inserts (usage-store.ts) and what /ui/api/live broadcasts on
+ * `finished`. `provider` = `trace.winner`; `model` = the last `ok`
+ * hop's model — a request that won nothing stores NULL.
+ */
+export function traceToRow(trace: RequestTrace): RequestRow {
+  const winner = [...trace.hops]
+    .reverse()
+    .find((h) => h.outcome === "ok");
+  return {
+    id: trace.requestId,
+    startedAt: trace.startedAt,
+    client: trace.client,
+    userAgent: trace.userAgent ?? null,
+    sourceApi: trace.sourceApi,
+    requestedModel: trace.requestedModel,
+    routeReason: trace.reason,
+    provider: trace.winner ?? null,
+    model: winner?.model ?? null,
+    stream: trace.stream,
+    status: trace.status,
+    httpStatus: trace.httpStatus,
+    errorType: trace.errorType ?? null,
+    inputTokens: trace.inputTokens ?? null,
+    outputTokens: trace.outputTokens ?? null,
+    cacheReadTokens: trace.cacheReadTokens ?? null,
+    cacheWriteTokens: trace.cacheWriteTokens ?? null,
+    costUsd: trace.costUsd,
+    wouldCostUsd: trace.wouldCostUsd ?? null,
+    costEstimated: trace.costEstimated,
+    priceSource: trace.priceSource ?? null,
+    ttfbMs: trace.ttfbMs ?? null,
+    totalMs: trace.totalMs,
+    finishReason: trace.finishReason ?? null,
+    hops: trace.hops,
+    notes: trace.notes,
+    diagnostics: trace.diagnostics,
+    repairs: trace.repairs,
   };
 }
 
