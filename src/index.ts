@@ -1,6 +1,8 @@
 import type { Server } from "node:http";
 import { app } from "./app";
 import { getConfig } from "./config/env-config";
+import { registerSink } from "./observe/emit";
+import { createOtelSink, type OtelSink } from "./observe/sinks/otel";
 import { installSqliteWarningFilter } from "./observe/sqlite";
 import {
   getUsageStore,
@@ -14,7 +16,7 @@ import { logger } from "./utils/logger";
  * has no side effects — the server only starts when startServer() is called
  * (or when index.js is run directly, for `npm start` / `npm run dev`).
  */
-export function startServer(): Promise<Server> {
+export async function startServer(): Promise<Server> {
   const config = getConfig();
   const port = config.port;
 
@@ -23,6 +25,25 @@ export function startServer(): Promise<Server> {
   // usage store — an unusable DB disables the sink, never the server.
   installSqliteWarningFilter();
   getUsageStore();
+
+  // §3.8: an OTel sink exists only when an OTLP endpoint is configured;
+  // the @opentelemetry packages load lazily inside createOtelSink, so
+  // an unset endpoint means they are never imported. A sink that
+  // cannot initialize warns and disables itself — it never stops
+  // serving.
+  let otelSink: OtelSink | undefined;
+  if (process.env.OTEL_EXPORTER_OTLP_ENDPOINT !== undefined) {
+    try {
+      otelSink = await createOtelSink();
+      registerSink(otelSink);
+      logger.info("OpenTelemetry trace sink enabled");
+    } catch (err) {
+      logger.warn(
+        { err },
+        "OpenTelemetry sink disabled — initialization failed",
+      );
+    }
+  }
 
   return new Promise<Server>((resolve, reject) => {
     // No callback to app.listen: Express 5 registers a passed callback on
@@ -38,7 +59,9 @@ export function startServer(): Promise<Server> {
         logger.info("All connections drained");
         // §3.4: the queued trace rows flush once on shutdown.
         resetUsageStore();
-        process.exit(0);
+        // §3.8: the batched spans flush once before exit.
+        const done = (): void => process.exit(0);
+        void (otelSink?.shutdown() ?? Promise.resolve()).then(done, done);
       });
       setTimeout(() => {
         logger.warn("Forcing exit — connections did not drain in time");
