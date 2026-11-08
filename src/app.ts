@@ -6,6 +6,7 @@ import { requireApiKey } from "./middleware/require-api-key";
 import { observeMiddleware } from "./observe/middleware";
 import { getMetricsSink } from "./observe/sinks/metrics";
 import { proxyRouter } from "./routes/proxy";
+import { uiApiRouter } from "./ui-api/router";
 
 const app = express();
 
@@ -25,6 +26,12 @@ app.use(express.json({ limit: process.env.MAX_BODY_SIZE || "10mb" }));
 app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok" });
 });
+
+// 3a-i. /ui/api (spec §3.9) — the inspector API. Mounted before
+// requireApiKey: access.ts does its own control (Host allowlist,
+// x-babelgate-ui header, key-when-set, loopback-or-flag). UI=off
+// answers the same 404 an unmatched route gets.
+app.use("/ui/api", uiApiRouter());
 
 // 3a. Client auth — active only when PROXY_API_KEY is set.
 // /health above stays open for probes.

@@ -6,6 +6,7 @@ import {
 } from "../transformers";
 import { findSourceRoute } from "../transformers/adapters";
 import { currentTrace, snapshot } from "../observe/context";
+import { traceStarted } from "../observe/emit";
 import { getBodyRing } from "../observe/sinks/body-ring";
 import { getMetricsSink } from "../observe/sinks/metrics";
 import { planRoute } from "../routing/plan-route";
@@ -189,6 +190,9 @@ export async function proxyRequest(
   // §3.3: resolve the model to an ordered list of targets — env mode
   // produces MODEL_MAP routes then the single default provider.
   const requestedModel = modelFromPath ?? parsed.data.model;
+  // §3.9: the /ui/api live feed marks the request in flight from here —
+  // the earliest point the requested model is known.
+  traceStarted(requestedModel);
   const plan = planRoute({
     requestedModel,
     estimatedInputTokens,
