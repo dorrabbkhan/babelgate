@@ -1,6 +1,6 @@
-import { timingSafeEqual } from "node:crypto";
 import type { Request, RequestHandler, Response } from "express";
 import type { GatewayConfig } from "../config/env-config";
+import { safeEqual } from "../middleware/require-api-key";
 
 /**
  * /ui/api access control (spec §3.9, D2), in order:
@@ -68,14 +68,6 @@ function isLoopbackAddress(addr: string | undefined): boolean {
   if (addr === undefined) return false;
   const a = addr.startsWith("::ffff:") ? addr.slice(7) : addr;
   return a === "::1" || a.startsWith("127.");
-}
-
-/** Constant-time compare without leaking length via early exit. */
-function safeEqual(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a, "utf8");
-  const bBuf = Buffer.from(b, "utf8");
-  if (aBuf.length !== bBuf.length) return false;
-  return timingSafeEqual(aBuf, bBuf);
 }
 
 /**

@@ -21,6 +21,7 @@ import {
   getUsageStore,
   resetUsageStore,
 } from "./usage-store";
+import { traceToRow } from "./usage-queries";
 
 /**
  * The usage store (spec §3.4): one row per finished chat trace,
@@ -137,6 +138,45 @@ describe("createUsageStore", () => {
       diagnostics: [],
       repairs: [],
     });
+    store.close();
+  });
+
+  it("store row equals traceToRow", () => {
+    // The flush path and /ui/api/live share the one trace →
+    // RequestRow mapping in usage-queries.ts: a fully populated
+    // fallback trace read back from SQLite must equal it exactly.
+    const store = createUsageStore({
+      path: dbPath(),
+      logBodies: false,
+    });
+    const trace = makeTrace({
+      requestId: "shared-mapping",
+      winner: "second",
+      hops: [
+        {
+          provider: "main",
+          model: "m1",
+          outcome: "http_error",
+          status: 500,
+          ms: 3,
+        },
+        { provider: "second", model: "m2", outcome: "ok", ms: 9 },
+      ],
+      wouldCostUsd: 0.01,
+      diagnostics: [
+        { toolCallId: "call_1", name: "get_weather", code: "invalid_json" },
+      ],
+      repairs: [
+        { toolCallId: "call_1", steps: ["strip_fence", "extract_object"] },
+      ],
+    });
+    store.accept(trace);
+    store.flush();
+
+    const { bodies: _bodies, ...row } = store.getRequest(
+      "shared-mapping",
+    )!;
+    expect(row).toEqual(traceToRow(trace));
     store.close();
   });
 

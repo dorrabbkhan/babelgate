@@ -5,8 +5,7 @@ import {
   registerSink,
   type TraceSink,
 } from "../observe/emit";
-import type { RequestRow } from "../observe/sinks/usage-queries";
-import type { RequestTrace } from "../observe/trace";
+import { traceToRow } from "../observe/sinks/usage-queries";
 
 /**
  * `GET /ui/api/live` (spec §3.9): a server-sent-events feed of every
@@ -25,46 +24,6 @@ import type { RequestTrace } from "../observe/trace";
 const KEEPALIVE_MS = 15_000;
 
 const clients = new Set<Response>();
-
-/**
- * The finished trace → the `finished` row — the same shape the
- * `requests` table returns (usage-queries.ts), minus bodies.
- */
-function traceToRow(trace: RequestTrace): RequestRow {
-  const winner = [...trace.hops]
-    .reverse()
-    .find((h) => h.outcome === "ok");
-  return {
-    id: trace.requestId,
-    startedAt: trace.startedAt,
-    client: trace.client,
-    userAgent: trace.userAgent ?? null,
-    sourceApi: trace.sourceApi,
-    requestedModel: trace.requestedModel,
-    routeReason: trace.reason,
-    provider: trace.winner ?? null,
-    model: winner?.model ?? null,
-    stream: trace.stream,
-    status: trace.status,
-    httpStatus: trace.httpStatus,
-    errorType: trace.errorType ?? null,
-    inputTokens: trace.inputTokens ?? null,
-    outputTokens: trace.outputTokens ?? null,
-    cacheReadTokens: trace.cacheReadTokens ?? null,
-    cacheWriteTokens: trace.cacheWriteTokens ?? null,
-    costUsd: trace.costUsd,
-    wouldCostUsd: trace.wouldCostUsd ?? null,
-    costEstimated: trace.costEstimated,
-    priceSource: trace.priceSource ?? null,
-    ttfbMs: trace.ttfbMs ?? null,
-    totalMs: trace.totalMs,
-    finishReason: trace.finishReason ?? null,
-    hops: trace.hops,
-    notes: trace.notes,
-    diagnostics: trace.diagnostics,
-    repairs: trace.repairs,
-  };
-}
 
 function broadcast(event: string, data: unknown): void {
   if (clients.size === 0) return;

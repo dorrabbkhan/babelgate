@@ -3329,15 +3329,20 @@ unchanged.
 - **`finished` reuses the sink fan-out** rather than a second hook:
   live.ts registers a `"live"` `TraceSink` — not in `BODY_SINKS`, so
   emitTrace hands it the bodies-stripped copy — and maps trace →
-  `RequestRow` (same field mapping as usage-queries; `provider` =
-  `trace.winner`, `model` = last `ok` hop's model). A disabled usage
-  store does not affect the feed.
+  `RequestRow` via the shared `traceToRow` in
+  `src/observe/sinks/usage-queries.ts` (`provider` = `trace.winner`,
+  `model` = last `ok` hop's model) — the same mapping the usage
+  store inserts. A disabled usage store does not affect the feed.
 - **Files outside the Files block:** `src/services/proxy.service.ts`
   — one line calling `traceStarted(requestedModel)`. Required
   because the started event carries `requestedModel`, which only
   exists after the body is decoded; the observe middleware (the
   other candidate call site) only knows the placeholder. No other
-  pipeline file was touched.
+  pipeline file was touched. Fix round 2 added
+  `src/middleware/require-api-key.ts` (export `safeEqual`, imported
+  by ui-api/access.ts), `src/observe/sinks/usage-queries.ts` and
+  `src/observe/sinks/usage-store.ts` (the shared `traceToRow`) —
+  refactors removing duplicated logic, no behaviour change.
 - **Error payloads** are `{error: {code, message}}` from the
   routes themselves (codes: `VALIDATION_ERROR` 400, `FORBIDDEN` 403,
   `NOT_FOUND` 404); UI=off answers the global 404's exact body

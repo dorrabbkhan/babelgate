@@ -4,9 +4,10 @@ import { AuthError } from "../utils/errors";
 
 /**
  * Timing-safe string comparison — returns false for length mismatches
- * without leaking length via early exit.
+ * without leaking length via early exit. Shared with the /ui/api
+ * access check (src/ui-api/access.ts).
  */
-function safeEqual(a: string, b: string): boolean {
+export function safeEqual(a: string, b: string): boolean {
   const aBuf = Buffer.from(a, "utf8");
   const bBuf = Buffer.from(b, "utf8");
   if (aBuf.length !== bBuf.length) return false;
