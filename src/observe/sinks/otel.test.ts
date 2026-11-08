@@ -305,6 +305,8 @@ describe("otel sink (spec §3.8)", () => {
       await import("../emit");
       await import("../middleware");
       await import("../trace");
+      await import("../../index");
+      await import("../../app");
       expect(loaded).toEqual([]);
     } finally {
       vi.doUnmock("@opentelemetry/api");

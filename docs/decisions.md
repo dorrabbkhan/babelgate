@@ -3299,4 +3299,14 @@ unchanged.
   span → hop span, all attributes exported). The plan's Jaeger
   screenshot step stays with the conductor — Docker cannot run in
   this sandbox.
+- Owner decision (2026-11-08, PR #74): the four @opentelemetry
+  dependencies are accepted as pinned (api 1.9.1, sdk-trace-base
+  2.12.0, resources 2.12.0, exporter-trace-otlp-http 0.223.0);
+  revisit the 3.x generation after 1.3.0.
+- `server.port` is not emitted: semconv marks it conditionally
+  required with `server.address`, but spec §3.8 does not list it;
+  the spec wins. Candidate for a later spec revision.
+- An incoming `traceparent` with the sampled flag off yields
+  non-recording spans (parent-based sampling, OTel default), so
+  nothing is exported for that request.
 - **Files outside the Files block:** none.
