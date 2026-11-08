@@ -13,6 +13,18 @@ set -euo pipefail
 KIND="$1"; VER="$2"; N="$3"; PR="${4:-}"; EXTRA="${5:-}"
 ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel)"
 NOTES="$ROOT/docs/conductor/notes/$VER/task$N.md"
+# Fail fast on a version with no plan (the task skill maps <version> to
+# docs/superpowers/plans/*babelgate-<version>-plan.md): a typo like "v0.3" for "v1.3"
+# would otherwise send Devin off with a plan it cannot find.
+shopt -s nullglob
+PLANS=("$ROOT"/docs/superpowers/plans/*babelgate-"$VER"-plan.md)
+shopt -u nullglob
+if [ "${#PLANS[@]}" -ne 1 ]; then
+  echo "build-prompt.sh: expected one plan matching *babelgate-$VER-plan.md, found ${#PLANS[@]}." >&2
+  echo "Available: $(ls "$ROOT"/docs/superpowers/plans/ | sed -n 's/.*babelgate-\(.*\)-plan\.md/\1/p' | tr '\n' ' ')" >&2
+  exit 2
+fi
+grep -qE "^### Task $N:" "${PLANS[0]}" || { echo "build-prompt.sh: no \"### Task $N:\" in ${PLANS[0]##*/}" >&2; exit 2; }
 [ "$PR" = "-" ] && PR=""
 need_pr() { [ -n "$PR" ] || { echo "build-prompt.sh: $KIND needs a PR number" >&2; exit 2; }; }
 
