@@ -64,7 +64,7 @@ function hostAllowed(req: Request, allowedHosts: string[]): boolean {
   );
 }
 
-function isLoopbackAddress(addr: string | undefined): boolean {
+export function isLoopbackAddress(addr: string | undefined): boolean {
   if (addr === undefined) return false;
   const a = addr.startsWith("::ffff:") ? addr.slice(7) : addr;
   return a === "::1" || a.startsWith("127.");

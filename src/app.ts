@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import express from "express";
 import { getConfig } from "./config/env-config";
 import { requestLogger } from "./middleware/request-logger";
@@ -9,6 +8,7 @@ import { observeMiddleware } from "./observe/middleware";
 import { getMetricsSink } from "./observe/sinks/metrics";
 import { proxyRouter } from "./routes/proxy";
 import { uiApiRouter } from "./ui-api/router";
+import { uiStatic } from "./ui-api/static";
 
 const app = express();
 
@@ -39,19 +39,10 @@ app.use("/ui/api", uiApiRouter());
 // index.html so a direct load of any client-side route still boots
 // the app. Assets carry no data, so they mount before requireApiKey
 // without the key — the data lives behind /ui/api. UI=off falls
-// through to the same 404 as an unmatched route.
-const uiDist = join(__dirname, "ui");
-const uiIndex = join(uiDist, "index.html");
-const serveUi = express.static(uiDist);
-app.use("/ui", (req, res, next) => {
-  if (!getConfig().observe.ui) return next();
-  serveUi(req, res, () => {
-    if (req.method !== "GET" && req.method !== "HEAD") return next();
-    res.sendFile(uiIndex, (err) => {
-      if (err) next();
-    });
-  });
-});
+// through to the same 404 as an unmatched route. The config is read
+// per request (same pattern as uiAccess) so UI=off + resetConfig
+// takes effect without rebuilding the app.
+app.use("/ui", (req, res, next) => uiStatic(getConfig())(req, res, next));
 
 // 3a. Client auth — active only when PROXY_API_KEY is set.
 // /health above stays open for probes.

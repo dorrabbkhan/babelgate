@@ -151,4 +151,50 @@ describe("Requests screen", () => {
       undefined,
     );
   });
+
+  it("live rows that don't match the filters are not inserted", async () => {
+    listMock.mockResolvedValue({ rows: [] });
+    await act(async () => {
+      render(<Requests />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const statusSelect = container.querySelector<HTMLSelectElement>(
+      'select[data-filter="status"]',
+    );
+    await act(async () => {
+      statusSelect!.value = "error";
+      statusSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    // a finished row with the wrong status is not inserted
+    await act(async () => {
+      live.onFinished?.(
+        makeRow({ id: "ok1", client: "filtered-out", status: "ok" }),
+      );
+    });
+    expect(container.textContent).not.toContain("filtered-out");
+
+    // a pending started row is hidden while a status filter is set
+    await act(async () => {
+      live.onStarted?.({
+        id: "p1",
+        client: "pending-hidden",
+        sourceApi: "openai",
+        requestedModel: "gpt-4o",
+        startedAt: 1_730_000_002_000,
+      });
+    });
+    expect(container.textContent).not.toContain("pending-hidden");
+
+    // a finished row matching the status filter is inserted
+    await act(async () => {
+      live.onFinished?.(
+        makeRow({ id: "err1", client: "kept", status: "error" }),
+      );
+    });
+    expect(container.textContent).toContain("kept");
+  });
 });

@@ -3443,3 +3443,18 @@ unchanged.
   `COPY ui ./ui` lands before `RUN npm run build`; `.dockerignore`'s
   `dist` exclusion is fine since `vite build` recreates `dist/ui`
   inside the stage.
+- **Fix round 1 (PR #77), files outside the Files block:**
+  `src/ui-api/static.ts` + `src/ui-api/static.test.ts` — the `/ui`
+  static mount moved out of `src/app.ts` into `uiStatic(config, uiDir)`
+  so the no-key loopback rule (spec §3.9 Access, "others get 403 with
+  a hint") can be tested with a fake socket address the same way
+  `access.test.ts` does. `ui/src/api.test.ts` — the plan's
+  `ui/src/*.test.ts(x)` glob covers it; created for the SSE backoff
+  test. Behaviour changes in the same commit: `/ui` now calls `next()`
+  for `/api` paths (an unmatched `/ui/api` gets the JSON 404, not
+  index.html), the static mount applies the loopback/`UI_ALLOW_REMOTE`
+  rule when no key is set, live `started`/`finished` inserts are
+  filtered with the server's exact-match semantics (pending rows hide
+  while a provider or status filter is set), and the live reconnect
+  backoff now starts at 500 ms as documented (was 1000 — `attempt++`
+  ran before the delay).

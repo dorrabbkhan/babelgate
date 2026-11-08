@@ -1,5 +1,5 @@
 /** @jsxImportSource preact */
-import { useCallback, useEffect, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import {
   listRequests,
   streamLive,
@@ -51,6 +51,34 @@ interface Filters {
   model: string;
   provider: string;
   status: string;
+}
+
+/**
+ * The same semantics as the server filter in
+ * src/observe/sinks/usage-queries.ts: exact match on each field that
+ * is set (model is the routed model, not requestedModel). A finished
+ * row joins the table only when it would have come back in a refetch.
+ */
+function rowMatchesFilters(row: RequestRow, f: Filters): boolean {
+  return (
+    (f.client === "" || row.client === f.client) &&
+    (f.model === "" || row.model === f.model) &&
+    (f.provider === "" || row.provider === f.provider) &&
+    (f.status === "" || row.status === f.status)
+  );
+}
+
+/**
+ * A pending `started` row carries only client and requestedModel —
+ * it is hidden while a provider or status filter is set (the fields
+ * it could be compared against do not exist yet).
+ */
+function startedMatchesFilters(s: LiveStarted, f: Filters): boolean {
+  if (f.provider !== "" || f.status !== "") return false;
+  return (
+    (f.client === "" || s.client === f.client) &&
+    (f.model === "" || s.requestedModel === f.model)
+  );
 }
 
 function Row({ row }: { row: RequestRow }) {
@@ -141,12 +169,22 @@ export function Requests() {
     void load();
   }, [load]);
 
+  // The live feed is opened once; the handlers read the filters
+  // through a ref so inserts apply the filter set at insert time.
+  const filtersRef = useRef(filters);
+  useEffect(() => {
+    filtersRef.current = filters;
+  }, [filters]);
+
   useEffect(() => {
     const feed = streamLive({
-      onStarted: (s) =>
-        setPending((prev) => [s, ...prev.filter((p) => p.id !== s.id)]),
+      onStarted: (s) => {
+        if (!startedMatchesFilters(s, filtersRef.current)) return;
+        setPending((prev) => [s, ...prev.filter((p) => p.id !== s.id)]);
+      },
       onFinished: (row) => {
         setPending((prev) => prev.filter((p) => p.id !== row.id));
+        if (!rowMatchesFilters(row, filtersRef.current)) return;
         setRows((prev) => [row, ...prev.filter((r) => r.id !== row.id)]);
       },
       onError: (err) => {

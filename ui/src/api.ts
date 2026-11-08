@@ -329,8 +329,11 @@ export function streamLive(handlers: LiveHandlers): { close(): void } {
         }
       }
       if (closed) return;
+      await sleep(
+        Math.min(30_000, 500 * 2 ** attempt),
+        controller.signal,
+      );
       attempt++;
-      await sleep(Math.min(30_000, 500 * 2 ** attempt), controller.signal);
     }
   };
 
