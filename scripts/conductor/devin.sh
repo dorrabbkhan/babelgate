@@ -17,6 +17,12 @@ DEVIN_CMD=(devin --sandbox -p)
 source "$(dirname "$0")/app-env.sh"
 PROMPT="$DIR/${KIND}-${STAMP}.prompt.md"
 if [ -n "$EXTRA" ]; then cp "$EXTRA" "$PROMPT"; else cat > "$PROMPT"; fi
+# build-prompt.sh | devin.sh: when build-prompt.sh fails (unknown version or task) the pipe
+# delivers nothing — never start a session on an empty prompt.
+if [ ! -s "$PROMPT" ]; then
+  echo "devin.sh: empty prompt (did build-prompt.sh fail?), not starting a session" >&2
+  rm -f "$PROMPT"; exit 2
+fi
 REPO_DIR="${REPO:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
 # Devin checks its task branch out in the shared checkout and leaves it there. Put the checkout
 # back on the branch it started on, so the conductor and the next session start from there.
