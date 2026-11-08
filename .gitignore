@@ -83,6 +83,12 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # /temp_data/
 # /test_results/
 
+# UI toolchain artifacts: vitest's optimizer cache and the
+# Playwright smoke-test output (scripts/ci/ui-smoke.sh)
+ui/node_modules/
+ui/test-results/
+ui/playwright-report/
+
 # Agent tooling: shared config is tracked, local state is not
 .claude/settings.local.json
 .claude/worktrees/

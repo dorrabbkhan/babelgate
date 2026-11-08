@@ -3384,3 +3384,62 @@ unchanged.
   SSE), and the three refusals (missing header 403, foreign Host
   403, OPTIONS with no access-control-allow-* headers). Transcript
   in the PR.
+
+## v1.3 Task 13 — UI scaffold, Requests + Inspector (2026-11-08) · OWNER GATE
+
+- **New dev dependencies, pinned to latest stable on 2026-11-08:**
+  `preact@11.2.0`, `vite@8.3.6`, `@preact/preset-vite@2.10.6`,
+  `happy-dom@21.0.4`, `@playwright/test@1.65.0` (all `^`-ranged in
+  package.json; exact versions resolved in package-lock.json).
+  vitest 3.2.4's vite range (`^5 || ^6 || ^7`) doesn't cover vite 8,
+  so the UI build uses vite 8.3.6 while vitest keeps its own nested
+  vite 7 — that is why `ui/vitest.config.ts` configures esbuild's
+  `jsxImportSource: preact` directly instead of loading the preset
+  plugin (the plugin would run under the wrong vite major). It also
+  pins `root` to `ui/`; without it `--config ui/vitest.config.ts`
+  runs the whole server suite a second time.
+- **Files outside the Files block:** `ui/src/components/AuthPrompt.tsx`
+  — the 401/403 UI the plan's Interfaces require ("the key prompt or
+  the access hint text") is shared by both screens, so it lives in
+  one component rather than duplicated JSX. `ui/e2e/mock-server.ts`
+  (the tiny server the Interfaces block names for reusing
+  `tests/mocks/upstreams.ts`) and the colocated
+  `ui/src/screens/*.test.tsx` files (the block's `ui/src/*.test.ts(x)`
+  glob reads as top-level only; colocation matches the repo's
+  src/*.test.ts convention). `src/app.test.ts` — the `UI=off` static
+  route needed a server-side test; the plan's test list covers the UI
+  unit tests only. `.gitignore` + `.dockerignore` — Playwright writes
+  `test-results/` (pinned to `ui/test-results/` via `outputDir`);
+  keeping build artifacts out of git and the image is part of the
+  scaffold this task owns.
+- **`vite build ui`, not `vite build -c ui/vite.config.ts`:** root
+  positional arg picks up `ui/vite.config.ts` and `ui/index.html`
+  with `outDir: "../dist/ui"`, `base: "/ui/"`, `emptyOutDir: true`
+  verbatim from the plan.
+- **`tsc -p ui` checks `ui/src` + the config files only.** `ui/e2e/`
+  is excluded: mock-server.ts imports `tests/mocks` (outside the ui
+  root) and runs through `ts-node --project tsconfig.json
+  --transpile-only` — `--project` pins the root tsconfig because
+  `ui/tsconfig.json`'s ESNext module setting otherwise makes
+  ts-node reparse the e2e file as ESM (learned the hard way: the
+  first smoke run 502'd on exactly that).
+- **The "not retained" message is the spec §3.9 copy verbatim**,
+  including the literal "N" — `/ui/api` exposes no inspector-buffer
+  size to substitute, and the task pins the exact copy.
+- **Live updates use `fetch` + manual SSE parsing, not EventSource**:
+  EventSource cannot send `x-babelgate-ui: 1`, which access.ts
+  requires on every `/ui/api` route. Reconnect is exponential
+  backoff 0.5 s → 30 s; a 401/403 reports once and stops (a saved
+  key may fix it, blind retrying cannot).
+- **`/ui` static mount reads `getConfig()` per request** (same
+  pattern as uiAccess) so `UI=off` + `resetConfig()` takes effect
+  without rebuilding the app; the fallback answers index.html for
+  any GET miss (SPA hash routes) and defers to the global 404 for
+  non-GET or a missing build.
+- **Screenshots:** produced by the Playwright smoke run but not
+  committed (no binaries in the repo); reproduction steps are in the
+  PR description for the conductor to capture.
+- **Docker step: run by the conductor** (sandbox cannot run docker).
+  `COPY ui ./ui` lands before `RUN npm run build`; `.dockerignore`'s
+  `dist` exclusion is fine since `vite build` recreates `dist/ui`
+  inside the stage.

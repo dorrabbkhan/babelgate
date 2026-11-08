@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>babelgate</title>
+    <style>
+      :root {
+        --bg: #0f1216;
+        --panel: #171c23;
+        --border: #2a323d;
+        --text: #d7dde4;
+        --muted: #8b96a3;
+        --accent: #5aa2ff;
+        --added: #1f4d2e;
+        --removed: #5a2326;
+        --changed: #5a4a1f;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      a { color: var(--accent); text-decoration: none; }
+      header {
+        display: flex;
+        gap: 16px;
+        align-items: baseline;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--border);
+      }
+      header .brand { font-weight: 700; }
+      main { padding: 16px; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td {
+        text-align: left;
+        padding: 4px 10px;
+        border-bottom: 1px solid var(--border);
+        white-space: nowrap;
+      }
+      th { color: var(--muted); font-weight: 600; }
+      tbody tr { cursor: pointer; }
+      tbody tr:hover { background: var(--panel); }
+      .filters { display: flex; gap: 8px; margin-bottom: 12px; }
+      .filters input, .filters select, .prompt input {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font: inherit;
+      }
+      button {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 4px 10px;
+        font: inherit;
+        cursor: pointer;
+      }
+      .badge {
+        display: inline-block;
+        padding: 0 6px;
+        border-radius: 8px;
+        background: var(--changed);
+        font-size: 12px;
+      }
+      .status-ok { color: #7fd08a; }
+      .status-error { color: #e07a7a; }
+      .status-aborted { color: #d8b45a; }
+      .status-running { color: var(--muted); }
+      .inspector-notes, .inspector-meta {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 12px;
+        margin-bottom: 12px;
+      }
+      .stages { display: flex; gap: 12px; align-items: flex-start; }
+      .stage {
+        flex: 1;
+        min-width: 0;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px;
+        overflow: auto;
+        max-height: 75vh;
+      }
+      .stage h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+      .stage .tabs { display: flex; gap: 4px; margin-bottom: 6px; }
+      .stage .tabs button.active { border-color: var(--accent); color: var(--accent); }
+      .json-tree { font-size: 13px; }
+      .json-tree .row { padding-left: 14px; white-space: pre-wrap; word-break: break-all; }
+      .json-tree .twisty { cursor: pointer; color: var(--muted); user-select: none; }
+      .json-tree .key { color: #9ecbff; }
+      .json-tree .str { color: #a8d8a8; }
+      .json-tree .num { color: #e0b070; }
+      .json-tree .lit { color: #c792ea; }
+      .json-tree .hl-added { background: var(--added); }
+      .json-tree .hl-removed { background: var(--removed); }
+      .json-tree .hl-changed { background: var(--changed); }
+      .removed-list { color: var(--muted); font-size: 12px; margin-top: 6px; }
+      .prompt { max-width: 520px; margin: 48px auto; }
+      .error { color: #e07a7a; }
+      .muted { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

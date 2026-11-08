@@ -62,4 +62,28 @@ describe("app", () => {
       expect(res.body.error.code).toBe("NOT_FOUND");
     });
   });
+
+  describe("GET /ui (spec §3.9)", () => {
+    it("UI=off answers the same 404 as an unmatched route", async () => {
+      process.env.TARGET_API = "ollama";
+      process.env.OLLAMA_API_BASE_URL = "http://ollama.mock";
+      process.env.USAGE_STORE = "off";
+      process.env.UI = "off";
+      const { resetConfig } = await import("./config/env-config");
+      resetConfig();
+      try {
+        const res = await request(app).get("/ui");
+        expect(res.status).toBe(404);
+        expect(res.body).toEqual({
+          error: { message: "Not Found", code: "NOT_FOUND", status: 404 },
+        });
+      } finally {
+        delete process.env.TARGET_API;
+        delete process.env.OLLAMA_API_BASE_URL;
+        delete process.env.USAGE_STORE;
+        delete process.env.UI;
+        resetConfig();
+      }
+    });
+  });
 });

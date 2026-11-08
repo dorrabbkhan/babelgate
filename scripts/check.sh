@@ -46,6 +46,7 @@ run_guard
 npm run --silent typecheck
 npm test
 npm run --silent build
+scripts/ci/ui-smoke.sh
 scripts/ci/smoke-pack.sh
 
 finish 'ALL CHECKS PASSED'
