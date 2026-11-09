@@ -3458,3 +3458,38 @@ unchanged.
   while a provider or status filter is set), and the live reconnect
   backoff now starts at 500 ms as documented (was 1000 — `attempt++`
   ran before the delay).
+
+## v1.3 Task 14 — UI Usage + Routing screens (2026-11-09)
+
+- **"Stacked bars of cost per day" resolved as paid + would-have-
+  paid:** `/ui/api/usage` only supports single-dimension groups
+  (`day | model | provider | client`), so the day×group matrix the
+  plan's wording could imply (cost per day stacked by model/client)
+  is not available from the API — extending it would have meant a
+  Task 12 surface change outside this task's Files block. The daily
+  bar instead stacks `costUsd` (what was paid) on `wouldCostUsd`
+  (what the local rows would have cost at the reference price, spec
+  §3.6) — the only cost split the API exposes — so each day's stack
+  reads as spend + savings and matches the "saved ≈ $X" headline.
+  The model/client group-by drives the totals table; tokens per day
+  are the LineChart series.
+- **Files outside the Files block:** `ui/index.html` — the plan
+  requires "CSS-variable colours for light and dark" and light+dark
+  PR screenshots, but the only palette was dark and every style lives
+  in index.html's `<style>` block. Added a
+  `@media (prefers-color-scheme: light)` palette, moved the hardcoded
+  status and JSON-tree colours onto variables (`--ok`, `--err`,
+  `--warn`, `--json-*`) so both schemes stay consistent, defined
+  `--series-1..6` for chart series in both palettes, and added the
+  `.panel`, `.legend`, `svg.chart`, `.usage-totals`, `h2` and
+  `header a.active` rules the new screens use. No markup or script
+  changed.
+- **X-axis edge labels anchored `start`/`end`** on the LineChart: the
+  first and last day sit exactly on the viewBox edge, where centred
+  text clips (seen in the first screenshot pass).
+- **Group-by is `model | client` only**, as the plan names (the API
+  also accepts `provider`; left out to stay on the named interface).
+- **Screenshots (light and dark):** produced locally with Playwright
+  against the built app + mock upstreams — reproduction steps in the
+  PR description; not committed (Task 13 precedent: no binaries in
+  the repo).

@@ -15,6 +15,45 @@
         --added: #1f4d2e;
         --removed: #5a2326;
         --changed: #5a4a1f;
+        --ok: #7fd08a;
+        --err: #e07a7a;
+        --warn: #d8b45a;
+        --json-key: #9ecbff;
+        --json-str: #a8d8a8;
+        --json-num: #e0b070;
+        --json-lit: #c792ea;
+        --series-1: #5aa2ff;
+        --series-2: #7fd08a;
+        --series-3: #e0b070;
+        --series-4: #c792ea;
+        --series-5: #e07a7a;
+        --series-6: #6fd0d0;
+      }
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #f6f8fa;
+          --panel: #ffffff;
+          --border: #d0d7de;
+          --text: #1f2328;
+          --muted: #59636e;
+          --accent: #0969da;
+          --added: #ccf0d8;
+          --removed: #ffd7d3;
+          --changed: #fff1b8;
+          --ok: #1a7f37;
+          --err: #cf222e;
+          --warn: #9a6700;
+          --json-key: #0550ae;
+          --json-str: #116329;
+          --json-num: #953800;
+          --json-lit: #8250df;
+          --series-1: #0969da;
+          --series-2: #1a7f37;
+          --series-3: #9a6700;
+          --series-4: #8250df;
+          --series-5: #cf222e;
+          --series-6: #0a7ea4;
+        }
       }
       * { box-sizing: border-box; }
       body {
@@ -68,9 +107,9 @@
         background: var(--changed);
         font-size: 12px;
       }
-      .status-ok { color: #7fd08a; }
-      .status-error { color: #e07a7a; }
-      .status-aborted { color: #d8b45a; }
+      .status-ok { color: var(--ok); }
+      .status-error { color: var(--err); }
+      .status-aborted { color: var(--warn); }
       .status-running { color: var(--muted); }
       .inspector-notes, .inspector-meta {
         background: var(--panel);
@@ -96,17 +135,39 @@
       .json-tree { font-size: 13px; }
       .json-tree .row { padding-left: 14px; white-space: pre-wrap; word-break: break-all; }
       .json-tree .twisty { cursor: pointer; color: var(--muted); user-select: none; }
-      .json-tree .key { color: #9ecbff; }
-      .json-tree .str { color: #a8d8a8; }
-      .json-tree .num { color: #e0b070; }
-      .json-tree .lit { color: #c792ea; }
+      .json-tree .key { color: var(--json-key); }
+      .json-tree .str { color: var(--json-str); }
+      .json-tree .num { color: var(--json-num); }
+      .json-tree .lit { color: var(--json-lit); }
       .json-tree .hl-added { background: var(--added); }
       .json-tree .hl-removed { background: var(--removed); }
       .json-tree .hl-changed { background: var(--changed); }
       .removed-list { color: var(--muted); font-size: 12px; margin-top: 6px; }
       .prompt { max-width: 520px; margin: 48px auto; }
-      .error { color: #e07a7a; }
+      .error { color: var(--err); }
       .muted { color: var(--muted); }
+      h2 { font-size: 15px; margin: 18px 0 8px; }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px 12px;
+        margin-bottom: 12px;
+      }
+      .panel h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+      .usage-totals { display: flex; gap: 20px; flex-wrap: wrap; }
+      svg.chart { width: 100%; height: auto; display: block; }
+      svg.chart .axis { fill: var(--muted); font-size: 10px; }
+      .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+      .legend .sw {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        margin-right: 4px;
+        font-style: normal;
+      }
+      header a.active { color: var(--text); font-weight: 600; }
     </style>
   </head>
   <body>
