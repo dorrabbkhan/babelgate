@@ -5,6 +5,7 @@ COPY package*.json ./
 RUN npm ci
 COPY tsconfig*.json ./
 COPY src ./src
+COPY ui ./ui
 RUN npm run build
 
 # Stage 2: runtime — production deps only.

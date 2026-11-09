@@ -1,4 +1,5 @@
 import express from "express";
+import { getConfig } from "./config/env-config";
 import { requestLogger } from "./middleware/request-logger";
 import { detectSourceMiddleware } from "./middleware/detect-source";
 import { errorHandler } from "./middleware/error-handler";
@@ -7,6 +8,7 @@ import { observeMiddleware } from "./observe/middleware";
 import { getMetricsSink } from "./observe/sinks/metrics";
 import { proxyRouter } from "./routes/proxy";
 import { uiApiRouter } from "./ui-api/router";
+import { uiStatic } from "./ui-api/static";
 
 const app = express();
 
@@ -32,6 +34,15 @@ app.get("/health", (_req, res) => {
 // x-babelgate-ui header, key-when-set, loopback-or-flag). UI=off
 // answers the same 404 an unmatched route gets.
 app.use("/ui/api", uiApiRouter());
+
+// 3a-ii. /ui static SPA (spec §3.9): dist/ui with a fallback to
+// index.html so a direct load of any client-side route still boots
+// the app. Assets carry no data, so they mount before requireApiKey
+// without the key — the data lives behind /ui/api. UI=off falls
+// through to the same 404 as an unmatched route. The config is read
+// per request (same pattern as uiAccess) so UI=off + resetConfig
+// takes effect without rebuilding the app.
+app.use("/ui", (req, res, next) => uiStatic(getConfig())(req, res, next));
 
 // 3a. Client auth — active only when PROXY_API_KEY is set.
 // /health above stays open for probes.

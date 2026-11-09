@@ -6,3 +6,6 @@ dist
 .git
 tests
 *.md
+ui/node_modules
+ui/test-results
+ui/playwright-report

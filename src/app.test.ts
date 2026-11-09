@@ -1,3 +1,5 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import { app } from "./app";
@@ -60,6 +62,67 @@ describe("app", () => {
       const res = await request(app).get("/unknown-route");
       expect(res.status).toBe(404);
       expect(res.body.error.code).toBe("NOT_FOUND");
+    });
+  });
+
+  describe("GET /ui (spec §3.9)", () => {
+    it("UI=off answers the same 404 as an unmatched route", async () => {
+      process.env.TARGET_API = "ollama";
+      process.env.OLLAMA_API_BASE_URL = "http://ollama.mock";
+      process.env.USAGE_STORE = "off";
+      process.env.UI = "off";
+      const { resetConfig } = await import("./config/env-config");
+      resetConfig();
+      try {
+        const res = await request(app).get("/ui");
+        expect(res.status).toBe(404);
+        expect(res.body).toEqual({
+          error: { message: "Not Found", code: "NOT_FOUND", status: 404 },
+        });
+      } finally {
+        delete process.env.TARGET_API;
+        delete process.env.OLLAMA_API_BASE_URL;
+        delete process.env.USAGE_STORE;
+        delete process.env.UI;
+        resetConfig();
+      }
+    });
+
+    it("unmatched /ui/api path is a JSON 404, not the SPA", async () => {
+      process.env.TARGET_API = "ollama";
+      process.env.OLLAMA_API_BASE_URL = "http://ollama.mock";
+      process.env.USAGE_STORE = "off";
+      // Under vitest the static mount's default dir is src/ui; give
+      // the SPA fallback a real index.html so serving it is possible.
+      const uiDir = join(__dirname, "ui");
+      mkdirSync(uiDir, { recursive: true });
+      writeFileSync(join(uiDir, "index.html"), "<html>spa</html>");
+      vi.resetModules();
+      const { app: uiApp } = await import("./app");
+      const { resetConfig } = await import("./config/env-config");
+      resetConfig();
+      try {
+        // the fallback still answers client-side routes
+        const spa = await request(uiApp).get("/ui/requests/abc");
+        expect(spa.status).toBe(200);
+        expect(spa.text).toContain("spa");
+
+        // but an unmatched /ui/api path gets the app's 404
+        const res = await request(uiApp)
+          .get("/ui/api/does-not-exist")
+          .set("x-babelgate-ui", "1");
+        expect(res.status).toBe(404);
+        expect(res.headers["content-type"]).toMatch(/json/);
+        expect(res.body).toEqual({
+          error: { message: "Not Found", code: "NOT_FOUND", status: 404 },
+        });
+      } finally {
+        rmSync(uiDir, { recursive: true, force: true });
+        delete process.env.TARGET_API;
+        delete process.env.OLLAMA_API_BASE_URL;
+        delete process.env.USAGE_STORE;
+        resetConfig();
+      }
     });
   });
 });

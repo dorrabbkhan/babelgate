@@ -10,6 +10,9 @@ export default defineConfig({
       ...configDefaults.exclude,
       'tests/live/**',
       'scripts/gates/fixtures/**',
+      // the UI suite runs via ui/vitest.config.ts (happy-dom), part of
+      // `npm test` as a second vitest invocation
+      'ui/**',
     ],
   },
 });
