@@ -58,6 +58,39 @@ GROQ_API_KEY=<key> DEEPSEEK_API_KEY=<key> LMSTUDIO_API_KEY=unused \
   npx babelgate --config babelgate.yaml
 ```
 
+## Provider flags
+
+Every provider — `type: openai` included — takes these optional keys
+(v1.3):
+
+```yaml
+providers:
+  openrouter:
+    type: openai
+    base_url: https://openrouter.ai/api
+    api_key_env: OPENROUTER_API_KEY
+    max_output_tokens: 8000   # clamp the model's output budget
+    cache_hints: true         # pass Anthropic-style cache hints through
+    live_prices: true         # read pricing from the provider's model list
+    repair_tool_calls: true   # mechanically repair broken call arguments
+    local: true               # mark it free ($0, e.g. a self-hosted vLLM)
+```
+
+- `max_output_tokens` caps `max_tokens` before the request leaves —
+  the clamp is recorded on the request trace.
+- `cache_hints` only helps providers that honour prompt caching
+  (OpenRouter does for the Anthropic/Gemini/Google models behind it).
+- `live_prices` reads the OpenRouter-style `pricing` block
+  (`prompt`, `completion`, `input_cache_read`, `input_cache_write`) off
+  the provider's `/models` response; elsewhere it falls back to the
+  bundled price table.
+- `repair_tool_calls` strips a markdown fence, extracts a lone
+  `{...}` object or drops trailing commas — names and fields are never
+  invented, and every repair is counted in
+  `babelgate_tool_call_repairs_total`.
+- `local` forces `costUsd: 0` / `priceSource: "local"` the way Ollama
+  is priced natively — for self-hosted OpenAI-compatible servers.
+
 ## Notes
 
 - **Model names are the provider's own.** A route's `to` and a request's

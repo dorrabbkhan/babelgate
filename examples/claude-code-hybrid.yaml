@@ -25,6 +25,13 @@ providers:
     # No /v1: babelgate appends /v1/chat/completions and /v1/models itself.
     base_url: https://openrouter.ai/api
     api_key_env: OPENROUTER_API_KEY
+    max_output_tokens: 8000   # Claude Code asks for a large budget; spend-capped keys 4xx without a cap
+    cache_hints: true         # pass Anthropic-style prompt-cache hints through
+    live_prices: true         # cost from OpenRouter's own /models pricing
+observe:
+  # Prices local (ollama) rows against this provider/model so the Usage
+  # screen can show what staying local saved.
+  would_cost_reference: openrouter/anthropic/claude-sonnet-4.5
 routes:
   - match: claude-*haiku*   # Claude Code's cheap background calls stay small and local
     to: ollama/qwen2.5-coder:7b

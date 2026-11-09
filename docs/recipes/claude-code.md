@@ -52,17 +52,30 @@ OPENAI_API_KEY=<your OpenRouter key> \
 
 Then the same two `export` lines and `claude`.
 
-### Keys with a spend limit: `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+### Keys with a spend limit: `max_output_tokens`
 
 Claude Code requests a large output budget by default, and OpenRouter
 rejects requests whose `max_tokens` exceeds the key's remaining credit.
-Cap it:
+Cap it per provider — in a `babelgate.yaml`:
 
-```bash
-export CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000
+```yaml
+providers:
+  openrouter:
+    type: openai
+    base_url: https://openrouter.ai/api
+    api_key_env: OPENROUTER_API_KEY
+    max_output_tokens: 8000
+    cache_hints: true    # pass Anthropic-style cache hints through
+    live_prices: true    # real $ from OpenRouter's /models pricing
 ```
 
-(The gate's passing runs used 8 000 and 16 000.)
+or in env-only/preset mode with `TARGET_MAX_OUTPUT_TOKENS=8000`. The cap
+is recorded on the trace (`maxTokensClamp`), so clamped requests are
+visible in the log and the UI.
+
+(The gate's passing runs used 8 000 and 16 000 — then via
+`CLAUDE_CODE_MAX_OUTPUT_TOKENS`, Claude Code's own variable; capping at
+the proxy means one knob covers every client.)
 
 ## What the release gate ran
 

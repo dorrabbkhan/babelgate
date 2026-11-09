@@ -212,6 +212,7 @@ export function endpointLines(port: number): string[] {
     `Anthropic  http://localhost:${port}`,
     `Gemini     http://localhost:${port}`,
     `Ollama     http://localhost:${port}`,
+    `UI         http://localhost:${port}/ui`,
   ];
 }
 

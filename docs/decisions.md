@@ -3601,3 +3601,49 @@ unchanged.
   `PLAYWRIGHT_BROWSERS_PATH=.claude/ms-playwright` (the existing
   local install) — PASS. `smoke-pack.sh` run with the standing-notes
   npm proxy/cache env — SMOKE PASS.
+
+## v1.3 Task 16 — Privacy canary; recipes, examples, README, architecture doc (2026-11-09)
+
+- **The canary passed on arrival** — no owning-sink fixes were needed.
+  `tests/integration/privacy-canary.test.ts` plants four distinct
+  sentinels (prompt, tool argument, completion, provider key) with
+  every sink on — log, body-ring, usage-store (`:memory:`), metrics,
+  an OTel sink with a recording in-memory exporter, and the live SSE
+  feed on a real listener — and asserts all four are absent from the
+  serialized log output, `/metrics`, exported spans, `/ui/api/live`,
+  `/ui/api/routing`, `/ui/api/requests` rows and the `requests` table,
+  while the content canaries are present in `getBodyRing()` and, only
+  with `LOG_BODIES=true`, the `bodies` table. The key is absent
+  everywhere including the ring (headers are never captured).
+- **Log-surface check serializes the emitted form, not the raw call
+  args.** `pino-http` passes the live Express `req`/`res` objects to
+  the child logger; pino's serializers (whitelisted fields, credential
+  headers redacted) decide what reaches the wire — `req.body` is never
+  logged. Inspecting raw args would flag `req.body` as a false leak, so
+  the test applies `stdSerializers.req/res/err` to each logged arg
+  before searching (mirroring what pino emits). This is a faithful
+  approximation of the log output: serializers run per-child, and the
+  spy sees pre-serialization args.
+- **`docs/architecture.md` was created, not modified** — the plan's
+  Files block says "Modify" and spec §3.11 says it "gains the observe
+  layer", but no such file existed on main (no architecture doc has
+  ever been committed). It now documents the whole pipeline with the
+  observe layer, the sink table, `/ui/api` access control and the
+  testing layout.
+- **"A Task 13/14 screenshot" resolved as a committed PNG** —
+  `docs/assets/ui-requests.png` (the Requests screen, dark, captured
+  from the real UI by the conductor's Playwright run; the untracked
+  `.claude/ui-shots/` copy is the same file). `docs/assets/` already
+  holds `demo.gif`, so this follows repo convention; Task 13's "no
+  binaries" note covered smoke-test artifacts, not a docs asset the
+  plan explicitly requires.
+- **`examples/multi-provider.yaml` is intentionally unchanged** — the
+  task's verbatim changes name `examples/claude-code-hybrid.yaml` only;
+  `src/config/examples.test.ts` still loads both.
+- **The existing `"endpoint lines"` assertion gained the `UI` row**
+  (`toEqual` kept exact) — the new output demands it; the new case
+  `"endpoint lines include the UI"` asserts the line by name.
+- **Files outside the Files block:** `docs/assets/ui-requests.png`
+  (above). Everything else matches the block.
+- **Follow-ups:** none — Task 17's gate files and Task 18's CHANGELOG
+  are their own tasks.
