@@ -53,11 +53,15 @@ OPENAI_API_KEY=<your OpenRouter key> \
 
 The base URL is `https://openrouter.ai/api` — babelgate appends
 `/v1/chat/completions` itself. If your OpenRouter key has a spend limit,
-cap Claude Code's output budget or requests can be rejected:
+cap the output budget at the proxy or requests can be rejected:
 
 ```bash
-export CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000
+TARGET_MAX_OUTPUT_TOKENS=8000 \
+  npx babelgate --preset claude-code --target openai \
+  --model qwen/qwen3-coder --base-url https://openrouter.ai/api
 ```
+
+(In a `babelgate.yaml` it's the provider's `max_output_tokens` key.)
 
 Then the same two `export` lines and `claude`. Full walkthrough:
 [docs/recipes/claude-code.md](docs/recipes/claude-code.md).
@@ -145,6 +149,7 @@ OpenAI     http://localhost:3000/v1
 Anthropic  http://localhost:3000
 Gemini     http://localhost:3000
 Ollama     http://localhost:3000
+UI         http://localhost:3000/ui
 ```
 
 ```python
@@ -171,6 +176,8 @@ across all providers. Any OpenAI-compatible backend (Groq, DeepSeek,
 Together, LM Studio, vLLM, llama.cpp…) is a `type: openai` provider —
 base URLs and key handling are in
 [docs/recipes/openai-compatible-providers.md](docs/recipes/openai-compatible-providers.md).
+Gemini CLI works too (`GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY`) —
+recipe: [docs/recipes/gemini-cli.md](docs/recipes/gemini-cli.md).
 
 ## The `babelgate` CLI
 
@@ -267,6 +274,28 @@ Every completed chat request logs token usage (`inputTokens`,
 `"Request completed"`. Model-list requests log `modelCount` instead
 (`"Models list completed"`).
 
+## See what's happening
+
+Every chat request produces a **request trace** — client, routed
+provider/model, hops and fallbacks, tokens, cache hits, cost, timings —
+fanned out to isolated sinks: the log line, a SQLite usage store
+(`USAGE_DB`, default `~/.babelgate/usage.db`), an in-memory body ring,
+Prometheus metrics, and optional OpenTelemetry spans. Open
+`http://localhost:3000/ui` for the built-in UI: a live Requests feed, a
+per-request Inspector that diffs each translation stage, Usage (cost and
+tokens per day/model/client, "saved ≈ $X" for local rows), the Routing
+table, and a Playground that streams up to four models side by side.
+
+![babelgate Requests screen](docs/assets/ui-requests.png)
+
+Bodies stay private: prompts, completions and tool arguments reach only
+the in-memory ring (last `INSPECTOR_BUFFER` requests) — and disk only
+with `LOG_BODIES=true`. Metrics carry labels, never content. The whole
+privacy model, every `observe:` setting, `/metrics` scrape config, OTel
+and Docker notes:
+[docs/recipes/observability.md](docs/recipes/observability.md);
+architecture: [docs/architecture.md](docs/architecture.md).
+
 ## Configuration
 
 Two modes. A **`babelgate.yaml`** (found via `--config`, `BABELGATE_CONFIG`
@@ -290,6 +319,17 @@ see the section above and [examples/](examples/). With no file,
 | `PROXY_API_KEY`           | Optional client auth — when set, callers send the key in their provider's native auth header (see Authentication) |
 | `MODEL_MAP`               | Ordered `glob=model` rules, comma-separated — e.g. `claude-*haiku*=qwen2.5-coder:7b,claude-*=qwen3-coder:30b`. First match wins; replies still carry the name the client asked for (env-only; YAML has `routes`) |
 | `TARGET_CONTEXT_WINDOW`   | Minimum context window the target should allocate (Ollama `options.num_ctx`; env-only — YAML has per-provider `context_window`) |
+| `TARGET_MAX_OUTPUT_TOKENS` | Clamp the model's output budget (env-only — YAML has per-provider `max_output_tokens`) |
+| `USAGE_STORE` / `USAGE_DB` / `USAGE_RETENTION_DAYS` | Request-trace store: `on` / `~/.babelgate/usage.db` / `30` days (YAML `observe.*`) |
+| `INSPECTOR_BUFFER`      | Traces kept in the in-memory body ring (default `50`; `0` disables body capture) |
+| `LOG_BODIES`            | `true` persists body snapshots to the `bodies` table (default `false`) |
+| `METRICS`               | `/metrics` Prometheus endpoint (default `on`)                             |
+| `UI` / `UI_ALLOW_REMOTE` / `UI_ALLOWED_HOSTS` | `/ui` + `/ui/api`: `on` / remote clients without a key (`false`) / extra `Host`s (empty) |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Set to emit GenAI-convention spans (never content); unset = no OTel |
+
+Provider YAML keys `max_output_tokens`, `cache_hints`, `live_prices`,
+`repair_tool_calls`, `local` and the `observe:`/`prices:` blocks are in
+[docs/recipes/observability.md](docs/recipes/observability.md).
 
 Routing and upstream endpoints are conventions, not configuration: each
 provider's routes (`kind`, `method`, `pathPrefix`, `requestPath`) live in
@@ -403,6 +443,10 @@ src/
 │   ├── stream-pipeline.ts  Provider-agnostic stream plumbing (abort, idle timeout)
 │   ├── token-estimate.ts   chars/4 estimate behind count_tokens
 │   └── proxy.service.ts    Orchestration: validate → transform → forward
+├── routing/                Provider registry, aliases/rules, planRoute, MODEL_MAP
+├── observe/                RequestTrace + sinks (log, store, ring, metrics, OTel)
+├── cost/                   Bundled price table, overrides, live prices, compute
+├── ui-api/                 /ui/api JSON routes + access control
 ├── transformers/
 │   ├── index.ts            transformRequest/transformResponse entry points
 │   └── adapters/           One file per provider (+ .stream.ts codecs) + PROVIDER_ROUTES

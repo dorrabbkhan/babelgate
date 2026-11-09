@@ -144,7 +144,14 @@ describe("cli", () => {
       "Anthropic  http://localhost:3000",
       "Gemini     http://localhost:3000",
       "Ollama     http://localhost:3000",
+      "UI         http://localhost:3000/ui",
     ]);
+  });
+
+  it("endpoint lines include the UI", () => {
+    expect(endpointLines(3000)).toContain(
+      "UI         http://localhost:3000/ui",
+    );
   });
 
   it("--help mentions --config and BABELGATE_CONFIG", async () => {

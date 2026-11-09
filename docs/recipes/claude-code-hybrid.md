@@ -25,6 +25,11 @@ providers:
     type: openai
     base_url: https://openrouter.ai/api
     api_key_env: OPENROUTER_API_KEY
+    max_output_tokens: 8000
+    cache_hints: true
+    live_prices: true
+observe:
+  would_cost_reference: openrouter/anthropic/claude-sonnet-4.5
 routes:
   - match: claude-*haiku*
     to: ollama/qwen2.5-coder:7b
@@ -61,6 +66,15 @@ What a request hits, in order (first match wins):
 `timeout_ms: 600000` mirrors the preset's longer timeout for slow local
 models. `base_url` is `https://openrouter.ai/api`, not `/api/v1` —
 babelgate appends `/v1/chat/completions` itself.
+
+The OpenRouter provider also sets `max_output_tokens: 8000` (Claude
+Code's default output budget can exceed a spend-capped key's credit —
+the proxy clamps it before the request leaves), `cache_hints: true`
+(Anthropic-style cache hints pass through to the upstream) and
+`live_prices: true` (cost comes from OpenRouter's own `pricing`, not
+the bundled table). `observe.would_cost_reference` prices the *local*
+rows against `openrouter/anthropic/claude-sonnet-4.5`, so the Usage
+screen can show what staying on Ollama saved.
 
 ## Run it
 
@@ -106,9 +120,10 @@ or a local Ollama that died — is visible per response and in the
   rather than relying on `default`.
 - **Provider names win over model prefixes.** A request for
   `ollama/anything` is always explicit, never routed.
-- **Spend-capped OpenRouter keys:** cap Claude Code's output budget with
-  `export CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000` or requests can be rejected
-  mid-session.
+- **Spend-capped OpenRouter keys:** the example's
+  `max_output_tokens: 8000` already caps Claude Code's output budget on
+  the OpenRouter hops; raise or drop it on the provider as needed, or
+  requests can be rejected mid-session.
 - **Local-model caveats from the single-target recipe still apply** —
   small models call tools unreliably, `thinking` is dropped,
   `count_tokens` stays a `chars/4` estimate. See
