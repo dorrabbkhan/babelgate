@@ -129,9 +129,13 @@ port="$(node -e 'const s=require("net").createServer();s.listen(0,()=>{console.l
 # USAGE_DB points the usage store at a temp file (deleted on exit) so
 # every row observe-check sees is from this run — the owner's real
 # ~/.babelgate/usage.db is untouched and "since start" is exact.
+# env -u PROXY_API_KEY on every launch: an exported PROXY_API_KEY would
+# make /ui/api require that key (src/ui-api/access.ts rule 4) and
+# observe-check would 403 on a healthy run.
 if [ "$target" = "openrouter" ]; then
   OPENAI_API_KEY="$OPENROUTER_API_KEY" \
     USAGE_DB="$work/usage.db" \
+    env -u PROXY_API_KEY \
     node dist/cli.js "${cli_args[@]}" --port "$port" \
     >"$work/babelgate.log" 2>&1 &
 elif [ "$target" = "config" ]; then
@@ -143,11 +147,13 @@ elif [ "$target" = "config" ]; then
   # the log.
   NODE_ENV=production \
     USAGE_DB="$work/usage.db" \
+    env -u PROXY_API_KEY \
     node dist/cli.js "${cli_args[@]}" --port "$port" \
     >"$work/babelgate.log" 2>&1 &
 else
   OLLAMA_API_BASE_URL="${OLLAMA_API_BASE_URL:-http://localhost:11434}" \
     USAGE_DB="$work/usage.db" \
+    env -u PROXY_API_KEY \
     node dist/cli.js "${cli_args[@]}" --port "$port" \
     >"$work/babelgate.log" 2>&1 &
 fi

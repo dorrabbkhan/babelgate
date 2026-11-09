@@ -115,7 +115,6 @@ port="$(node -e 'const s=require("net").createServer();s.listen(0,()=>{console.l
 bg_env=(
   "USAGE_DB=$work/usage.db"
   "MODEL_MAP=*=$model"
-  "UPSTREAM_TIMEOUT_MS=${UPSTREAM_TIMEOUT_MS:-300000}"
 )
 if [ "$target" = "openrouter" ]; then
   bg_env+=(OPENAI_API_KEY="$OPENROUTER_API_KEY")

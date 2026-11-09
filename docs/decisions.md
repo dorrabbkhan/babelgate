@@ -3703,7 +3703,8 @@ unchanged.
   updated to match (requirements, config block, routing order).
 - **Live check from PR #58 (decision 1a):** `parallel tool calls in
   history are accepted` sends a Gemini-format request — a model turn
-  with two `get_weather` functionCalls and matching functionResponses —
+  with two `get_weather` functionCalls and matching functionResponses
+  as the last content (the validated current turn) —
   to `gemini → gemini` on `liveModel('gemini')` (a 3.x id). Expected:
   200. Result: `<pending — owner runs npm run test:live>`.
 - **Files outside the Files block:** `examples/claude-code-openrouter.yaml`

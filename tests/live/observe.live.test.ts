@@ -52,11 +52,16 @@ routes:
     to: openrouter/${OPENROUTER_ANTHROPIC_MODEL}
 `;
 
-// ~5 000 tokens (chars/4): over the ≥ 4 096-token breakpoint the task
-// names and over Anthropic's 1 024-token cacheable minimum.
+// ~45 000 chars of varied text, roughly 10 000+ tokens — well over the
+// 4 096-token minimum cacheable prompt for Claude Haiku 4.5 (Anthropic
+// prompt-caching docs).
 const CACHEABLE_SYSTEM = {
   type: 'text',
-  text: `You are a careful code reviewer.\n${'x'.repeat(20_000)}`,
+  text: `You are a careful code reviewer.\n${Array.from(
+    { length: 600 },
+    (_, i) =>
+      `Rule ${i + 1}: review item ${i + 1} — check naming, error handling and tests in module ${i + 1}.`,
+  ).join('\n')}`,
   cache_control: { type: 'ephemeral' },
 };
 
@@ -77,6 +82,22 @@ if (process.env.OPENROUTER_API_KEY) {
           .post('/v1/messages')
           .send(CACHE_BODY);
         expect(first.status, JSON.stringify(first.body)).toBe(200);
+
+        const firstUsage = (
+          first.body as {
+            usage?: {
+              input_tokens?: number;
+              cache_creation_input_tokens?: number;
+              cache_read_input_tokens?: number;
+            };
+          }
+        ).usage;
+        expect(
+          (firstUsage?.input_tokens ?? 0) +
+            (firstUsage?.cache_creation_input_tokens ?? 0) +
+            (firstUsage?.cache_read_input_tokens ?? 0),
+          JSON.stringify(firstUsage),
+        ).toBeGreaterThanOrEqual(4096);
 
         const second = await request(app)
           .post('/v1/messages')
@@ -105,9 +126,13 @@ if (process.env.GEMINI_API_KEY) {
     // Conductor check from PR #58 (Task 1, decision 1a): the encoder
     // stamps the skip_thought_signature_validator placeholder on EVERY
     // outgoing functionCall part, while Gemini itself signs only the
-    // first of a parallel batch. A Gemini 3.x upstream must still 200 —
-    // if it rejects the extra placeholders this fails and needs an
-    // owner decision (first-part only, or real signatures).
+    // first of a parallel batch. The request ends on the
+    // functionResponse turn — Gemini 3 validates thoughtSignature only
+    // on the current turn, so ending there keeps both
+    // placeholder-signed calls inside the validated turn. A Gemini 3.x
+    // upstream must still 200 — if it rejects the extra placeholders
+    // this fails and needs an owner decision (first-part only, or real
+    // signatures).
     it('parallel tool calls in history are accepted', async () => {
       useTarget('gemini', 'gemini');
       const model = liveModel('gemini');
@@ -156,10 +181,6 @@ if (process.env.GEMINI_API_KEY) {
                   },
                 },
               ],
-            },
-            {
-              role: 'user',
-              parts: [{ text: 'Summarize both in one sentence.' }],
             },
           ],
           tools: [
