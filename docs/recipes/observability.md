@@ -119,9 +119,15 @@ can pass) and a `Host` of `localhost`, `127.0.0.1`, `[::1]` or a
 ```bash
 docker run --rm -p 3000:3000 \
   -v babelgate-data:/data \
+  -e BABELGATE_CONFIG=/data/babelgate.yaml \
   -e OPENROUTER_API_KEY \
-  ghcr.io/dorrabbkhan/babelgate --config /data/babelgate.yaml
+  ghcr.io/dorrabbkhan/babelgate
 ```
+
+The config file must already exist in the volume — e.g. create the
+volume first and copy `babelgate.yaml` into it — or bind-mount the file
+directly instead of the named volume:
+`-v ./babelgate.yaml:/data/babelgate.yaml:ro`.
 
 - **`-v babelgate-data:/data`** persists the usage DB — the image sets
   `USAGE_DB=/data/usage.db` and declares `VOLUME /data`.

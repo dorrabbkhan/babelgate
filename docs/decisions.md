@@ -3645,5 +3645,12 @@ unchanged.
   `"endpoint lines include the UI"` asserts the line by name.
 - **Files outside the Files block:** `docs/assets/ui-requests.png`
   (above). Everything else matches the block.
+- **Fix round 1:** two doc-accuracy defects — the gemini-cli recipe's
+  endpoint table implied 0.66.0 calls `:countTokens` (the Task 1
+  recording saw only `:streamGenerateContent` and `:generateContent`;
+  rows now say "not called by 0.66.0"), and the observability recipe's
+  `docker run` passed `--config` after the image name (no ENTRYPOINT —
+  it replaces the CMD and fails to start); now `-e BABELGATE_CONFIG=…`
+  before the image.
 - **Follow-ups:** none — Task 17's gate files and Task 18's CHANGELOG
   are their own tasks.

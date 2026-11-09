@@ -56,15 +56,17 @@ provider-model name Gemini CLI sends is routed by the usual rules
 ## What the CLI calls (tested: Gemini CLI 0.66.0)
 
 Recorded against babelgate with Gemini CLI **0.66.0**
-(google-genai-sdk 1.30.0, `npx @google/gemini-cli`), 2026-11-04 — every
-distinct method path:
+(google-genai-sdk 1.30.0, `npx @google/gemini-cli`), 2026-11-04. The
+recording saw exactly two method paths — the first two rows below; the
+remaining rows are babelgate behaviour for clients that do call them,
+not anything 0.66.0 does:
 
 | Call | What it's for | babelgate |
 |---|---|---|
 | `POST /v1beta/models/{m}:streamGenerateContent?alt=sse` | every chat turn | translated to your provider, SSE back |
 | `POST /v1beta/models/{m}:generateContent` | non-streaming helper calls (the model router) | same |
-| `POST /v1beta/models/{m}:countTokens` | context budgeting | answered locally as a `chars/4` estimate, marked `x-babelgate-token-estimate: true` |
-| `embedContent` and other unsupported methods | — | `501` in Gemini's error format |
+| `POST /v1beta/models/{m}:countTokens` | not called by 0.66.0; supported for clients that do | answered locally as a `chars/4` estimate, marked `x-babelgate-token-estimate: true` |
+| `embedContent` and other unsupported methods | not called by 0.66.0 | `501` in Gemini's error format |
 
 Tool declarations that use `parametersJsonSchema` are understood, and
 outgoing `functionCall` parts carry the documented
