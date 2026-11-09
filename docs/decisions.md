@@ -3571,15 +3571,30 @@ unchanged.
   identical wire behaviour (abort emits no tail, terminal events
   cut mid-batch, failure kinds/messages unchanged). The same
   extraction shares the attempt callback and the finish-trace
-  block between `proxyChatStream` and `streamCanonical`
-  (`attemptStreamTarget`, `observedDecoder`, `finishStreamTrace`
-  in chat-stream.service.ts — kept under ~400 lines).
+  block between `proxyChatStream` and `streamCanonical`.
+- **Fix-round splits (rule 7):** `chat-stream.service.ts` had grown
+  to 507 lines, so the shared streaming helpers live in
+  `src/services/stream-attempt.ts` (`attemptStreamTarget`,
+  `observedDecoder`, `finishStreamTrace`, `stampTtfb`,
+  `UpstreamAttempt`) and the playground entry lives in
+  `src/services/canonical-stream.service.ts` (`streamCanonical`,
+  `StreamCanonicalContext`) — `chat-stream.service.ts` keeps the
+  plan's `streamCanonical` export contract via a re-export (helpers
+  in a third module so there is no import cycle). `ui/src/api.ts`
+  had grown to 455 lines, so `streamPlayground` and its
+  request/handlers types moved to `ui/src/playground-api.ts`
+  (`uiFetch`/`parseSseChunk` exported from `api.ts`). Pure moves,
+  no behaviour change.
 - **Files outside the Files block:** `src/services/stream-pipeline.ts`
-  and `src/services/models.service.ts` (above); `src/routing/route-log.ts`,
+  and `src/services/models.service.ts` (above);
+  `src/services/stream-attempt.ts` and
+  `src/services/canonical-stream.service.ts` (the rule-7 split
+  above); `src/routing/route-log.ts`,
   `src/observe/trace.ts`, `src/observe/emit.ts` (the `sourceApi` union);
   `ui/src/api.ts` (`streamPlayground` — EventSource cannot send
-  `x-babelgate-ui`, so a fetch+reader SSE client like `streamLive`);
-  `ui/src/main.tsx` (`#/playground` route + nav); `ui/index.html`
+  `x-babelgate-ui`, so a fetch+reader SSE client like `streamLive`;
+  later moved to `ui/src/playground-api.ts` under the same rule-7
+  split); `ui/src/main.tsx` (`#/playground` route + nav); `ui/index.html`
   (`.pg-*` column/form styles — all styles live in its `<style>`).
 - **Sandbox note:** `npx playwright install chromium` cannot write
   `~/.cache/ms-playwright`; `scripts/ci/ui-smoke.sh` was run with

@@ -193,7 +193,13 @@ describe("POST /ui/api/playground", () => {
     const errors = frames.filter((f) => f.event === "error");
     expect(errors).toHaveLength(1);
     expect(errors[0]!.data.model).toBe("fail-me");
-    expect(errors[0]!.data.message).toEqual(expect.any(String));
+    // The canonical message /v1 renders for an ollama HTTP 500
+    // (kind "upstream"): the upstream body's error text verbatim.
+    expect(errors[0]!.data.message).toBe("upstream exploded");
+    expect(Object.keys(errors[0]!.data).sort()).toEqual([
+      "message",
+      "model",
+    ]);
   });
 
   it("each model gets its own row with client playground", async () => {
@@ -311,6 +317,25 @@ describe("POST /ui/api/playground", () => {
     } finally {
       await new Promise<void>((r) => listener.close(() => r()));
     }
+  });
+
+  it("duplicate models → 400", async () => {
+    let upstreamHits = 0;
+    server.use(
+      http.post(`${OLLAMA_URL}/api/chat`, () => {
+        upstreamHits += 1;
+        return ndjson("m1", ["x"]);
+      }),
+    );
+
+    const res = await postPlayground({
+      messages: [{ role: "user", content: "hi" }],
+      models: ["m1", "m1"],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expect(res.body.error.message).toBe("models must be unique");
+    expect(upstreamHits).toBe(0);
   });
 
   it("5 models → 400", async () => {

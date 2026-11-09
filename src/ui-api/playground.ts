@@ -3,7 +3,7 @@ import { z } from "zod";
 import { getConfig } from "../config/env-config";
 import { registerSink, type TraceSink } from "../observe/emit";
 import type { RequestTrace } from "../observe/trace";
-import { streamCanonical } from "../services/chat-stream.service";
+import { streamCanonical } from "../services/canonical-stream.service";
 import type {
   CanonicalRequest,
   CanonicalUsage,
@@ -32,7 +32,15 @@ const playgroundBodySchema = z.object({
     )
     .min(1),
   system: z.string().optional(),
-  models: z.array(z.string().min(1)).min(2).max(4),
+  models: z
+    .array(z.string().min(1))
+    .min(2)
+    .max(4)
+    // SSE frames are keyed by model — duplicates would make two
+    // columns' frames indistinguishable.
+    .refine((ms) => new Set(ms).size === ms.length, {
+      message: "models must be unique",
+    }),
   params: z
     .object({
       maxTokens: z.number().int().min(1).max(4096).optional(),

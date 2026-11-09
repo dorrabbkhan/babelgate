@@ -1,10 +1,10 @@
 /** @jsxImportSource preact */
 import { useEffect, useRef, useState } from "preact/hooks";
+import { UiApiError } from "../api";
 import {
   streamPlayground,
-  UiApiError,
   type PlaygroundDone,
-} from "../api";
+} from "../playground-api";
 
 /**
  * §3.9 screen 5 — the playground: 2–4 models streaming side by side
@@ -90,12 +90,25 @@ export function Playground() {
       params.temperature = tp;
     }
 
+    // Columns are keyed by position: a frame lands on its model's
+    // index in `picked`, never on whichever column happens to share a
+    // model name (the server rejects duplicates, but the render must
+    // not depend on that).
     const patch = (
       model: string,
-      update: Partial<Column>,
+      update: Partial<Column> | ((c: Column) => Partial<Column>),
     ): void => {
+      const index = picked.indexOf(model);
+      if (index === -1) return;
       setColumns((cols) =>
-        cols.map((c) => (c.model === model ? { ...c, ...update } : c)),
+        cols.map((c, i) =>
+          i === index
+            ? {
+                ...c,
+                ...(typeof update === "function" ? update(c) : update),
+              }
+            : c,
+        ),
       );
     };
 
@@ -108,11 +121,7 @@ export function Playground() {
       },
       {
         onDelta: ({ model, text }) =>
-          setColumns((cols) =>
-            cols.map((c) =>
-              c.model === model ? { ...c, text: c.text + text } : c,
-            ),
-          ),
+          patch(model, (c) => ({ text: c.text + text })),
         onDone: ({ model, usage, costUsd, ms }) =>
           patch(model, { usage, costUsd, ms, done: true }),
         onModelError: ({ model, message }) =>
@@ -187,8 +196,8 @@ export function Playground() {
       </div>
       {fatal !== null && <p class="error">{fatal}</p>}
       <div class="pg-columns">
-        {columns.map((col) => (
-          <PgColumn key={col.model} col={col} running={running} />
+        {columns.map((col, i) => (
+          <PgColumn key={i} col={col} running={running} />
         ))}
       </div>
     </div>

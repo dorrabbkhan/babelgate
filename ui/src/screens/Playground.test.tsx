@@ -3,10 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "preact";
 import { act } from "preact/test-utils";
 import { Playground } from "./Playground";
-import { streamPlayground, type PlaygroundHandlers } from "../api";
+import {
+  streamPlayground,
+  type PlaygroundHandlers,
+} from "../playground-api";
 
-vi.mock("../api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../api")>();
+vi.mock("../playground-api", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../playground-api")>();
   return { ...actual, streamPlayground: vi.fn() };
 });
 
