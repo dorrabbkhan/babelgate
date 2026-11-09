@@ -3665,8 +3665,8 @@ unchanged.
   `scripts/gates/observe-check.ts` (the gates' observability half),
   `scripts/gates/gemini-cli-edit.sh` (gate B), the `OBSERVE_CHECK`
   wiring in `scripts/gates/claude-code-edit.sh`,
-  `examples/claude-code-openrouter.yaml` (gate A), the CPU-only rework
-  of `examples/claude-code-hybrid.yaml` (gate C), and the retirement
+  `examples/claude-code-openrouter.yaml` (gate A),
+  `examples/gate-c-hybrid.yaml` (gate C), and the retirement
   of `docs/gates/gpu-ollama.md` per D10.
 - **OBSERVE_CHECK semantics** (resolved): `OBSERVE_CHECK=1` runs
   `observe-check.ts --base <url> --client claude-code --since <start>`
@@ -3693,14 +3693,15 @@ unchanged.
   as a row's `provider`; `--expect-saved` = some row has `wouldCostUsd`
   non-null. The inspector check requires all four stages on the latest
   row's body (`source`, `canonical`, ≥1 `target`, `response`).
-- **`examples/claude-code-hybrid.yaml` reworked for a no-GPU machine**
-  (gate C: main calls → OpenRouter, haiku → CPU Ollama
-  `qwen2.5-coder:3b`): `claude-*haiku*` → `ollama/qwen2.5-coder:3b`,
-  `claude-*` → `openrouter/qwen/qwen3-coder` with the 3b as the outage
-  fallback. The 30b/7b models and the `min_input_tokens` route are
-  gone — D10 retires the GPU gates, so the shipped hybrid example now
-  runs on CPU-only Ollama. `docs/recipes/claude-code-hybrid.md` was
-  updated to match (requirements, config block, routing order).
+- **Gate C config (owner decision, PR #81, option 2):** gate C runs
+  `examples/gate-c-hybrid.yaml` — `claude-*haiku*` → CPU Ollama
+  `ollama/qwen2.5-coder:3b`, `claude-*` →
+  `openrouter/qwen/qwen3-coder` with the 3b as the outage fallback,
+  and `would_cost_reference` set. The shipped
+  `examples/claude-code-hybrid.yaml`, its recipe and the README hybrid
+  block are unchanged, so they keep showing local-first routing and
+  `min_input_tokens`. This deviates from the plan's gate C command,
+  which names `claude-code-hybrid.yaml`.
 - **Live check from PR #58 (decision 1a):** `parallel tool calls in
   history are accepted` sends a Gemini-format request — a model turn
   with two `get_weather` functionCalls and matching functionResponses
@@ -3708,9 +3709,9 @@ unchanged.
   to `gemini → gemini` on `liveModel('gemini')` (a 3.x id). Expected:
   200. Result: `<pending — owner runs npm run test:live>`.
 - **Files outside the Files block:** `examples/claude-code-openrouter.yaml`
-  (created — the plan's Step 2 names it), `examples/claude-code-hybrid.yaml`
-  and `docs/recipes/claude-code-hybrid.md` (gate C's routing; the recipe
-  must describe the file it ships), `scripts/gates/observe-check.test.ts`
+  (created — the plan's Step 2 names it), `examples/gate-c-hybrid.yaml`
+  (gate C's config — owner decision, PR #81, option 2),
+  `scripts/gates/observe-check.test.ts`
   (rule: tests ship with the code they test — pure checks over
   `evaluateObservations`/`metricTotal`, no network).
 - **Gate runs (owner, to be recorded):**
@@ -3726,7 +3727,7 @@ unchanged.
     qwen/qwen3-coder` → `<result — Gemini CLI version, duration>`
   - **Gate C:** `ollama pull qwen2.5-coder:3b` first, then
     `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
-    examples/claude-code-hybrid.yaml` → `<result — providers, duration>`
+    examples/gate-c-hybrid.yaml` → `<result — providers, duration>`
 - **Not run here:** the live suite and the gates themselves — this
   sandbox has no API keys, Ollama, `claude` or `gemini` CLI. The owner
   runs them and fills in the results above.

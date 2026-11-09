@@ -3,13 +3,13 @@
 The `claude-code` preset sends every `claude-*` request to one target.
 [examples/claude-code-hybrid.yaml](../../examples/claude-code-hybrid.yaml)
 keeps the same idea but splits the work: Claude Code's cheap background
-calls stay on a small local model, real turns run on OpenRouter, and a
-cloud outage degrades to the local model — decided per request by
-babelgate, from one file. No GPU needed.
+calls stay on a small local model, routine turns run on a bigger local
+model, long contexts and local outages go to OpenRouter — decided per
+request by babelgate, from one file.
 
-You need: Node ≥ 20 (for `npx`), the `claude` CLI, an Ollama with
-`ollama pull qwen2.5-coder:3b` (any recent CPU is enough), and an
-`OPENROUTER_API_KEY` for the cloud routes.
+You need: Node ≥ 20 (for `npx`), the `claude` CLI, an Ollama that can
+run `qwen3-coder:30b` (see [docs/gates/gpu-ollama.md](../gates/gpu-ollama.md)
+if your laptop can't), and an `OPENROUTER_API_KEY` for the cloud routes.
 
 ## The config
 
@@ -32,25 +32,32 @@ observe:
   would_cost_reference: openrouter/anthropic/claude-sonnet-4.5
 routes:
   - match: claude-*haiku*
-    to: ollama/qwen2.5-coder:3b
+    to: ollama/qwen2.5-coder:7b
   - match: claude-*
+    when:
+      min_input_tokens: 60000
     to: openrouter/qwen/qwen3-coder
+  - match: claude-*
+    to: ollama/qwen3-coder:30b
     fallback:
-      - ollama/qwen2.5-coder:3b
+      - openrouter/qwen/qwen3-coder
 ```
 
 What a request hits, in order (first match wins):
 
-1. `claude-*haiku*` → `ollama/qwen2.5-coder:3b`. Claude Code sends its
+1. `claude-*haiku*` → `ollama/qwen2.5-coder:7b`. Claude Code sends its
    background and subagent work under haiku names; those stay small and
    local.
-2. Every remaining `claude-*` → `openrouter/qwen/qwen3-coder`, with
-   `ollama/qwen2.5-coder:3b` as fallback: a transport failure, a
+2. Any other `claude-*` whose *estimated* input is ≥ 60 000 tokens →
+   `openrouter/qwen/qwen3-coder`. The estimate is `ceil(chars/4)` — cheap,
+   approximate, good enough for "this conversation got long".
+3. Every remaining `claude-*` → `ollama/qwen3-coder:30b`, with
+   `openrouter/qwen/qwen3-coder` as fallback: a transport failure, a
    header/connect timeout, or an upstream `429`/`500`/`502`/`503`/`504`/`529`
-   moves the request to Ollama before the first byte. Once bytes
+   moves the request to OpenRouter before the first byte. Once bytes
    stream back, the provider is committed — a mid-stream death is an
    in-stream error, never a silent switch.
-3. A model name no route matches goes to the `default` provider
+4. A model name no route matches goes to the `default` provider
    unchanged — so `ollama/mistral` or `openrouter/anthropic/claude-sonnet-4.5`
    still work as explicit picks, and any bare name lands on Ollama.
 
@@ -98,8 +105,8 @@ Claude Code.
 ## Seeing the routing work
 
 Every reply carries `x-babelgate-provider`, `x-babelgate-model` and
-`x-babelgate-attempts`, so an OpenRouter outage that fired the local
-fallback is visible per response and in the
+`x-babelgate-attempts`, so a long session that crossed the threshold —
+or a local Ollama that died — is visible per response and in the
 `"Request completed"` log line's `hops` list. Watch for
 `x-babelgate-attempts: 2`: that's a fallback firing.
 
