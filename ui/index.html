@@ -183,6 +183,38 @@
         font-style: normal;
       }
       header a.active { color: var(--text); font-weight: 600; }
+      /* Playground (§3.9 screen 5): form + side-by-side model columns */
+      .pg-form { display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
+      .pg-form textarea, .pg-form input {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        padding: 4px 8px;
+        font: inherit;
+      }
+      .pg-form textarea { resize: vertical; }
+      .pg-models, .pg-params { display: flex; gap: 8px; flex-wrap: wrap; }
+      .pg-models input { flex: 1; min-width: 140px; }
+      .pg-params input { width: 200px; }
+      .pg-columns { display: flex; gap: 12px; align-items: flex-start; margin-top: 12px; }
+      .pg-col {
+        flex: 1;
+        min-width: 0;
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 8px;
+      }
+      .pg-col h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+      .pg-text {
+        margin: 0;
+        min-height: 60px;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: inherit;
+      }
+      .pg-stats { font-size: 12px; margin-top: 6px; }
     </style>
   </head>
   <body>

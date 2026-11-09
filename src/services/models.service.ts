@@ -74,7 +74,7 @@ async function fetchRawModelList(
   entry: ProviderEntry,
   config: GatewayConfig,
   requestId: string,
-  source?: Provider,
+  source?: Provider | "playground",
 ): Promise<unknown> {
   const targetRoute = PROVIDER_ROUTES[entry.type].find(
     (r) => r.kind === "models",
@@ -122,7 +122,7 @@ export async function getRawModelList(
   entry: ProviderEntry,
   config: GatewayConfig,
   requestId: string,
-  source?: Provider,
+  source?: Provider | "playground",
 ): Promise<unknown> {
   const cached = sharedCache.get(entry.name, entry.baseUrl);
   if (cached !== undefined) return cached;

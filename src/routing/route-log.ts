@@ -16,7 +16,8 @@ export interface Hop {
  */
 export interface RouteLogRecord {
   requestId: string;
-  sourceApi: Provider;
+  /** The dialect the request arrived in; "playground" = the /ui playground (§3.9). */
+  sourceApi: Provider | "playground";
   requestedModel: string;
   reason: string;
   hops: Hop[];

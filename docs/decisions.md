@@ -3532,3 +3532,72 @@ unchanged.
   `ui/src/api.ts` — the typed `/routing` prices contract lives beside
   the other /ui/api types (`ui/index.html` was already declared in
   this entry for the palette/rules work).
+
+## v1.3 Task 15 — Playground (API + screen) (2026-11-09)
+
+- **`sourceApi` for playground rows is `"playground"`** — the task
+  names `client: "playground"` but nothing the spec or plan says
+  what a canonical-in request's source dialect is. `RouteLogRecord
+  .sourceApi` widened to `Provider | "playground"` (trace.ts
+  `newTrace`, emit.ts `TraceStarted` with it; only the log field,
+  metrics label, OTel span name and the `source_api` TEXT column
+  consume it — a `Provider | "playground"` log/log-label value).
+  `models.service`'s `source?: Provider` params widened the same way
+  because they receive `currentTrace()?.sourceApi`. The `source`
+  body stage is intentionally not captured for playground requests
+  (there is no source dialect distinct from canonical); the
+  inspector shows "not captured".
+- **Per-model trace scope lives inside `streamCanonical`.** An
+  async generator's body sees the AsyncLocalStorage context of
+  whichever frame calls `next()` (verified on Node 22: creation
+  context does not survive), so the returned iterable re-enters
+  `runWithTrace` on every pull and on the early-close `return()`.
+  Request ids are `${req.id}:${index}` — `requests.id` is a PRIMARY
+  KEY so the 2–4 models need distinct ids that still group under
+  the spawning request.
+- **`done`'s `usage`/`costUsd`/`ms` come from the emitted trace,**
+  not re-computed in the route: the winning provider/model only
+  exists inside the pipeline, and `costUsd` exists only after
+  finishTrace's background pricing. A `playground` sink resolves a
+  per-requestId waiter registered before iteration (emit is ≥1
+  microtask after finishTrace; 65 s cap so a sink fault can't hold
+  the SSE open). The error path sends `event: error` immediately
+  without waiting — its trace still emits normally.
+- **stream-pipeline refactor:** `runStreamPipeline` was an
+  upstream→decode→encode loop; the playground needs the middle of
+  it, so the read/idle/wire-tap/termination core is now
+  `streamCanonicalEvents` (`AsyncGenerator<CanonicalStreamEvent>`)
+  and `runStreamPipeline` is the encoder wrapper. Byte-for-byte
+  identical wire behaviour (abort emits no tail, terminal events
+  cut mid-batch, failure kinds/messages unchanged). The same
+  extraction shares the attempt callback and the finish-trace
+  block between `proxyChatStream` and `streamCanonical`.
+- **Fix-round splits (rule 7):** `chat-stream.service.ts` had grown
+  to 507 lines, so the shared streaming helpers live in
+  `src/services/stream-attempt.ts` (`attemptStreamTarget`,
+  `observedDecoder`, `finishStreamTrace`, `stampTtfb`,
+  `UpstreamAttempt`) and the playground entry lives in
+  `src/services/canonical-stream.service.ts` (`streamCanonical`,
+  `StreamCanonicalContext`) — `chat-stream.service.ts` keeps the
+  plan's `streamCanonical` export contract via a re-export (helpers
+  in a third module so there is no import cycle). `ui/src/api.ts`
+  had grown to 455 lines, so `streamPlayground` and its
+  request/handlers types moved to `ui/src/playground-api.ts`
+  (`uiFetch`/`parseSseChunk` exported from `api.ts`). Pure moves,
+  no behaviour change.
+- **Files outside the Files block:** `src/services/stream-pipeline.ts`
+  and `src/services/models.service.ts` (above);
+  `src/services/stream-attempt.ts` and
+  `src/services/canonical-stream.service.ts` (the rule-7 split
+  above); `src/routing/route-log.ts`,
+  `src/observe/trace.ts`, `src/observe/emit.ts` (the `sourceApi` union);
+  `ui/src/api.ts` (`streamPlayground` — EventSource cannot send
+  `x-babelgate-ui`, so a fetch+reader SSE client like `streamLive`;
+  later moved to `ui/src/playground-api.ts` under the same rule-7
+  split); `ui/src/main.tsx` (`#/playground` route + nav); `ui/index.html`
+  (`.pg-*` column/form styles — all styles live in its `<style>`).
+- **Sandbox note:** `npx playwright install chromium` cannot write
+  `~/.cache/ms-playwright`; `scripts/ci/ui-smoke.sh` was run with
+  `PLAYWRIGHT_BROWSERS_PATH=.claude/ms-playwright` (the existing
+  local install) — PASS. `smoke-pack.sh` run with the standing-notes
+  npm proxy/cache env — SMOKE PASS.

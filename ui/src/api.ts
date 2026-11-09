@@ -178,7 +178,7 @@ export interface RoutePlan {
 
 const API_BASE = "/ui/api";
 
-async function uiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+export async function uiFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("x-babelgate-ui", "1");
   const key = getKey();
@@ -261,7 +261,7 @@ export interface LiveHandlers {
   onError?: (err: unknown) => void;
 }
 
-function parseSseChunk(
+export function parseSseChunk(
   buffer: string,
   emit: (event: string, data: string) => void,
 ): string {
@@ -356,3 +356,6 @@ export function streamLive(handlers: LiveHandlers): { close(): void } {
     },
   };
 }
+
+// The /playground SSE client lives in ./playground-api (one-shot POST
+// stream, unlike the /live reconnect loop above).
