@@ -118,7 +118,7 @@ export function newTrace(init: {
   startedAt: number;
   client: ClientId;
   userAgent?: string;
-  sourceApi: Provider;
+  sourceApi: Provider | "playground";
   parentTraceparent?: string;
 }): RequestTrace {
   return {

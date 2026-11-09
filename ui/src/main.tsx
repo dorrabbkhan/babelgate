@@ -2,15 +2,16 @@
 import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { Inspector } from "./screens/Inspector";
+import { Playground } from "./screens/Playground";
 import { Requests } from "./screens/Requests";
 import { Routing } from "./screens/Routing";
 import { Usage } from "./screens/Usage";
 
 /**
  * SPA entry (spec §3.9). Hash routes only — `#/requests`,
- * `#/requests/:id`, `#/usage`, `#/routing` — so the Express side
- * needs nothing beyond the static SPA fallback to index.html.
- * Playground (5) is Task 15.
+ * `#/requests/:id`, `#/usage`, `#/routing`, `#/playground` — so the
+ * Express side needs nothing beyond the static SPA fallback to
+ * index.html.
  */
 
 function useHash(): string {
@@ -43,6 +44,7 @@ function App() {
         {nav("/requests", "requests")}
         {nav("/usage", "usage")}
         {nav("/routing", "routing")}
+        {nav("/playground", "playground")}
       </header>
       <main>
         {inspector !== null ? (
@@ -51,6 +53,8 @@ function App() {
           <Usage />
         ) : hash === "#/routing" ? (
           <Routing />
+        ) : hash === "#/playground" ? (
+          <Playground />
         ) : (
           <Requests />
         )}

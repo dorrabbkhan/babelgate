@@ -62,7 +62,7 @@ const emitted = new WeakSet<RequestTrace>();
 export interface TraceStarted {
   id: string;
   client: ClientId;
-  sourceApi: Provider;
+  sourceApi: Provider | "playground";
   requestedModel: string;
   startedAt: number;
 }
