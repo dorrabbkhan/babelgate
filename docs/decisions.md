@@ -3493,3 +3493,23 @@ unchanged.
   against the built app + mock upstreams — reproduction steps in the
   PR description; not committed (Task 13 precedent: no binaries in
   the repo).
+- **Fix round 1 (PR #78): unpriced groups never render "$0.0000".**
+  When every request in a group or range is unpriced the cost and
+  saved figures show "—" (there is no priced sum; $0 would claim one),
+  and partial groups show "$X + N unpriced" instead of a bare dollar
+  figure. `saved` gets the same treatment because an unpriced request
+  has no reference price either — "saved ≈ $0.0000" would imply the
+  value was computed. Behaviour change in `ui/src/screens/Usage.tsx`
+  (`fmtCost` shared by the group table and the totals line); the
+  "unpriced requests are never summed as $0" test now asserts the
+  cell text and the absence of "$0.0000", plus a partial-group case.
+- **Fix round 1 (PR #78), files outside the Files block:**
+  `src/ui-api/static.ts` (Task 13 code) — the SPA fallback passed an
+  absolute index.html path to `res.sendFile`; send()'s dotfiles check
+  then rejected any install path containing a dot segment (~/.nvm,
+  ~/.npm/_npx, ~/.local) and `/ui/<client route>` 404'd. Now
+  `sendFile("index.html", { root: uiDir })` so the check sees only the
+  filename. New `src/ui-api/app.test.ts` — a supertest case against a
+  real express app serving a `…/.hidden/ui` dir (the static.test.ts
+  sendFile fake cannot see this failure; its call-args assertion was
+  updated to the new signature).

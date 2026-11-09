@@ -55,6 +55,21 @@ function fmtMoney(v: number): string {
   return `$${v.toFixed(4)}`;
 }
 
+/**
+ * A dollar figure that can't cover unpriced requests: "—" when every
+ * request in the group is unpriced (there is no priced sum, and $0
+ * would claim one), "$X + N unpriced" when only some are.
+ */
+function fmtCost(
+  value: number,
+  unpriced: number,
+  requests: number,
+): string {
+  if (requests > 0 && unpriced === requests) return "—";
+  if (unpriced > 0) return `${fmtMoney(value)} + ${unpriced} unpriced`;
+  return fmtMoney(value);
+}
+
 function fmtPct(ratio: number | null): string {
   return ratio === null ? "—" : `${Math.round(ratio * 100)}%`;
 }
@@ -115,8 +130,8 @@ function GroupTable({ groups }: { groups: UsageGroup[] }) {
               {g.outputTokens.toLocaleString()}
             </td>
             <td>{fmtPct(g.cacheHitRatio)}</td>
-            <td>{fmtMoney(g.costUsd)}</td>
-            <td>{fmtMoney(g.wouldCostUsd)}</td>
+            <td>{fmtCost(g.costUsd, g.unpriced, g.requests)}</td>
+            <td>{fmtCost(g.wouldCostUsd, g.unpriced, g.requests)}</td>
             <td>{g.unpriced}</td>
             <td>{g.errors}</td>
             <td>{g.fallbacks}</td>
@@ -222,10 +237,24 @@ export function Usage() {
               <strong>{totals.requests} requests</strong>
             </span>
             <span>
-              cost <strong>{fmtMoney(totals.costUsd)}</strong>
+              cost{" "}
+              <strong>
+                {fmtCost(
+                  totals.costUsd,
+                  totals.unpriced,
+                  totals.requests,
+                )}
+              </strong>
             </span>
             <span>
-              saved ≈ <strong>{fmtMoney(totals.wouldCostUsd)}</strong>
+              saved ≈{" "}
+              <strong>
+                {fmtCost(
+                  totals.wouldCostUsd,
+                  totals.unpriced,
+                  totals.requests,
+                )}
+              </strong>
             </span>
             <span>
               cache hits <strong>{fmtPct(cacheHit)}</strong>

@@ -53,7 +53,10 @@ function fakeRes(): Response & {
       res.body = body;
       return res;
     },
-    sendFile: vi.fn((_path: string, cb?: (err?: Error) => void) => {
+    sendFile: vi.fn((...args: unknown[]) => {
+      const cb = args.find((a) => typeof a === "function") as
+        | ((err?: Error) => void)
+        | undefined;
       cb?.();
     }),
   };
@@ -109,8 +112,11 @@ describe("uiStatic socket rules", () => {
       // express.static resolves the miss asynchronously, then the
       // SPA fallback answers with index.html.
       await vi.waitFor(() => {
+        // root-relative, not an absolute path: send()'s dotfiles
+        // check must not see the install path's dot segments.
         expect(res.sendFile).toHaveBeenCalledWith(
-          join(uiDir, "index.html"),
+          "index.html",
+          { root: uiDir },
           expect.any(Function),
         );
       });

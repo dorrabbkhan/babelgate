@@ -40,6 +40,17 @@ function mockUsage(groups: Record<string, UsageGroup[]>): void {
   );
 }
 
+/** the cost column (5th <td>) of the group-table row for `key` */
+function costCell(
+  container: HTMLElement,
+  key: string,
+): string | null {
+  const row = [...container.querySelectorAll("tr")].find(
+    (tr) => tr.children[0]?.textContent === key,
+  );
+  return row?.children[4]?.textContent ?? null;
+}
+
 describe("Usage screen", () => {
   let container: HTMLDivElement;
 
@@ -110,10 +121,10 @@ describe("Usage screen", () => {
 
   it("unpriced requests are never summed as $0", async () => {
     mockUsage({
-      day: [
-        group({ requests: 3, costUsd: 0, unpriced: 2 }),
+      day: [group({ requests: 2, costUsd: 0, unpriced: 2 })],
+      model: [
+        group({ key: "mystery", requests: 2, costUsd: 0, unpriced: 2 }),
       ],
-      model: [group({ key: "mystery", costUsd: 0, unpriced: 2 })],
     });
     await act(async () => {
       render(<Usage />, container);
@@ -125,6 +136,28 @@ describe("Usage screen", () => {
     const text = container.textContent ?? "";
     // the unpriced count is surfaced, not folded into a $0 total
     expect(text).toContain("2 requests without a price");
+    // and no dollar figure pretends the cost was computed
+    expect(text).not.toContain("$0.0000");
+    expect(costCell(container, "mystery")).toBe("—");
+  });
+
+  it("a partially priced group shows the sum with an unpriced marker", async () => {
+    mockUsage({
+      day: [group({ requests: 3, costUsd: 1.5, unpriced: 1 })],
+      model: [
+        group({ key: "mix", requests: 3, costUsd: 1.5, unpriced: 1 }),
+      ],
+    });
+    await act(async () => {
+      render(<Usage />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const cell = costCell(container, "mix");
+    expect(cell).toContain("$1.5000");
+    expect(cell).toContain("1 unpriced");
   });
 
   it("saved only from local rows", async () => {
