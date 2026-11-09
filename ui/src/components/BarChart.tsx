@@ -6,7 +6,9 @@
  * renders under the light and dark palettes in index.html. `height`
  * is the plot height in viewBox units — the tallest stack always
  * reaches exactly `height`; an all-zero input draws a flat stack,
- * never NaN geometry. The x-label strip sits below the plot.
+ * never NaN geometry. The x-label strip is HTML below the svg — SVG
+ * text would scale with the viewBox stretch instead of staying a
+ * fixed size like the legend.
  */
 
 export interface ChartSeries {
@@ -22,7 +24,6 @@ interface ChartProps {
 }
 
 const WIDTH = 640;
-const LABEL_H = 16;
 const SERIES_COLORS = 6;
 
 export function seriesVar(index: number): string {
@@ -54,42 +55,46 @@ export function BarChart({ labels, series, height = 140 }: ChartProps) {
   const scale = maxTotal > 0 ? height / maxTotal : 0;
 
   return (
-    <svg
-      class="chart bar-chart"
-      viewBox={`0 0 ${WIDTH} ${height + LABEL_H}`}
-      role="img"
-    >
-      {labels.map((label, i) => {
-        let y = height;
-        return (
-          <g key={label}>
-            {series.map((s, si) => {
-              const h = (s.values[i] ?? 0) * scale;
-              y -= h;
-              return (
-                <rect
-                  key={s.name}
-                  data-bar={i}
-                  data-series={s.name}
-                  x={slot * i + (slot - barWidth) / 2}
-                  y={y}
-                  width={barWidth}
-                  height={h}
-                  style={{ fill: seriesVar(si) }}
-                />
-              );
-            })}
-            <text
-              class="axis"
-              x={slot * i + slot / 2}
-              y={height + LABEL_H - 4}
-              text-anchor="middle"
-            >
-              {label}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
+    <div class="chart-wrap">
+      <svg
+        class="chart bar-chart"
+        viewBox={`0 0 ${WIDTH} ${height}`}
+        role="img"
+      >
+        {labels.map((label, i) => {
+          let y = height;
+          return (
+            <g key={label}>
+              {series.map((s, si) => {
+                const h = (s.values[i] ?? 0) * scale;
+                y -= h;
+                return (
+                  <rect
+                    key={s.name}
+                    data-bar={i}
+                    data-series={s.name}
+                    x={slot * i + (slot - barWidth) / 2}
+                    y={y}
+                    width={barWidth}
+                    height={h}
+                    style={{ fill: seriesVar(si) }}
+                  />
+                );
+              })}
+            </g>
+          );
+        })}
+      </svg>
+      <div class="axis-labels">
+        {labels.map((label, i) => (
+          <span
+            key={label}
+            style={{ left: `${((i + 0.5) / labels.length) * 100}%` }}
+          >
+            {label}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }

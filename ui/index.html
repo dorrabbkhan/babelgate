@@ -157,7 +157,22 @@
       .panel h3 { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
       .usage-totals { display: flex; gap: 20px; flex-wrap: wrap; }
       svg.chart { width: 100%; height: auto; display: block; }
-      svg.chart .axis { fill: var(--muted); font-size: 10px; }
+      /* HTML label strip: fixed 12px (the legend's size) at any width;
+         spans are centred on their `left` unless the chart overrides
+         transform (line-chart edge labels) */
+      .axis-labels {
+        position: relative;
+        height: 16px;
+        font-size: 12px;
+        line-height: 16px;
+        color: var(--muted);
+      }
+      .axis-labels > span {
+        position: absolute;
+        top: 0;
+        white-space: nowrap;
+        transform: translateX(-50%);
+      }
       .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
       .legend .sw {
         display: inline-block;

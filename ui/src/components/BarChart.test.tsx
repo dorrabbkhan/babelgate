@@ -59,4 +59,28 @@ describe("BarChart", () => {
     }
     expect(container.innerHTML).not.toContain("NaN");
   });
+
+  it("axis labels do not scale with the chart", () => {
+    const container = document.createElement("div");
+    render(
+      <BarChart
+        labels={["a", "b", "c"]}
+        series={[{ name: "cost", values: [1, 2, 3] }]}
+      />,
+      container,
+    );
+
+    // labels must render at a fixed on-screen size; an SVG <text>
+    // inside the viewBox-stretched svg would scale with the page width
+    const svg = container.querySelector("svg.chart");
+    expect(svg).not.toBeNull();
+    expect(svg?.querySelectorAll("text.axis").length).toBe(0);
+    const spans = [
+      ...container.querySelectorAll(".axis-labels span"),
+    ];
+    expect(spans.map((s) => s.textContent)).toEqual(["a", "b", "c"]);
+    for (const span of spans) {
+      expect(span.closest("svg")).toBeNull();
+    }
+  });
 });

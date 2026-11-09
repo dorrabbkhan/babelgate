@@ -181,6 +181,66 @@ describe("Usage screen", () => {
     expect(text).toContain("$3.0000"); // cloud spend separate
   });
 
+  it("range shows exactly N days", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-09T12:00:00Z"));
+      mockUsage({
+        day: [
+          group({ key: "2026-11-03" }),
+          group({ key: "2026-11-09" }),
+        ],
+        model: [],
+      });
+      await act(async () => {
+        render(<Usage />, container);
+      });
+      await act(async () => {
+        await tick();
+      });
+
+      // from = 00:00:00.000Z of (today − (days − 1)); to = now
+      expect(usageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          group: "day",
+          from: Date.parse("2026-11-03T00:00:00.000Z"),
+          to: Date.parse("2026-11-09T12:00:00.000Z"),
+        }),
+      );
+      const dayLabels = (): string[] =>
+        [
+          ...container.querySelectorAll(
+            "svg.bar-chart + .axis-labels span",
+          ),
+        ].map((s) => s.textContent ?? "");
+      expect(dayLabels()).toEqual([
+        "11-03",
+        "11-04",
+        "11-05",
+        "11-06",
+        "11-07",
+        "11-08",
+        "11-09",
+      ]);
+
+      const select = container.querySelector<HTMLSelectElement>(
+        'select[data-range]',
+      );
+      expect(select).not.toBeNull();
+      await act(async () => {
+        select!.value = "30";
+        select!.dispatchEvent(new Event("change", { bubbles: true }));
+        await tick();
+      });
+      const labels30 = dayLabels();
+      expect(labels30.length).toBe(30);
+      expect(labels30[0]).toBe("10-11");
+      expect(labels30[29]).toBe("11-09");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("group selector refetches with the dimension", async () => {
     mockUsage({ day: [group({})], model: [group({ key: "m1" })], client: [] });
     await act(async () => {

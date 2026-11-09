@@ -4,6 +4,7 @@ import {
   getRouting,
   planRoute,
   UiApiError,
+  type Price,
   type RoutePlan,
   type RouteTarget,
   type RoutingInfo,
@@ -17,13 +18,6 @@ import { AuthPrompt } from "../components/AuthPrompt";
  * prices per configured model) and the "where would <model> go?" box
  * backed by the /routing/plan dry run (no upstream call).
  */
-
-interface Price {
-  input: number;
-  output: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-}
 
 function targetLabel(t: RouteTarget): string {
   return `${t.provider}/${t.model}`;
@@ -145,7 +139,7 @@ function Tables({ info }: { info: RoutingInfo }) {
               {info.prices.map((p) => (
                 <tr key={p.target}>
                   <td>{p.target}</td>
-                  <td>{fmtPrice(p.price as Price | undefined)}</td>
+                  <td>{fmtPrice(p.price)}</td>
                   <td>{p.source ?? "—"}</td>
                 </tr>
               ))}

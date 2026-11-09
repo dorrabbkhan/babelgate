@@ -50,4 +50,32 @@ describe("LineChart", () => {
     expect(ys).toEqual([120, 120]); // flat on the baseline
     expect(container.innerHTML).not.toContain("NaN");
   });
+
+  it("axis labels do not scale with the chart", () => {
+    const container = document.createElement("div");
+    render(
+      <LineChart
+        labels={["a", "b", "c"]}
+        series={[{ name: "input", values: [1, 2, 3] }]}
+      />,
+      container,
+    );
+
+    // labels must render at a fixed on-screen size; an SVG <text>
+    // inside the viewBox-stretched svg would scale with the page width
+    const svg = container.querySelector("svg.chart");
+    expect(svg).not.toBeNull();
+    expect(svg?.querySelectorAll("text.axis").length).toBe(0);
+    const spans = [
+      ...container.querySelectorAll(".axis-labels span"),
+    ];
+    expect(spans.map((s) => s.textContent)).toEqual(["a", "b", "c"]);
+    for (const span of spans) {
+      expect(span.closest("svg")).toBeNull();
+    }
+    // edge anchoring survives the move: first label start-aligned at
+    // the left edge, last end-aligned at the right edge
+    expect((spans[0] as HTMLElement).style.left).toBe("0%");
+    expect((spans[2] as HTMLElement).style.left).toBe("100%");
+  });
 });

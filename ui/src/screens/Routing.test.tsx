@@ -102,6 +102,25 @@ describe("Routing screen", () => {
     expect(text).toContain("or/unknown-model");
   });
 
+  it("prices rows carry a typed Price and PriceSource", () => {
+    // compile-time contract (tsc -p ui): `price` is `Price`, not
+    // `unknown` — the field accesses below only typecheck when it is
+    const row: RoutingInfo["prices"][number] = {
+      target: "or/anthropic/claude-sonnet-4.5",
+      price: { input: 3, output: 15, cacheRead: 0.3 },
+      source: "bundled",
+    };
+    expect(row.price?.input).toBe(3);
+    expect(row.price?.cacheWrite).toBeUndefined();
+    expect(row.source).toBe("bundled");
+    const bad: RoutingInfo["prices"][number] = {
+      target: "x",
+      // @ts-expect-error — a malformed price must not typecheck
+      price: { bogus: 1 },
+    };
+    expect(bad.target).toBe("x");
+  });
+
   it("plan box shows targets and reason", async () => {
     planMock.mockResolvedValue({
       targets: [

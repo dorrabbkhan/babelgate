@@ -3513,3 +3513,22 @@ unchanged.
   real express app serving a `…/.hidden/ui` dir (the static.test.ts
   sendFile fake cannot see this failure; its call-args assertion was
   updated to the new signature).
+- **Fix round 2 (PR #78): three owner-reviewed items.** Axis labels
+  moved out of the viewBox-stretched `<svg>` into an `.axis-labels`
+  HTML strip under each chart — SVG text scaled with the page width
+  (~20px at 1280px); the strip is a fixed 12px like the legend at any
+  container width, positioned by percentage so each label still sits
+  under its bar/point, and the LineChart edge anchoring is kept via
+  the first/last span's inline transform. The usage range is now
+  exactly `days` UTC calendar days ending today (`from` = 00:00:00Z
+  of today − (days−1), `to` = now, computed once and shared by the
+  /usage queries and fillDays) — "7 days" was rendering 8 slots
+  because `to − 7d` floors to the previous UTC day. `RoutingInfo`
+  types `prices` as `{ target: string; price?: Price; source?:
+  PriceSource }[]` with `Price`/`PriceSource` exported from
+  `ui/src/api.ts` matching src/cost/price-table.ts; the Routing
+  screen's local `Price` interface and `as` cast are gone.
+- **Fix round 2 (PR #78), files outside the Files block:**
+  `ui/src/api.ts` — the typed `/routing` prices contract lives beside
+  the other /ui/api types (`ui/index.html` was already declared in
+  this entry for the palette/rules work).

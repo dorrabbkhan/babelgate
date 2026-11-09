@@ -1,5 +1,10 @@
 /** @jsxImportSource preact */
-import { useCallback, useEffect, useState } from "preact/hooks";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "preact/hooks";
 import { getUsage, UiApiError, type UsageGroup } from "../api";
 import { AuthPrompt } from "../components/AuthPrompt";
 import { BarChart, Legend, type ChartSeries } from "../components/BarChart";
@@ -149,9 +154,17 @@ export function Usage() {
   const [dimGroups, setDimGroups] = useState<UsageGroup[]>([]);
   const [error, setError] = useState<UiApiError | null>(null);
 
-  const load = useCallback(() => {
+  // exactly `days` UTC calendar days ending today — computed once so
+  // the /usage queries and fillDays share the same bounds
+  const { from, to } = useMemo(() => {
     const to = Date.now();
-    const from = to - days * DAY_MS;
+    const from = Date.parse(
+      `${dayKey(to - (days - 1) * DAY_MS)}T00:00:00.000Z`,
+    );
+    return { from, to };
+  }, [days]);
+
+  const load = useCallback(() => {
     return Promise.all([
       getUsage({ from, to, group: "day" }),
       getUsage({ from, to, group: groupBy }),
@@ -168,7 +181,7 @@ export function Usage() {
             : new UiApiError(0, "ERROR", String(err)),
         );
       });
-  }, [days, groupBy]);
+  }, [groupBy, from, to]);
 
   useEffect(() => {
     void load();
@@ -186,7 +199,7 @@ export function Usage() {
   const filled =
     dayGroups === null || dayGroups.length === 0
       ? []
-      : fillDays(dayGroups, Date.now() - days * DAY_MS, Date.now());
+      : fillDays(dayGroups, from, to);
   const labels = filled.map((g) => g.key.slice(5));
   const costSeries: ChartSeries[] = [
     { name: "cost", values: filled.map((g) => g.costUsd) },
