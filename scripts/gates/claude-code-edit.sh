@@ -13,6 +13,15 @@
 # openrouter needs OPENROUTER_API_KEY; config mode takes whatever env the
 # YAML file's api_key_env entries name (e.g. OPENROUTER_API_KEY for
 # examples/claude-code-hybrid.yaml). The API key is never printed.
+#
+# OBSERVE_CHECK: after the edit task, run scripts/gates/observe-check.ts
+# against the still-running instance (spec §4.5 release gates). `1`
+# enables it with `--client claude-code`; any other value is appended
+# as extra flags (e.g. OBSERVE_CHECK="--expect-cache-read"). In config
+# mode the script also derives flags from the YAML: live_prices →
+# --expect-cost, ≥2 providers → --expect-providers in file order,
+# would_cost_reference → --expect-saved. USAGE_DB always points at a
+# temp file so every row the check sees is from this run.
 set -euo pipefail
 
 # Caller's cwd, captured before the cd: `config` resolves a relative
@@ -96,6 +105,7 @@ if ! command -v claude >/dev/null 2>&1; then
 fi
 
 started="$(date +%s)"
+started_ms="$(( started * 1000 ))"
 work="$(mktemp -d)"
 proxy_pid=""
 
@@ -116,8 +126,12 @@ npm run --silent build
 # A free port: let the OS pick one by asking node.
 port="$(node -e 'const s=require("net").createServer();s.listen(0,()=>{console.log(s.address().port);s.close()})')"
 
+# USAGE_DB points the usage store at a temp file (deleted on exit) so
+# every row observe-check sees is from this run — the owner's real
+# ~/.babelgate/usage.db is untouched and "since start" is exact.
 if [ "$target" = "openrouter" ]; then
   OPENAI_API_KEY="$OPENROUTER_API_KEY" \
+    USAGE_DB="$work/usage.db" \
     node dist/cli.js "${cli_args[@]}" --port "$port" \
     >"$work/babelgate.log" 2>&1 &
 elif [ "$target" = "config" ]; then
@@ -128,10 +142,12 @@ elif [ "$target" = "config" ]; then
   # dev-only), and production also keeps upstream body previews out of
   # the log.
   NODE_ENV=production \
+    USAGE_DB="$work/usage.db" \
     node dist/cli.js "${cli_args[@]}" --port "$port" \
     >"$work/babelgate.log" 2>&1 &
 else
   OLLAMA_API_BASE_URL="${OLLAMA_API_BASE_URL:-http://localhost:11434}" \
+    USAGE_DB="$work/usage.db" \
     node dist/cli.js "${cli_args[@]}" --port "$port" \
     >"$work/babelgate.log" 2>&1 &
 fi
@@ -228,7 +244,40 @@ if [ "$target" = "config" ]; then
     console.log(`  by reason: ${fmt(byReason)}`);
   ' "$work/babelgate.log"
 fi
-if [ -n "$pass" ]; then
+
+# The release gates' observability half (spec §4.5): OBSERVE_CHECK
+# enables it — see the header comment for the derived and extra flags.
+observe_failed=0
+if [ -n "${OBSERVE_CHECK:-}" ] && [ "$OBSERVE_CHECK" != "0" ]; then
+  obs_args=(--base "http://localhost:$port" --client claude-code --since "$started_ms")
+  if [ "$target" = "config" ]; then
+    # Anchored patterns so a commented-out key can't match.
+    if grep -Eq '^[[:space:]]*live_prices:[[:space:]]*true' "$config_path"; then
+      obs_args+=(--expect-cost)
+    fi
+    if grep -Eq '^[[:space:]]*would_cost_reference:' "$config_path"; then
+      obs_args+=(--expect-saved)
+    fi
+    # Provider names in file order, from the top-level `providers:` map.
+    obs_providers="$(awk '
+      /^providers:[[:space:]]*$/ { in_p = 1; next }
+      /^[^[:space:]]/ { in_p = 0 }
+      in_p && /^[[:space:]]+[a-z0-9_-]+:[[:space:]]*$/ {
+        line = $0; sub(/:.*/, "", line); gsub(/[[:space:]]/, "", line); print line
+      }
+    ' "$config_path")"
+    if [ "$(printf '%s\n' "$obs_providers" | grep -c .)" -ge 2 ]; then
+      obs_args+=(--expect-providers "$(printf '%s\n' "$obs_providers" | paste -sd, -)")
+    fi
+  fi
+  if [ "$OBSERVE_CHECK" != "1" ]; then
+    read -r -a obs_extra <<< "$OBSERVE_CHECK"
+    obs_args+=(${obs_extra[@]+"${obs_extra[@]}"})
+  fi
+  ./node_modules/.bin/ts-node scripts/gates/observe-check.ts "${obs_args[@]}" || observe_failed=1
+fi
+
+if [ -n "$pass" ] && [ "$observe_failed" = "0" ]; then
   echo "GATE PASS"
 else
   echo "GATE FAIL"

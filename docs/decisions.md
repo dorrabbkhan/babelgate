@@ -3654,3 +3654,78 @@ unchanged.
   before the image.
 - **Follow-ups:** none — Task 17's gate files and Task 18's CHANGELOG
   are their own tasks.
+
+## v1.3 Task 17 — Live-suite cases; release gates A, A-cache, B, C (2026-11-09) · OWNER REVIEW
+
+- **What shipped:** `tests/live/observe.live.test.ts` (three cases —
+  `gemini countTokens against babelgate`, no upstream needed; the
+  OpenRouter `anthropic/claude-haiku-4.5` cache-read pair under
+  `OPENROUTER_API_KEY`; and the conductor's Gemini 3.x
+  parallel-functionCall case under `GEMINI_API_KEY`),
+  `scripts/gates/observe-check.ts` (the gates' observability half),
+  `scripts/gates/gemini-cli-edit.sh` (gate B), the `OBSERVE_CHECK`
+  wiring in `scripts/gates/claude-code-edit.sh`,
+  `examples/claude-code-openrouter.yaml` (gate A), the CPU-only rework
+  of `examples/claude-code-hybrid.yaml` (gate C), and the retirement
+  of `docs/gates/gpu-ollama.md` per D10.
+- **OBSERVE_CHECK semantics** (resolved): `OBSERVE_CHECK=1` runs
+  `observe-check.ts --base <url> --client claude-code --since <start>`
+  after the edit task; any other value is appended as extra flags
+  (A-cache runs `OBSERVE_CHECK="--expect-cache-read"`). In `config`
+  mode the script derives flags from the YAML so the plan's gate
+  commands produce the plan's flag lists: `live_prices: true` →
+  `--expect-cost`, two or more providers → `--expect-providers` in
+  file order, `would_cost_reference` → `--expect-saved`. `cache_hints`
+  is deliberately NOT derived: gate C's OpenRouter target
+  (`qwen/qwen3-coder`) reports no cache reads, so deriving
+  `--expect-cache-read` would fail a healthy run. `gemini-cli-edit.sh`
+  runs the check unconditionally with `--client gemini-cli` (gate B's
+  command shows no OBSERVE_CHECK and expects `OBSERVE PASS`).
+- **`--since <epoch-ms>` and `USAGE_DB=<temp>`:** "a row exists for
+  `--client` since start" is made exact two ways — the gate scripts
+  always point `USAGE_DB` at a temp file (so the owner's real
+  `~/.babelgate/usage.db` is untouched) and pass the gate's start
+  time as `--since`. `--since` is an addition to the named interface;
+  every named flag is implemented verbatim.
+- **Expectation semantics:** `--expect-cost` = some client row has
+  `costUsd` non-null; `--expect-cache-read` = some row has
+  `cacheReadTokens > 0`; `--expect-providers a,b` = each name appears
+  as a row's `provider`; `--expect-saved` = some row has `wouldCostUsd`
+  non-null. The inspector check requires all four stages on the latest
+  row's body (`source`, `canonical`, ≥1 `target`, `response`).
+- **`examples/claude-code-hybrid.yaml` reworked for a no-GPU machine**
+  (gate C: main calls → OpenRouter, haiku → CPU Ollama
+  `qwen2.5-coder:3b`): `claude-*haiku*` → `ollama/qwen2.5-coder:3b`,
+  `claude-*` → `openrouter/qwen/qwen3-coder` with the 3b as the outage
+  fallback. The 30b/7b models and the `min_input_tokens` route are
+  gone — D10 retires the GPU gates, so the shipped hybrid example now
+  runs on CPU-only Ollama. `docs/recipes/claude-code-hybrid.md` was
+  updated to match (requirements, config block, routing order).
+- **Live check from PR #58 (decision 1a):** `parallel tool calls in
+  history are accepted` sends a Gemini-format request — a model turn
+  with two `get_weather` functionCalls and matching functionResponses —
+  to `gemini → gemini` on `liveModel('gemini')` (a 3.x id). Expected:
+  200. Result: `<pending — owner runs npm run test:live>`.
+- **Files outside the Files block:** `examples/claude-code-openrouter.yaml`
+  (created — the plan's Step 2 names it), `examples/claude-code-hybrid.yaml`
+  and `docs/recipes/claude-code-hybrid.md` (gate C's routing; the recipe
+  must describe the file it ships), `scripts/gates/observe-check.test.ts`
+  (rule: tests ship with the code they test — pure checks over
+  `evaluateObservations`/`metricTotal`, no network).
+- **Gate runs (owner, to be recorded):**
+  - **Live suite:** `npm run test:live` — `<result — N passed/N total,
+    client versions, date>`
+  - **Gate A:** `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
+    examples/claude-code-openrouter.yaml`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+    unset → `<result — Claude Code version, model, duration, cost, date>`
+  - **Gate A-cache:** same file edited to `anthropic/claude-haiku-4.5`
+    + `cache_hints: true`, `OBSERVE_CHECK="--expect-cache-read"` →
+    `<result>`
+  - **Gate B:** `scripts/gates/gemini-cli-edit.sh openrouter
+    qwen/qwen3-coder` → `<result — Gemini CLI version, duration>`
+  - **Gate C:** `ollama pull qwen2.5-coder:3b` first, then
+    `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
+    examples/claude-code-hybrid.yaml` → `<result — providers, duration>`
+- **Not run here:** the live suite and the gates themselves — this
+  sandbox has no API keys, Ollama, `claude` or `gemini` CLI. The owner
+  runs them and fills in the results above.

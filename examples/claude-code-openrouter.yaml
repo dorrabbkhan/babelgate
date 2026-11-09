@@ -1,0 +1,26 @@
+# Claude Code on OpenRouter only — one provider, one model.
+# Release gate A (spec §4.5) runs this file.
+#
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo claude-code-openrouter.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/claude-code-openrouter.yaml
+#   OPENROUTER_API_KEY=<key> \
+#     npx babelgate --config claude-code-openrouter.yaml --preset claude-code
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
+#
+# Routing: the `*` rule claims every requested model, so whatever name
+# Claude Code sends is served as openrouter/qwen/qwen3-coder. For gate
+# A-cache, point `to:` at anthropic/claude-haiku-4.5 and add
+# `cache_hints: true` to the provider.
+default: openrouter
+providers:
+  openrouter:
+    type: openai
+    # No /v1: babelgate appends /v1/chat/completions and /v1/models itself.
+    base_url: https://openrouter.ai/api
+    api_key_env: OPENROUTER_API_KEY
+    max_output_tokens: 8000   # Claude Code asks for a large budget; spend-capped keys 4xx without a cap
+    live_prices: true         # cost from OpenRouter's own /models pricing
+routes:
+  - match: "*"
+    to: openrouter/qwen/qwen3-coder

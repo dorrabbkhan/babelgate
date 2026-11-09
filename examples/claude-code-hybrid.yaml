@@ -1,5 +1,6 @@
-# Claude Code on local Ollama, with long contexts and outages on OpenRouter.
-# Recipe: docs/recipes/claude-code-hybrid.md
+# Claude Code on cloud models, with cheap background calls on local Ollama.
+# Recipe: docs/recipes/claude-code-hybrid.md · Release gate C (spec §4.5)
+# runs this file — no GPU needed, only a CPU Ollama.
 #
 # The npm package doesn't ship examples/ — download this file first:
 #   curl -fsSLo claude-code-hybrid.yaml \
@@ -9,17 +10,16 @@
 # (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
 #
 # Routing (first match wins; anything unmatched goes to the default):
-#   claude-*haiku*                    -> ollama/qwen2.5-coder:7b
-#   claude-* with >= 60 000 estimated input tokens -> openrouter/qwen/qwen3-coder
-#   claude-*                          -> ollama/qwen3-coder:30b,
-#                                      falling back to openrouter/qwen/qwen3-coder
+#   claude-*haiku*  -> ollama/qwen2.5-coder:3b   (cheap background calls stay local)
+#   claude-*        -> openrouter/qwen/qwen3-coder,
+#                    falling back to ollama/qwen2.5-coder:3b
 default: ollama
 providers:
   ollama:
     type: ollama
     base_url: http://localhost:11434
     context_window: 32768   # Ollama options.num_ctx, as the claude-code preset sets
-    timeout_ms: 600000      # local 30B is slow; the preset uses the same value
+    timeout_ms: 600000      # a CPU model is slow; the preset uses the same value
   openrouter:
     type: openai
     # No /v1: babelgate appends /v1/chat/completions and /v1/models itself.
@@ -34,12 +34,8 @@ observe:
   would_cost_reference: openrouter/anthropic/claude-sonnet-4.5
 routes:
   - match: claude-*haiku*   # Claude Code's cheap background calls stay small and local
-    to: ollama/qwen2.5-coder:7b
+    to: ollama/qwen2.5-coder:3b
   - match: claude-*
-    when:
-      min_input_tokens: 60000   # estimated input (chars/4) at or above the threshold
     to: openrouter/qwen/qwen3-coder
-  - match: claude-*
-    to: ollama/qwen3-coder:30b
     fallback:
-      - openrouter/qwen/qwen3-coder
+      - ollama/qwen2.5-coder:3b
