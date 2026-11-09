@@ -22,7 +22,6 @@ export function uiStatic(
   uiDir = join(__dirname, "../ui"),
 ): RequestHandler {
   const serveUi = express.static(uiDir);
-  const uiIndex = join(uiDir, "index.html");
   return (req, res, next) => {
     if (req.path === "/api" || req.path.startsWith("/api/")) {
       return next();
@@ -37,7 +36,10 @@ export function uiStatic(
     }
     serveUi(req, res, () => {
       if (req.method !== "GET" && req.method !== "HEAD") return next();
-      res.sendFile(uiIndex, (err) => {
+      // root-relative: send()'s dotfiles check must see only the
+      // filename — an absolute path under a dotted install root
+      // (~/.nvm, ~/.npm/_npx, ~/.local) would 404 every fallback.
+      res.sendFile("index.html", { root: uiDir }, (err) => {
         if (err) next();
       });
     });

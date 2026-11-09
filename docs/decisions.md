@@ -3458,3 +3458,77 @@ unchanged.
   while a provider or status filter is set), and the live reconnect
   backoff now starts at 500 ms as documented (was 1000 — `attempt++`
   ran before the delay).
+
+## v1.3 Task 14 — UI Usage + Routing screens (2026-11-09)
+
+- **"Stacked bars of cost per day" resolved as paid + would-have-
+  paid:** `/ui/api/usage` only supports single-dimension groups
+  (`day | model | provider | client`), so the day×group matrix the
+  plan's wording could imply (cost per day stacked by model/client)
+  is not available from the API — extending it would have meant a
+  Task 12 surface change outside this task's Files block. The daily
+  bar instead stacks `costUsd` (what was paid) on `wouldCostUsd`
+  (what the local rows would have cost at the reference price, spec
+  §3.6) — the only cost split the API exposes — so each day's stack
+  reads as spend + savings and matches the "saved ≈ $X" headline.
+  The model/client group-by drives the totals table; tokens per day
+  are the LineChart series.
+- **Files outside the Files block:** `ui/index.html` — the plan
+  requires "CSS-variable colours for light and dark" and light+dark
+  PR screenshots, but the only palette was dark and every style lives
+  in index.html's `<style>` block. Added a
+  `@media (prefers-color-scheme: light)` palette, moved the hardcoded
+  status and JSON-tree colours onto variables (`--ok`, `--err`,
+  `--warn`, `--json-*`) so both schemes stay consistent, defined
+  `--series-1..6` for chart series in both palettes, and added the
+  `.panel`, `.legend`, `svg.chart`, `.usage-totals`, `h2` and
+  `header a.active` rules the new screens use. No markup or script
+  changed.
+- **X-axis edge labels anchored `start`/`end`** on the LineChart: the
+  first and last day sit exactly on the viewBox edge, where centred
+  text clips (seen in the first screenshot pass).
+- **Group-by is `model | client` only**, as the plan names (the API
+  also accepts `provider`; left out to stay on the named interface).
+- **Screenshots (light and dark):** produced locally with Playwright
+  against the built app + mock upstreams — reproduction steps in the
+  PR description; not committed (Task 13 precedent: no binaries in
+  the repo).
+- **Fix round 1 (PR #78): unpriced groups never render "$0.0000".**
+  When every request in a group or range is unpriced the cost and
+  saved figures show "—" (there is no priced sum; $0 would claim one),
+  and partial groups show "$X + N unpriced" instead of a bare dollar
+  figure. `saved` gets the same treatment because an unpriced request
+  has no reference price either — "saved ≈ $0.0000" would imply the
+  value was computed. Behaviour change in `ui/src/screens/Usage.tsx`
+  (`fmtCost` shared by the group table and the totals line); the
+  "unpriced requests are never summed as $0" test now asserts the
+  cell text and the absence of "$0.0000", plus a partial-group case.
+- **Fix round 1 (PR #78), files outside the Files block:**
+  `src/ui-api/static.ts` (Task 13 code) — the SPA fallback passed an
+  absolute index.html path to `res.sendFile`; send()'s dotfiles check
+  then rejected any install path containing a dot segment (~/.nvm,
+  ~/.npm/_npx, ~/.local) and `/ui/<client route>` 404'd. Now
+  `sendFile("index.html", { root: uiDir })` so the check sees only the
+  filename. New `src/ui-api/app.test.ts` — a supertest case against a
+  real express app serving a `…/.hidden/ui` dir (the static.test.ts
+  sendFile fake cannot see this failure; its call-args assertion was
+  updated to the new signature).
+- **Fix round 2 (PR #78): three owner-reviewed items.** Axis labels
+  moved out of the viewBox-stretched `<svg>` into an `.axis-labels`
+  HTML strip under each chart — SVG text scaled with the page width
+  (~20px at 1280px); the strip is a fixed 12px like the legend at any
+  container width, positioned by percentage so each label still sits
+  under its bar/point, and the LineChart edge anchoring is kept via
+  the first/last span's inline transform. The usage range is now
+  exactly `days` UTC calendar days ending today (`from` = 00:00:00Z
+  of today − (days−1), `to` = now, computed once and shared by the
+  /usage queries and fillDays) — "7 days" was rendering 8 slots
+  because `to − 7d` floors to the previous UTC day. `RoutingInfo`
+  types `prices` as `{ target: string; price?: Price; source?:
+  PriceSource }[]` with `Price`/`PriceSource` exported from
+  `ui/src/api.ts` matching src/cost/price-table.ts; the Routing
+  screen's local `Price` interface and `as` cast are gone.
+- **Fix round 2 (PR #78), files outside the Files block:**
+  `ui/src/api.ts` — the typed `/routing` prices contract lives beside
+  the other /ui/api types (`ui/index.html` was already declared in
+  this entry for the palette/rules work).

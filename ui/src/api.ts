@@ -152,12 +152,23 @@ export interface RoutingRule {
   when?: Record<string, unknown>;
 }
 
+/** USD per 1M tokens (src/cost/price-table.ts `Price`). */
+export interface Price {
+  input: number;
+  output: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}
+
+/** src/cost/price-table.ts `PriceSource`. */
+export type PriceSource = "override" | "local" | "live" | "bundled";
+
 export interface RoutingInfo {
   providers: RoutingProvider[];
   aliases: Record<string, RouteTarget>;
   rules: RoutingRule[];
   defaultProvider: string;
-  prices: { target: string; price?: unknown; source?: string }[];
+  prices: { target: string; price?: Price; source?: PriceSource }[];
 }
 
 export interface RoutePlan {

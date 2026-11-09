@@ -3,12 +3,14 @@ import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { Inspector } from "./screens/Inspector";
 import { Requests } from "./screens/Requests";
+import { Routing } from "./screens/Routing";
+import { Usage } from "./screens/Usage";
 
 /**
- * SPA entry (spec §3.9). Hash routes only — `#/requests` and
- * `#/requests/:id` — so the Express side needs nothing beyond the
- * static SPA fallback to index.html. Usage (3), Routing (4) and
- * Playground (5) are Tasks 14–15.
+ * SPA entry (spec §3.9). Hash routes only — `#/requests`,
+ * `#/requests/:id`, `#/usage`, `#/routing` — so the Express side
+ * needs nothing beyond the static SPA fallback to index.html.
+ * Playground (5) is Task 15.
  */
 
 function useHash(): string {
@@ -24,15 +26,31 @@ function useHash(): string {
 function App() {
   const hash = useHash();
   const inspector = /^#\/requests\/([^/]+)$/.exec(hash);
+  const nav = (route: string, label: string) => (
+    <a
+      href={`#${route}`}
+      class={
+        inspector === null && hash === `#${route}` ? "active" : ""
+      }
+    >
+      {label}
+    </a>
+  );
   return (
     <>
       <header>
         <span class="brand">babelgate</span>
-        <a href="#/requests">requests</a>
+        {nav("/requests", "requests")}
+        {nav("/usage", "usage")}
+        {nav("/routing", "routing")}
       </header>
       <main>
         {inspector !== null ? (
           <Inspector id={decodeURIComponent(inspector[1] ?? "")} />
+        ) : hash === "#/usage" ? (
+          <Usage />
+        ) : hash === "#/routing" ? (
+          <Routing />
         ) : (
           <Requests />
         )}
