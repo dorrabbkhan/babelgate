@@ -7,6 +7,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-11-13
+
+"See what's happening": every chat request produces one request trace —
+route, hops, usage, cached tokens, cost, client, translation notes and
+tool-call diagnostics — that reaches the log, a SQLite usage store,
+Prometheus and OpenTelemetry, and a built-in `/ui` shows it live. Agent
+CLIs gain an output-token cap, prompt caching that survives translation,
+and Gemini CLI as a tested entry point.
+
+### Added
+
+- **One request trace per chat request.** Routed provider/model, hops
+  and fallbacks, token usage, cached tokens, cost, client identity,
+  translation notes and tool-call diagnostics — emitted exactly once,
+  also on failure and client disconnect, and fanned out to isolated
+  sinks: the log line, the usage store, the in-memory body ring,
+  Prometheus and OpenTelemetry. A failing sink never affects a response.
+- **Built-in UI at `/ui`.** One static bundle, no extra service: a live
+  Requests feed, a per-request Inspector that shows the request in
+  source, canonical and target form side by side, Usage (cost and
+  tokens per day/model/client, "saved ≈ $X" for local rows), the
+  Routing table, and a Playground that streams up to four models side
+  by side — backed by a JSON API under `/ui/api`. Loopback only by
+  default (`UI`, `UI_ALLOW_REMOTE`, `UI_ALLOWED_HOSTS`; defaults `on` /
+  `false` / empty); `PROXY_API_KEY` opens it to the network when set.
+- **SQLite usage store.** Every traced request lands in a `node:sqlite`
+  database — tokens, latency, model, route and fallback hops, client
+  and cost — with daily retention pruning (`USAGE_STORE`, `USAGE_DB`,
+  `USAGE_RETENTION_DAYS`; defaults `on` / `~/.babelgate/usage.db` /
+  `30`; `/data/usage.db` in the Docker image). An unusable database
+  logs one warning, disables itself and never breaks serving.
+- **Cost per request.** The winning hop's `(provider, model)` is priced,
+  never the alias or the requested string: top-level `prices:` overrides
+  in `babelgate.yaml` first, `local` / `type: ollama` providers at $0,
+  `live_prices: true` for providers that report pricing in their model
+  list, then the bundled LiteLLM table (refreshed at release with
+  `npm run update:prices -- <commit>`). Local rows get a "would have
+  cost" against `observe.would_cost_reference`; unknown models keep
+  `costUsd: null` and count `babelgate_unpriced_requests_total`.
+- **`/metrics` and OpenTelemetry.** A Prometheus endpoint (`METRICS`,
+  default `on`; requires `PROXY_API_KEY` when set) with request, token
+  and cost counters, duration and TTFB histograms, tool-call failure
+  and repair counters, and sink-error counters — labels only, never
+  content. GenAI-convention OTel spans when
+  `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+- **Tool-call diagnostics and opt-in repair.** Every response's tool
+  calls are checked against the request's tools — `invalid_json`,
+  `fenced_json`, `not_object`, `unknown_tool`, `missing_required` — on
+  the trace, in the Inspector and on
+  `babelgate_tool_call_failures_total`. `repair_tool_calls: true` per
+  provider applies the three mechanical fixes (strip one markdown
+  fence, keep the single balanced `{…}`, drop trailing commas); repairs
+  are recorded and counted. With repair on, streamed argument deltas
+  are held and released as one delta per call — repaired, or released
+  unrepaired with a diagnostic when the stream ends mid-call.
+- **Output-token cap.** `max_output_tokens` per provider in
+  `babelgate.yaml` (`TARGET_MAX_OUTPUT_TOKENS` in env-only mode) clamps
+  `max_tokens`, so Claude Code's large default no longer needs
+  `CLAUDE_CODE_MAX_OUTPUT_TOKENS` set by hand. Off by default.
+- **Prompt caching survives translation.** Canonical cache hints on
+  system parts, messages, tools and tool results — the tool-result
+  carry (PR #82) is where Claude Code's moving breakpoint lands, so
+  its agent loop now reads the cache across turns. Providers with
+  `cache_hints: true` get Anthropic-style `cache_control` markers
+  upstream; prefixes are kept byte-stable so automatic prefix caches
+  (OpenAI, DeepSeek, Ollama) hit. Cached tokens are counted in
+  canonical usage and priced at cache prices.
+- **Gemini CLI entry point.** `GOOGLE_GEMINI_BASE_URL` +
+  `GEMINI_API_KEY` runs Gemini CLI through babelgate on any backend,
+  streaming and tools intact — recipe in `docs/recipes/gemini-cli.md`,
+  release-gated on a non-Gemini model. Gemini `:countTokens` is
+  answered locally with the `ceil(chars/4)` estimate and
+  `x-babelgate-token-estimate: true`, like the other dialects' count
+  endpoints.
+- **New configuration.** The `observe:` YAML block (`usage_store`,
+  `usage_db`, `retention_days`, `inspector_buffer`, `log_bodies`,
+  `would_cost_reference`), the provider keys `max_output_tokens`,
+  `cache_hints`, `live_prices`, `repair_tool_calls` and `local`, and
+  top-level `prices:` overrides. Env vars and defaults: `USAGE_STORE`
+  `on`, `USAGE_DB` `~/.babelgate/usage.db`, `USAGE_RETENTION_DAYS` `30`,
+  `INSPECTOR_BUFFER` `50`, `LOG_BODIES` `false`, `METRICS` `on`, `UI`
+  `on`, `UI_ALLOW_REMOTE` `false`, `UI_ALLOWED_HOSTS` empty,
+  `OTEL_EXPORTER_OTLP_ENDPOINT` unset, `TARGET_MAX_OUTPUT_TOKENS` unset.
+  Every behaviour that changes client-visible output (cap, cache hints,
+  repair) is opt-in and defaults off.
+
+### Changed
+
+- **Node `>=22.13` is required** (`engines`) for `node:sqlite`.
+- **Replies carry cached-token usage fields** when the provider reports
+  them — `cache_read_input_tokens` / `cache_creation_input_tokens`
+  (Anthropic), `prompt_tokens_details.cached_tokens` (OpenAI),
+  `cachedContentTokenCount` (Gemini) — emitted only when non-zero, so
+  replies without caching are byte-identical to before.
+- **Unsupported Gemini methods return 501** naming the method
+  (`embedContent is not supported`) instead of falling through to the
+  chat flow.
+
+### Known limitations
+
+- **No explicit Gemini caching** — `cachedContents` is not translated,
+  and OpenAI's `prompt_cache_key` / `prompt_cache_breakpoint` are not
+  emitted.
+- **No content in OTel** — prompt and completion text never leaves in
+  spans (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_CONTENT` is ignored), and
+  `traceparent` is not injected toward upstreams.
+- **The UI is single-user** — no users, roles or per-user keys.
+- **No runtime price fetches** — the bundled table only refreshes via
+  `npm run update:prices`; live prices come from providers' own model
+  lists (`live_prices`).
+
 ## [1.2.0] - 2026-11-03
 
 "One endpoint, many providers": one babelgate instance serves every client
@@ -305,7 +416,8 @@ gets the repository ready for outside contributors.
 - **Ollama `thinking` output is dropped** by the proxy (the canonical
   format has no field for it); planned for v1.1.
 
-[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.0...v1.1.1

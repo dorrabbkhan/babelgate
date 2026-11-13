@@ -3858,3 +3858,43 @@ cache.
   reports cache reads across a tool loop` passed (4.2 s) together
   with `openrouter anthropic model reports cache reads`; gate
   A-cache passed on this branch (see the Task 17 entry).
+
+## v1.3 Task 18 — CHANGELOG, roadmap, 1.3.0 (2026-11-13) · OWNER GATE
+
+- **Bundled prices refreshed** (`src/cost/prices.json`, committed
+  separately as `chore: refresh bundled prices`): LiteLLM
+  `model_prices_and_context_window.json` at commit
+  `77b4644523c20e8338f1986d88d24a5c6ed22b3a` (3 322 chat models,
+  bundled 2026-11-06, Task 8) → `6a1f81b9f8bd365718e781c50141fd3164721dbb`
+  (3 423 chat models, BerriAI/litellm HEAD on 2026-11-13). Diff: 103
+  models added, 2 removed, 18 price rows changed among the 3 320
+  models present in both. Fetch needed `NODE_USE_ENV_PROXY=1` — the
+  script's plain `fetch` does not read proxy env vars in this sandbox;
+  the script itself is unchanged.
+- **Version `1.3.0`** set via `npm version 1.3.0 --no-git-tag-version`:
+  `package.json` and the two root `"version"` entries of
+  `package-lock.json` only; nothing else in the lockfile moved
+  (verified with `git diff`).
+- **CHANGELOG `## [1.3.0] - 2026-11-13`** with the plan's sections —
+  a "See what's happening" summary paragraph, then Added (request
+  trace, `/ui` + Inspector + Playground, SQLite usage store, cost,
+  `/metrics` + OTel, tool-call diagnostics and opt-in repair,
+  output-token cap, cache mapping incl. the PR #82 tool-result carry,
+  Gemini CLI entry point and `:countTokens`, new `observe:`/provider
+  config keys and env defaults), Changed (`engines >=22.13`;
+  cached-token usage fields in replies when providers report them;
+  unsupported Gemini methods return 501), Known limitations (spec
+  §2.2: no explicit Gemini cache / `prompt_cache_key`, no content in
+  OTel, UI single-user, no runtime price fetch). Compare links:
+  `[Unreleased]` → `v1.3.0...HEAD`, `[1.3.0]` → `v1.2.0...v1.3.0`.
+- **Roadmap** per the plan and conductor notes: status "v1.3 released …
+  Next: v1.4", Last revised 2026-11-13, v1.3 size (M) → (L), and the
+  "Carried over from v1.2: release Gates 1–2" bullet removed — retired
+  by D10; gates A, A-cache, B and C passed 2026-11-13 (Task 17 entry).
+- **Files outside the Files block:** `src/cost/prices.json` — the
+  task's own Step 1 names it ("run `npm run update:prices`, commit
+  separately"); it is outside the Modify list, recorded here for
+  completeness. No other files outside the block.
+- **Owner steps after merge** (in the PR body, not done here): tag
+  `v1.3.0`, `npm publish --access public`, the GHCR image, verify
+  `npx -y babelgate@1.3.0 --help` and that `/ui` loads.

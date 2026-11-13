@@ -1,8 +1,9 @@
 # babelgate roadmap
 
-**Status:** v1.2 released — one endpoint, many providers: all four client formats on one
-port, model-name routing with aliases and fallbacks, a merged model list and `babelgate.yaml`.
-**Next:** v1.3. Last revised 2026-11-04. Reasoning behind this roadmap: the 2026-10-26 roadmap design
+**Status:** v1.3 released — see what's happening: one request trace per chat request to the
+log, a SQLite usage store, Prometheus and OpenTelemetry, and the built-in `/ui`; output-token
+cap, prompt caching mapped, Gemini CLI entry point.
+**Next:** v1.4. Last revised 2026-11-13. Reasoning behind this roadmap: the 2026-10-26 roadmap design
 spec and the 2026-11-04 roadmap revision spec in `docs/superpowers/specs/`.
 
 **Positioning:** **every agent and SDK on every model.** A small, typed, contract-tested gateway that
@@ -96,7 +97,7 @@ across every source × target, and a live smoke run against real upstreams befor
 - **OpenAI-compatible targets as config.** Groq, Together, DeepSeek, OpenRouter, LM Studio, vLLM,
   llama.cpp: `type: openai-compatible, base_url`, no new adapter. ~15 providers for free.
 
-### v1.3 See what's happening (M)
+### v1.3 See what's happening (L)
 - **Usage store.** SQLite: tokens, latency, model, route and fallback hops per request, and the client
   (User-Agent: Claude Code, Codex, Gemini CLI, an SDK) so spend can be seen per agent.
 - **Cost.** Bundled, updatable price table; cost per request, model and day. Local models show $0 and
@@ -114,8 +115,6 @@ across every source × target, and a live smoke run against real upstreams befor
 - **Gemini CLI entry point.** Recipe (`GOOGLE_GEMINI_BASE_URL`) and a live gate where Gemini CLI
   completes the edit task on a non-Gemini model.
 - **Privacy by default.** Prompt bodies are not stored unless `LOG_BODIES=true`; redaction hooks.
-- **Carried over from v1.2: release Gates 1–2.** Claude Code ↔ GPU Ollama (`qwen3-coder:30b`) and Claude Code ↔
-  the hybrid YAML config, per `docs/gates/gpu-ollama.md`, run before the v1.3 tag.
 
 ### v1.4 Codex on any model (M) · new entry point
 - **OpenAI Responses API as a fifth adapter**, source and target. Codex CLI speaks only Responses since
