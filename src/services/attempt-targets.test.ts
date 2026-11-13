@@ -293,6 +293,12 @@ describe("cache hints (spec §3.2)", () => {
           },
         ],
       },
+      {
+        role: "tool",
+        toolCallId: "call_1",
+        content: "18C, sunny",
+        cache: {},
+      },
     ],
     tools: [
       {
@@ -325,6 +331,7 @@ describe("cache hints (spec §3.2)", () => {
     // "\n\n" join encoders produce for hinted content today.
     expect(out.messages[0]!.content).toBe("A\n\nB");
     for (const m of out.messages) {
+      expect(m).not.toHaveProperty("cache");
       if (Array.isArray(m.content)) {
         for (const p of m.content) {
           expect(p).not.toHaveProperty("cache");

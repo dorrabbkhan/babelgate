@@ -3761,3 +3761,77 @@ unchanged.
 - **Not run here:** the live suite and the gates themselves — this
   sandbox has no API keys, Ollama, `claude` or `gemini` CLI. The owner
   runs them and fills in the results above.
+
+## v1.3 Task 17a — Cache hints on tool results (2026-11-13) · OWNER REVIEW
+
+Off-plan fix approved by the owner (PR #81, option 1) after the gate
+A-cache run showed Claude Code's moving breakpoint — which sits on the
+last `tool_result` block or inside its `content` — was dropped at
+decode (`cache_control_dropped`), so the agent loop never read the
+cache.
+
+- **Canonical shape (interface change):** `CanonicalMessage.cache?:
+  CanonicalCacheHint`, documented `role: "tool"` only — other roles
+  already carry hints on their content parts and `tools[]`/system have
+  their own shapes. This is the smallest shape that round-trips: a
+  tool message's `content` stays a `string`, no part-array reshaping
+  on either side, and the hint has exactly one home per tool result.
+  `canonical.schema.ts` moved in the same commit.
+- **Decode precedence:** the block-level `cache_control` on a
+  `tool_result` wins — it ends the whole result — else the LAST hinted
+  nested text block (Claude Code's breakpoint sits on the last block).
+  Extra hints beyond the one carried still fire
+  `cache_control_dropped` (`hasUncarriedCacheControl` counts hinted
+  positions per tool_result; >1 is uncarried).
+- **Encode:** the hint goes back onto the `tool_result` block itself
+  (never onto nested content), so `limitCacheBreakpoints` counts it in
+  the same walk; the cap test proves a tool-result hint is one of the
+  "last 4" kept. The OpenAI encoder emits a hinted tool message as
+  `content: [{type: "text", text, cache_control}]` — OpenAI's
+  ChatCompletionToolMessageParam allows `string | ChatCompletionContentPartText[]`
+  and OpenRouter forwards block-level markers to Anthropic
+  interchangeably; unhinted tool messages stay a plain string,
+  byte-identical to before.
+- **Open question answer (why requests 3–10 had neither read nor
+  write):** unit evidence (the `claude-code.test.ts` pair case):
+  anthropic decode → openai encode keeps the system text and tools
+  byte-stable across turns, and the one surviving marker lands on the
+  system message — a single `cache_control` on the joined system text,
+  however many system blocks were hinted. So the surviving breakpoint
+  covered only the system prefix; the 11 403-token write in request 2
+  was recorded at a longer breakpoint boundary (tools/messages, which
+  still went upstream that request). Anthropic only creates or reads
+  cache entries at marked boundaries at or above the model's minimum
+  cacheable length, and the moving tool_result marker — the one
+  covering the growing bulk — was dropped, leaving a marker on a
+  prefix that was likely below the minimum or not previously written
+  at that boundary. Provider drift is also possible: OpenRouter's
+  sticky routing pins a provider only after a cache hit is observed,
+  and none ever was. What we cannot verify in-process: whether Claude
+  Code's own system text is byte-stable across requests (our encoding
+  of it is).
+- **Wire evidence:** OpenAI Chat Completions reference —
+  `ChatCompletionToolMessageParam.content` is "string or array of
+  ChatCompletionContentPartText"; "For tool messages, only type `text`
+  is supported" (https://developers.openai.com/api/reference/resources/chat).
+  OpenRouter Prompt Caching docs — "Place `cache_control` directly on
+  individual content blocks" and "The block-level markers are
+  interchangeable: a text block marked with Anthropic-style
+  `cache_control` gets a `prompt_cache_breakpoint` when routed to a
+  supporting OpenAI model" (https://openrouter.ai/docs/features/prompt-caching).
+- **Base:** stacked on `v1.3/task-17-release-gates` (PR #81, open) —
+  the Files block names `tests/live/observe.live.test.ts`, which exists
+  only on that branch; the code changes apply identically on main.
+- **Files outside the Files block:** `tests/integration/claude-code.test.ts`
+  (the named pair test — the Files block says "the matching *.test.ts
+  files" and claude-code.test.ts is the Claude-Code-shaped request
+  suite), `tests/contracts/canonical.schema.test.ts` (schema case for
+  the new message field — required by the canonical-change rule),
+  `src/transformers/adapters/gemini.adapter.test.ts` /
+  `ollama.adapter.test.ts` (the named "unchanged output" proofs).
+  `src/transformers/adapters/anthropic.adapter.ts` was named but needed
+  no change: the note hook and the cap call already live there and
+  both helpers changed inside `anthropic.cache.ts`/`anthropic.messages.ts`.
+- **Not run here:** the new live case `openrouter anthropic model
+  reports cache reads across a tool loop` — no API keys in the
+  sandbox; the owner runs `npm run test:live`.

@@ -111,16 +111,24 @@ function stripCacheHints(
   }
 
   out.messages = canonical.messages.map((m) => {
-    if (!Array.isArray(m.content)) return m;
-    if (!m.content.some((p) => p.cache !== undefined)) return m;
+    // A tool result's hint lives on the message itself (Task 17a);
+    // hints on other roles live on their content parts.
+    let next = m;
+    if (m.cache !== undefined) {
+      stripped = true;
+      const { cache: _hint, ...rest } = m;
+      next = rest;
+    }
+    if (!Array.isArray(next.content)) return next;
+    if (!next.content.some((p) => p.cache !== undefined)) return next;
     stripped = true;
     if (
-      m.role === "system" &&
-      m.content.every((p) => p.type === "text")
+      next.role === "system" &&
+      next.content.every((p) => p.type === "text")
     ) {
-      return { ...m, content: systemText(m.content) ?? "" };
+      return { ...next, content: systemText(next.content) ?? "" };
     }
-    return { ...m, content: m.content.map(withoutHint) };
+    return { ...next, content: next.content.map(withoutHint) };
   });
 
   if (canonical.tools?.some((t) => t.cache !== undefined)) {

@@ -7,6 +7,8 @@ import {
   afterEach,
   afterAll,
 } from "vitest";
+import { writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { setupServer } from "msw/node";
 import request from "supertest";
 import { app } from "../../src/app";
@@ -60,6 +62,7 @@ afterEach(() => {
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.MODEL_MAP;
   delete process.env.TARGET_CONTEXT_WINDOW;
+  delete process.env.BABELGATE_CONFIG;
   resetConfig();
 });
 
@@ -269,5 +272,210 @@ describe("Claude Code essentials (spec §3.5)", () => {
     const realUsage = delta.usage as { output_tokens?: number };
     expect(realUsage).toBeDefined();
     expect(typeof realUsage.output_tokens).toBe("number");
+  });
+});
+
+// Task 17a: Claude Code's moving breakpoint on the newest tool_result
+// must reach a cache_hints upstream — before this task the anthropic
+// decoder dropped it (cache_control_dropped) and the agent loop never
+// read the cache.
+describe("cache hints on tool results (Task 17a)", () => {
+  const TMP_CONFIG = join(__dirname, ".tmp-cache-hints.yaml");
+  const CACHE_HINTS_YAML = `default: openrouter
+providers:
+  openrouter:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+    cache_hints: true
+routes:
+  - match: "*"
+    to: openrouter/anthropic-claude
+`;
+
+  afterEach(() => {
+    rmSync(TMP_CONFIG, { force: true });
+  });
+
+  const SYSTEM = [
+    {
+      type: "text",
+      text: "You are Claude Code, a careful coding assistant.",
+      cache_control: { type: "ephemeral" },
+    },
+    {
+      type: "text",
+      text: "Follow the repository's conventions exactly.",
+      cache_control: { type: "ephemeral" },
+    },
+  ];
+  const TOOLS = [
+    {
+      name: "read_file",
+      description: "Read a file from disk.",
+      input_schema: {
+        type: "object",
+        properties: { path: { type: "string" } },
+      },
+      cache_control: { type: "ephemeral" },
+    },
+  ];
+  const TURN_1 = [
+    { role: "user", content: "Read package.json." },
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call_1",
+          name: "read_file",
+          input: { path: "package.json" },
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_1",
+          content: '{"name":"babelgate"}',
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    },
+  ];
+  // Turn 2 moves the breakpoint to the newest tool_result — the older
+  // one loses its cache_control exactly as Claude Code sends it.
+  const TURN_1_UNHINTED = TURN_1.map((m) => {
+    const content = (m as { content?: unknown }).content;
+    if (!Array.isArray(content)) return m;
+    return {
+      ...m,
+      content: content.map((b) => {
+        const { cache_control: _cc, ...rest } = b as Record<
+          string,
+          unknown
+        >;
+        return rest;
+      }),
+    };
+  });
+  const TURN_2 = [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "tool_use",
+          id: "call_2",
+          name: "read_file",
+          input: { path: "src/app.ts" },
+        },
+      ],
+    },
+    {
+      role: "user",
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "call_2",
+          content: [
+            { type: "text", text: "export const app = express();" },
+            {
+              type: "text",
+              text: "// end of file",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ],
+    },
+  ];
+
+  function claudeCodeBody(messages: unknown[]): object {
+    return {
+      model: "claude-code",
+      max_tokens: 1024,
+      system: SYSTEM,
+      tools: TOOLS,
+      messages,
+    };
+  }
+
+  it("anthropic → openai(cache_hints): the tool-result marker reaches the upstream body", async () => {
+    writeFileSync(TMP_CONFIG, CACHE_HINTS_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+
+    const first = await request(app)
+      .post("/v1/messages")
+      .set("anthropic-version", "2023-06-01")
+      .send(claudeCodeBody(TURN_1));
+    expect(first.status, JSON.stringify(first.body)).toBe(200);
+
+    const second = await request(app)
+      .post("/v1/messages")
+      .set("anthropic-version", "2023-06-01")
+      .send(claudeCodeBody([...TURN_1_UNHINTED, ...TURN_2]));
+    expect(second.status, JSON.stringify(second.body)).toBe(200);
+
+    expect(capturedRequests.openai).toHaveLength(2);
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const body1 = capturedRequests.openai[0] as any;
+    const body2 = capturedRequests.openai[1] as any;
+
+    // The surviving system marker: one cache_control on a text part
+    // covering the whole system prompt.
+    expect(body2.messages[0]).toEqual({
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: "You are Claude Code, a careful coding assistant.\n\nFollow the repository's conventions exactly.",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+    // The hinted tool definition keeps its breakpoint.
+    expect(body2.tools[0].cache_control).toEqual({ type: "ephemeral" });
+    // The moving breakpoint: the newest tool message carries it on a
+    // text content part.
+    const toolMsg2 = body2.messages[body2.messages.length - 1];
+    expect(toolMsg2).toEqual({
+      role: "tool",
+      tool_call_id: "call_2",
+      content: [
+        {
+          type: "text",
+          text: "export const app = express();\n// end of file",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+    // Request 1's moving marker was on tool message call_1.
+    const toolMsg1 = body1.messages[body1.messages.length - 1];
+    expect(toolMsg1).toEqual({
+      role: "tool",
+      tool_call_id: "call_1",
+      content: [
+        {
+          type: "text",
+          text: '{"name":"babelgate"}',
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    });
+    // Byte-stable prefix: everything before the moved marker is
+    // deep-equal across the two turns (tools included), and the older
+    // tool result's TEXT is unchanged — only its marker moved.
+    expect(body2.messages.slice(0, body1.messages.length - 1)).toEqual(
+      body1.messages.slice(0, -1),
+    );
+    expect(body2.messages[body1.messages.length - 1]).toEqual({
+      role: "tool",
+      tool_call_id: "call_1",
+      content: '{"name":"babelgate"}',
+    });
+    expect(body2.tools).toEqual(body1.tools);
   });
 });
