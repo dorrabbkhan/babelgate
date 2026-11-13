@@ -9,6 +9,10 @@
  *
  *   ts-node scripts/gates/record-shapes.ts <listenPort> <forwardBaseUrl> <outJsonl>
  *
+ * forwardBaseUrl may be http: or https: (a remote Responses upstream
+ * for the Codex recorder); the forwarded Host header is rewritten to
+ * the forward base's host so CDNs upstream of https: bases route it.
+ *
  * bodyShape keeps object keys and array lengths but replaces every
  * string with "<string:len>", every number with "<number>", every
  * boolean with "<bool>" and null with "<null>"; a non-JSON body is
@@ -17,6 +21,7 @@
  * pathname only and `queryKeys`/`headerNames` are name lists.
  */
 import http from "node:http";
+import https from "node:https";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
@@ -35,6 +40,22 @@ if (
 }
 
 const forward = new URL(forwardBase);
+
+// node:http only speaks http: — pick the transport by protocol once,
+// here, so an unsupported scheme fails at startup instead of throwing
+// inside a request handler.
+const forwardRequest =
+  forward.protocol === "https:"
+    ? https.request
+    : forward.protocol === "http:"
+      ? http.request
+      : null;
+if (forwardRequest === null) {
+  console.error(
+    `record-shapes: unsupported forward protocol "${forward.protocol}" (http: or https: only)`,
+  );
+  process.exit(2);
+}
 
 /** Headers that belong to this hop only — never forwarded either way. */
 const HOP_BY_HOP = new Set([
@@ -89,14 +110,18 @@ const server = http.createServer((req, res) => {
       ),
     );
 
-    const upstream = http.request(
+    const upstream = forwardRequest(
       {
         protocol: forward.protocol,
         hostname: forward.hostname,
         port: forward.port,
         method: req.method,
         path: `${forward.pathname.replace(/\/$/, "")}${req.url}`,
-        headers: { ...headers, "content-length": body.length },
+        headers: {
+          ...headers,
+          host: forward.host,
+          "content-length": body.length,
+        },
       },
       (upRes) => {
         const line = {
@@ -141,8 +166,15 @@ const server = http.createServer((req, res) => {
           ),
         }) + "\n",
       );
-      if (!res.headersSent) res.writeHead(502);
-      res.end();
+      console.error(
+        `record-shapes: forward error ${req.method} ${url.pathname}: ${
+          (err as NodeJS.ErrnoException).code ?? err.name
+        }`,
+      );
+      if (!res.headersSent) {
+        res.writeHead(502, { "content-type": "text/plain" });
+      }
+      res.end("record-shapes: upstream request failed\n");
     });
     upstream.end(body);
   });

@@ -12,15 +12,20 @@
 #   scripts/gates/record-codex.sh [--upstream <baseUrl>]
 #
 # Real upstream only — this script makes network calls and needs
-# OPENROUTER_API_KEY in the environment (the key is never printed and
-# never reaches the JSONL: header names only). --upstream is the
-# versioned Responses base URL the way Codex would use it, default
+# OPENROUTER_API_KEY: exported in the environment, or present as an
+# OPENROUTER_API_KEY= line in ./.env, read with the same dotenv parse
+# babelgate itself uses (only that variable is exported — the file is
+# never sourced and the value is never printed; the key never reaches
+# the JSONL: header names only). --upstream is the versioned Responses
+# base URL the way Codex would use it, default
 # https://openrouter.ai/api/v1; even for another upstream the provider
 # env_key stays OPENROUTER_API_KEY, so put that upstream's key there.
 #
 # Env overrides: CODEX_BIN (path to a codex binary, default: `codex`
 # on PATH or `npx -y @openai/codex`), RECORD_OUT (JSONL path, default
-# tmp/ under the repo).
+# tmp/ under the repo), CODEX_TIMEOUT_S (hard cap on the `codex exec`
+# run, default 900 — Codex retries a dead upstream forever, so without
+# the cap the script hangs).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -46,8 +51,20 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Key from the environment first; if unset, the same ./.env babelgate
+# loads — parsed with dotenv itself so quoting rules match, and only
+# this variable is exported (the file is never sourced, the value
+# never printed).
+if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -f .env ]; then
+  OPENROUTER_API_KEY="$(
+    node -e 'process.stdout.write(
+      require("dotenv").config({ quiet: true }).parsed?.OPENROUTER_API_KEY ?? "",
+    )' 2>/dev/null || true
+  )"
+  export OPENROUTER_API_KEY
+fi
 if [ -z "${OPENROUTER_API_KEY:-}" ]; then
-  echo "RECORD FAIL: OPENROUTER_API_KEY is not set" >&2
+  echo "RECORD FAIL: OPENROUTER_API_KEY is not set (env or .env)" >&2
   exit 1
 fi
 
@@ -146,19 +163,33 @@ EOF
 # Non-interactive Codex run. --skip-git-repo-check: the temp fixture
 # copy is not a git repo and Codex refuses to run outside one.
 # npm_config_cache/HOME point at scratch dirs so nothing writes to
-# the real ~/.npm or ~/.codex.
+# the real ~/.npm or ~/.codex. timeout + </dev/null: Codex retries an
+# unreachable upstream forever, so the run gets a hard cap (TERM, then
+# KILL after 30s) and no stdin to block on.
 (
   cd "$work/edit-task"
   env -u PROXY_API_KEY \
     HOME="$work/home" \
     CODEX_HOME="$work/codex-home" \
     npm_config_cache="$npm_cache" \
-    "${codex_cmd[@]}" exec --skip-git-repo-check "$PROMPT" \
-    >"$work/codex.log" 2>&1
+    timeout -k 30 "${CODEX_TIMEOUT_S:-900}" \
+      "${codex_cmd[@]}" exec --skip-git-repo-check "$PROMPT" \
+      </dev/null >"$work/codex.log" 2>&1
 ) || true
 
 # Give the last requests a beat to flush through the recorder.
 sleep 1
+
+# A timed-out or never-connecting run leaves no JSONL — that is a
+# recording failure, not an empty result.
+if [ ! -s "$out_jsonl" ]; then
+  echo "RECORD FAIL: no requests recorded" >&2
+  echo "--- recorder log (tail) ---" >&2
+  tail -20 "$work/recorder.log" >&2 || true
+  echo "--- codex log (tail) ---" >&2
+  tail -20 "$work/codex.log" >&2 || true
+  exit 1
+fi
 
 pass=""
 if (cd "$work/edit-task" && npm_config_cache="$npm_cache" npm test) \

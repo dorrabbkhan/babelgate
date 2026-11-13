@@ -3938,3 +3938,28 @@ config) are still open. Owner step: install Codex CLI, export
 `OPENROUTER_API_KEY`, run `scripts/gates/record-codex.sh` on this
 branch and attach the JSONL; a follow-up session then derives
 `turns.json` and the E12+ rows.
+
+**Fix round (2026-11-13):** the conductor's run hung — `record-shapes.ts`
+called `http.request` with `protocol: "https:"`, which throws
+synchronously inside the request handler, crashed the recorder on the
+first Codex request, and Codex retried the dead recorder forever.
+Fixes: `record-shapes.ts` now picks `https.request`/`http.request` by
+the forward base's protocol (unsupported schemes fail at startup),
+rewrites the forwarded `Host` header to the forward base's host (CDNs
+reject the client's `localhost:<port>`), and on an upstream `'error'`
+answers the client `502` + a short text body with one log line instead
+of crashing (verified locally: `http:` stub → one JSONL line and the
+stub saw `Host: 127.0.0.1:<stub port>`; unreachable
+`https://127.0.0.1:1` → two `502`s, recorder stayed up).
+`record-codex.sh` runs `codex exec` under `timeout -k 30
+"${CODEX_TIMEOUT_S:-900}"` with stdin `</dev/null`, exits 1 with
+`RECORD FAIL: no requests recorded` + recorder/codex log tails when
+the JSONL is missing or empty, and reads `OPENROUTER_API_KEY` from
+`./.env` (via dotenv itself, only that variable) when it is not
+exported. **Files outside the Files block:** `scripts/gates/
+record-shapes.ts` (the interface the task consumes, modified to
+support `https:` forward bases) and `scripts/gates/
+check-openrouter-anthropic.sh` (Step 3 as a reusable script — prints
+status, `type`, `stop_reason`, `error.type` and per content block its
+`type` + non-empty-`signature` boolean/length; doc URLs in its
+header).
