@@ -52,6 +52,7 @@ const WIRE_EXT: Record<Provider, string> = {
   anthropic: "sse",
   gemini: "sse",
   ollama: "ndjson",
+  responses: "sse",
 };
 
 const SEED = 0x5eed;
@@ -101,6 +102,20 @@ const SOURCE_REQUESTS: Record<
     sourceRequest: {
       model: "m",
       messages: [{ role: "user", content: "hi" }],
+      stream: true,
+    },
+    query: {},
+  },
+  responses: {
+    sourceRequest: {
+      model: "m",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "hi" }],
+        },
+      ],
       stream: true,
     },
     query: {},

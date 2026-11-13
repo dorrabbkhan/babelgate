@@ -42,4 +42,6 @@ export const GENAI_PROVIDER_NAMES: Record<Provider, string> = {
   anthropic: "anthropic",
   gemini: "gcp.gemini",
   ollama: "ollama",
+  // The Responses API is an OpenAI-family API.
+  responses: "openai",
 };

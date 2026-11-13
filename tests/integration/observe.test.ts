@@ -64,6 +64,7 @@ import bundledPrices from "../../src/cost/prices.json";
 import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import anthropicFixtures from "../fixtures/anthropic.json";
+import responsesFixtures from "../fixtures/responses.json";
 import ollamaFixtures from "../fixtures/ollama.json";
 
 /**
@@ -487,6 +488,7 @@ describe("request trace (spec §3.1)", () => {
       anthropic: anthropicFixtures.requests.basic,
       ollama: ollamaFixtures.requests.basic,
       gemini: geminiFixtures.requests.basic,
+      responses: responsesFixtures.requests.basic,
     };
 
     for (const [provider, routes] of Object.entries(PROVIDER_ROUTES)) {
@@ -496,7 +498,7 @@ describe("request trace (spec §3.1)", () => {
         typeof fixture.model === "string" ? fixture.model : "gemini-pro";
       for (const route of routes) {
         if (route.kind !== "chat") continue;
-        const cases: { path: string; body: unknown; stream: boolean }[] =
+        const cases: { path: string; body: unknown; stream: boolean }[] = (
           route.streamRequestPath !== undefined
             ? [
                 // The stream variant is the dedicated endpoint, the
@@ -525,7 +527,12 @@ describe("request trace (spec §3.1)", () => {
                   body: { ...fixture, stream: true },
                   stream: true,
                 },
-              ];
+              ]
+        ).filter(
+          // Responses streaming is a 501 stub until Task 4 — only the
+          // non-streaming chat case is expected to open a trace.
+          ({ stream }) => !(sourceApi === "responses" && stream),
+        );
 
         for (const { path, body, stream } of cases) {
           const before = traces.length;

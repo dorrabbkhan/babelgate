@@ -22,6 +22,7 @@ import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import ollamaFixtures from "../fixtures/ollama.json";
 import anthropicFixtures from "../fixtures/anthropic.json";
+import responsesFixtures from "../fixtures/responses.json";
 
 /**
  * Registry-driven coverage: every provider pair gets a generated
@@ -39,6 +40,7 @@ const FIXTURES: Record<
   gemini: geminiFixtures,
   ollama: ollamaFixtures,
   anthropic: anthropicFixtures,
+  responses: responsesFixtures,
 };
 
 // Shape assertions that prove the response came back in SOURCE format
@@ -62,6 +64,11 @@ const SOURCE_FORMAT_CHECKS: Record<Provider, (body: unknown) => void> = {
     expect(body.type).toBe("message");
     expect(body.role).toBe("assistant");
     expect(Array.isArray(body.content)).toBe(true);
+  },
+  responses: (b) => {
+    const body = b as { object?: string; output?: unknown[] };
+    expect(body.object).toBe("response");
+    expect(Array.isArray(body.output)).toBe(true);
   },
 };
 
@@ -87,6 +94,13 @@ const MODEL_LIST_CHECKS: Record<Provider, (body: unknown) => void> = {
     const body = b as { data?: { id: string; type?: string }[] };
     expect(Array.isArray(body.data)).toBe(true);
     expect(body.data![0]!.type).toBe("model");
+  },
+  // A responses source's model list is the OpenAI list shape.
+  responses: (b) => {
+    const body = b as { object?: string; data?: { id: string }[] };
+    expect(body.object).toBe("list");
+    expect(body.data!.length).toBeGreaterThan(0);
+    expect(body.data![0]!.id).toBeTruthy();
   },
 };
 
@@ -160,6 +174,16 @@ function expectCachedUsage(
     expect(b.usageMetadata?.promptTokenCount).toBe(
       CACHED_USAGE.inputTokens,
     );
+    return;
+  }
+  if (source === "responses") {
+    // input_tokens_details is always emitted; zero when the target's
+    // dialect carried nothing.
+    const details = b.usage?.input_tokens_details;
+    expect(details?.cached_tokens).toBe(expected.read ?? 0);
+    expect(details?.cache_write_tokens).toBe(expected.write ?? 0);
+    expect(b.usage.input_tokens).toBe(CACHED_USAGE.inputTokens);
+    expect(b.usage.output_tokens).toBe(CACHED_USAGE.outputTokens);
     return;
   }
   // ollama: inputTokens only — the wire has no cache fields.

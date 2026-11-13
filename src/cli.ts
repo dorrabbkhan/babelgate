@@ -18,7 +18,13 @@ export interface CliArgs {
 }
 
 const PRESETS = ["claude-code", "openai-apps"] as const;
-const PROVIDERS: Provider[] = ["openai", "gemini", "ollama", "anthropic"];
+const PROVIDERS: Provider[] = [
+  "openai",
+  "gemini",
+  "ollama",
+  "anthropic",
+  "responses",
+];
 
 /**
  * Parses CLI arguments. Unknown flags and invalid values throw an error

@@ -217,6 +217,8 @@ describe("otel sink (spec §3.8)", () => {
       anthropic: "anthropic",
       gemini: "gcp.gemini",
       ollama: "ollama",
+      // The Responses API is an OpenAI-family API.
+      responses: "openai",
     });
   });
 

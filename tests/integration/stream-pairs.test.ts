@@ -36,6 +36,7 @@ import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import ollamaFixtures from "../fixtures/ollama.json";
 import anthropicFixtures from "../fixtures/anthropic.json";
+import responsesFixtures from "../fixtures/responses.json";
 
 /**
  * Full pair matrix (spec §4.5, §5 milestone 2): every ordered pair of
@@ -71,6 +72,7 @@ const PARALLEL_CALL_COUNTS: Record<Provider, number> = {
   anthropic: 2,
   ollama: 2,
   gemini: 3,
+  responses: 2,
 };
 
 const STREAMS_DIR = join(__dirname, "..", "fixtures", "streams");
@@ -82,6 +84,7 @@ const CLIENT_CALL_ID: Record<Provider, string> = {
   anthropic: "toolu_1",
   ollama: "call_1",
   gemini: "call_1",
+  responses: "call_1",
 };
 
 const SOURCE_FIXTURES: Record<
@@ -92,6 +95,7 @@ const SOURCE_FIXTURES: Record<
   gemini: geminiFixtures,
   ollama: ollamaFixtures,
   anthropic: anthropicFixtures,
+  responses: responsesFixtures,
 };
 
 /**

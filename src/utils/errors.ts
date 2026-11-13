@@ -45,6 +45,42 @@ export class ValidationError extends ProxyError {
   }
 }
 
+/**
+ * 404 — the path exists in the client's API dialect but the proxy does
+ * not serve it by design (v1.4 spec §2.2: the stateful Responses
+ * retrieval/deletion/compact endpoints). Canonical kind `not_found`.
+ */
+export class NotFoundError extends ProxyError {
+  constructor(message: string, context?: Record<string, unknown>) {
+    super(message, 404, "NOT_FOUND", context);
+  }
+}
+
+/**
+ * 400 naming one request field the proxy refuses by design (v1.4 spec
+ * §2.2: `previous_response_id`, `conversation`, `store: true`, and the
+ * owner-decided `additional_tools` responses-lite marker). The
+ * canonical error carries the OpenAI-style envelope details — `code`
+ * and `param` — as extra fields on the CanonicalError object; dialects
+ * whose error envelope has them (responses, openai) render them, the
+ * rest see an ordinary invalid_request.
+ */
+export class UnsupportedParameterError extends ValidationError {
+  constructor(
+    public readonly param: string,
+    message: string,
+  ) {
+    super(message);
+  }
+
+  toCanonical(): CanonicalError {
+    return Object.assign(super.toCanonical(), {
+      code: "unsupported_parameter",
+      param: this.param,
+    });
+  }
+}
+
 export class TransformError extends ProxyError {
   constructor(message: string, context?: Record<string, unknown>) {
     super(message, 500, "TRANSFORM_ERROR", context);

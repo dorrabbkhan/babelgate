@@ -82,6 +82,7 @@ export function authHeaders(entry: ProviderEntry): Record<string, string> {
 
   switch (entry.type) {
     case "openai":
+    case "responses":
       return { Authorization: `Bearer ${entry.apiKey}` };
     case "anthropic":
       return {

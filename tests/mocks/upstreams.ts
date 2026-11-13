@@ -9,6 +9,7 @@ import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import ollamaFixtures from "../fixtures/ollama.json";
 import anthropicFixtures from "../fixtures/anthropic.json";
+import responsesFixtures from "../fixtures/responses.json";
 
 /** Mock hostnames used as *_API_BASE_URL in tests */
 export const MOCK_BASE_URLS: Record<Provider, string> = {
@@ -16,6 +17,7 @@ export const MOCK_BASE_URLS: Record<Provider, string> = {
   gemini: "http://gemini.mock",
   ollama: "http://ollama.mock",
   anthropic: "http://anthropic.mock",
+  responses: "http://responses.mock",
 };
 
 /** A second OpenAI-type host for multi-provider (fallback) tests. */
@@ -30,6 +32,7 @@ export const capturedRequests: Record<Provider, unknown[]> = {
   gemini: [],
   ollama: [],
   anthropic: [],
+  responses: [],
 };
 
 /** Captured auth headers per provider */
@@ -38,6 +41,7 @@ export const capturedHeaders: Record<Provider, Headers[]> = {
   gemini: [],
   ollama: [],
   anthropic: [],
+  responses: [],
 };
 
 /** Captured requests/headers on the second OpenAI-type host */
@@ -87,6 +91,7 @@ const FIXTURE_RESPONSES: Record<Provider, Record<string, unknown>> = {
   gemini: geminiFixtures.responses,
   ollama: ollamaFixtures.responses,
   anthropic: anthropicFixtures.responses,
+  responses: responsesFixtures.responses,
 };
 
 // Named responses in tests/fixtures/<p>.json for cases that have one.
@@ -95,6 +100,7 @@ const CASE_RESPONSE: Record<Provider, Record<string, string>> = {
   anthropic: { tool_call: "tool_use" },
   ollama: {},
   gemini: {},
+  responses: {},
 };
 
 /**
@@ -149,6 +155,7 @@ const WIRE_EXT: Record<Provider, string> = {
   anthropic: "sse",
   gemini: "sse",
   ollama: "ndjson",
+  responses: "sse",
 };
 
 const STREAM_CONTENT_TYPE: Record<Provider, string> = {
@@ -156,6 +163,7 @@ const STREAM_CONTENT_TYPE: Record<Provider, string> = {
   anthropic: "text/event-stream",
   gemini: "text/event-stream",
   ollama: "application/x-ndjson",
+  responses: "text/event-stream",
 };
 
 /**
@@ -295,6 +303,33 @@ function cachedUsageBody(provider: Provider): unknown {
         prompt_eval_count: c.inputTokens,
         eval_count: c.outputTokens,
       };
+    case "responses":
+      return {
+        id: "resp_cached",
+        object: "response",
+        created_at: 1700000000,
+        status: "completed",
+        model: "m",
+        output: [
+          {
+            type: "message",
+            id: "msg_1",
+            status: "completed",
+            role: "assistant",
+            content: [{ type: "output_text", text: "hi", annotations: [] }],
+          },
+        ],
+        usage: {
+          input_tokens: c.inputTokens,
+          input_tokens_details: {
+            cached_tokens: c.readTokens,
+            cache_write_tokens: c.writeTokens,
+          },
+          output_tokens: c.outputTokens,
+          output_tokens_details: { reasoning_tokens: 0 },
+          total_tokens: c.inputTokens + c.outputTokens,
+        },
+      };
   }
 }
 
@@ -345,6 +380,13 @@ function cachedUsageStreamText(provider: Provider): string {
       return [
         '{"model":"m","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"hi"},"done":false}',
         `{"model":"m","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":${c.inputTokens},"eval_count":${c.outputTokens}}`,
+        "",
+      ].join("\n");
+    case "responses":
+      return [
+        'data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"hi"}',
+        "",
+        `data: {"type":"response.completed","response":{"id":"resp_c","object":"response","created_at":1,"status":"completed","model":"m","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hi","annotations":[]}]}],"usage":{"input_tokens":${c.inputTokens},"input_tokens_details":{"cached_tokens":${c.readTokens},"cache_write_tokens":${c.writeTokens}},"output_tokens":${c.outputTokens},"output_tokens_details":{"reasoning_tokens":0},"total_tokens":${c.inputTokens + c.outputTokens}}}}`,
         "",
       ].join("\n");
   }
@@ -441,6 +483,25 @@ export const upstreamHandlers = [
     return HttpResponse.json(nonStreamBody("ollama"));
   }),
 
+  http.post(`${MOCK_BASE_URLS.responses}/v1/responses`, async ({ request }) => {
+    const body = await request.json();
+    capturedRequests.responses.push(body);
+    capturedHeaders.responses.push(request.headers);
+    const override = responseOverrides.responses;
+    if (override) {
+      return HttpResponse.json(override.body ?? {}, {
+        status: override.status ?? 200,
+      });
+    }
+    if (cachedUsage.responses) {
+      return cachedUsageResponse("responses", request.url, body);
+    }
+    if (wantsStream(request.url, body)) {
+      return streamFixtureResponse("responses");
+    }
+    return HttpResponse.json(nonStreamBody("responses"));
+  }),
+
   http.post(`${MOCK_BASE_URLS.anthropic}/v1/messages`, async ({ request }) => {
     const body = await request.json();
     capturedRequests.anthropic.push(body);
@@ -493,6 +554,17 @@ export const upstreamHandlers = [
       });
     }
     return HttpResponse.json(ollamaFixtures.models);
+  }),
+
+  http.get(`${MOCK_BASE_URLS.responses}/v1/models`, ({ request }) => {
+    capturedHeaders.responses.push(request.headers);
+    const override = responseOverrides.responses;
+    if (override) {
+      return HttpResponse.json(override.body ?? {}, {
+        status: override.status ?? 200,
+      });
+    }
+    return HttpResponse.json(responsesFixtures.models);
   }),
 
   http.get(`${MOCK_BASE_URLS.anthropic}/v1/models`, ({ request }) => {

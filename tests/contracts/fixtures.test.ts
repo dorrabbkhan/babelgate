@@ -9,6 +9,7 @@ import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import ollamaFixtures from "../fixtures/ollama.json";
 import anthropicFixtures from "../fixtures/anthropic.json";
+import responsesFixtures from "../fixtures/responses.json";
 
 interface ProviderFixtures {
   requests: Record<string, unknown>;
@@ -20,9 +21,16 @@ const FIXTURES: Record<Provider, ProviderFixtures> = {
   gemini: geminiFixtures,
   ollama: ollamaFixtures,
   anthropic: anthropicFixtures,
+  responses: responsesFixtures,
 };
 
-const providers: Provider[] = ["openai", "gemini", "ollama", "anthropic"];
+const providers: Provider[] = [
+  "openai",
+  "gemini",
+  "ollama",
+  "anthropic",
+  "responses",
+];
 
 describe("Adapter golden fixtures", () => {
   describe.each(providers)("%s", (provider) => {

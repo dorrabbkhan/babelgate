@@ -1,0 +1,160 @@
+{
+  "source": "https://developers.openai.com/api/reference/responses (error envelope \u2014 same shape as chat completions), read 2026-11-13",
+  "render": {
+    "invalid_request": {
+      "error": {
+        "message": "test message",
+        "type": "invalid_request_error",
+        "param": null,
+        "code": "invalid_request"
+      }
+    },
+    "authentication": {
+      "error": {
+        "message": "test message",
+        "type": "authentication_error",
+        "param": null,
+        "code": "authentication"
+      }
+    },
+    "permission": {
+      "error": {
+        "message": "test message",
+        "type": "permission_error",
+        "param": null,
+        "code": "permission"
+      }
+    },
+    "not_found": {
+      "error": {
+        "message": "test message",
+        "type": "not_found_error",
+        "param": null,
+        "code": "not_found"
+      }
+    },
+    "request_too_large": {
+      "error": {
+        "message": "test message",
+        "type": "invalid_request_error",
+        "param": null,
+        "code": "request_too_large"
+      }
+    },
+    "rate_limit": {
+      "error": {
+        "message": "test message",
+        "type": "rate_limit_error",
+        "param": null,
+        "code": "rate_limit"
+      }
+    },
+    "unsupported": {
+      "error": {
+        "message": "test message",
+        "type": "invalid_request_error",
+        "param": null,
+        "code": "unsupported"
+      }
+    },
+    "upstream": {
+      "error": {
+        "message": "test message",
+        "type": "api_error",
+        "param": null,
+        "code": "upstream"
+      }
+    },
+    "unavailable": {
+      "error": {
+        "message": "test message",
+        "type": "service_unavailable_error",
+        "param": null,
+        "code": "unavailable"
+      }
+    },
+    "timeout": {
+      "error": {
+        "message": "test message",
+        "type": "api_error",
+        "param": null,
+        "code": "timeout"
+      }
+    },
+    "internal": {
+      "error": {
+        "message": "test message",
+        "type": "api_error",
+        "param": null,
+        "code": "internal"
+      }
+    }
+  },
+  "parse": [
+    {
+      "status": 429,
+      "body": {
+        "error": {
+          "message": "Your request rate increased too quickly. Please reduce the request rate and gradually increase it again.",
+          "type": "rate_limit_error",
+          "param": null,
+          "code": "slow_down"
+        }
+      },
+      "expectKind": "rate_limit",
+      "expectMessage": "Your request rate increased too quickly. Please reduce the request rate and gradually increase it again."
+    },
+    {
+      "status": 503,
+      "body": {
+        "error": {
+          "message": "The model is temporarily overloaded. Please retry your request after a brief delay.",
+          "type": "service_unavailable_error",
+          "param": null,
+          "code": "server_is_overloaded"
+        }
+      },
+      "expectKind": "unavailable",
+      "expectMessage": "The model is temporarily overloaded. Please retry your request after a brief delay."
+    },
+    {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "project_not_found",
+          "message": "The project proj_abc was not found",
+          "type": "invalid_request_error",
+          "param": null
+        }
+      },
+      "expectKind": "not_found",
+      "expectMessage": "The project proj_abc was not found"
+    },
+    {
+      "status": 404,
+      "body": {
+        "error": {
+          "message": "The model `gpt-5213` does not exist or you do not have access to it.",
+          "type": "invalid_request_error",
+          "param": null,
+          "code": "model_not_found"
+        }
+      },
+      "expectKind": "not_found",
+      "expectMessage": "The model `gpt-5213` does not exist or you do not have access to it."
+    },
+    {
+      "status": 400,
+      "body": {
+        "error": {
+          "message": "Invalid `service_tier` argument: The requested service tier is not allowed for this project.",
+          "type": "invalid_request_error",
+          "param": "service_tier",
+          "code": null
+        }
+      },
+      "expectKind": "invalid_request",
+      "expectMessage": "Invalid `service_tier` argument: The requested service tier is not allowed for this project."
+    }
+  ]
+}

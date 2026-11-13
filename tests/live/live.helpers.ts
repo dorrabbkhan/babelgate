@@ -57,6 +57,7 @@ const API_KEY_ENV: Record<Provider, string> = {
   gemini: 'GEMINI_API_KEY',
   ollama: 'OLLAMA_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
+  responses: 'RESPONSES_API_KEY',
 };
 
 /** Public base URL per live target; Ollama comes from the env. */
@@ -65,6 +66,7 @@ const LIVE_BASE_URLS: Record<Provider, string> = {
   gemini: 'https://generativelanguage.googleapis.com',
   ollama: LIVE_OLLAMA_URL,
   anthropic: 'https://api.anthropic.com',
+  responses: 'https://api.openai.com',
 };
 
 /** Cheap default model per live target; override with LIVE_<TARGET>_MODEL. */
@@ -73,6 +75,7 @@ const DEFAULT_LIVE_MODELS: Record<Provider, string> = {
   gemini: 'gemini-3.8-flash',
   ollama: LIVE_OLLAMA_MODEL,
   anthropic: 'claude-haiku-5-5',
+  responses: 'gpt-5-codex',
 };
 
 /**
@@ -341,6 +344,13 @@ export const MODEL_LIST_CHECKS: Record<Provider, (body: unknown) => void> = {
     expect(Array.isArray(body.data)).toBe(true);
     expect(body.data![0]!.type).toBe('model');
   },
+  // Same OpenAI list shape as the openai source.
+  responses: (b) => {
+    const body = b as { object?: string; data?: { id: string }[] };
+    expect(body.object).toBe('list');
+    expect(body.data!.length).toBeGreaterThan(0);
+    expect(body.data![0]!.id).toBeTruthy();
+  },
 };
 
 /** Pull the assistant text out of a source-shaped chat response. */
@@ -359,6 +369,7 @@ export const ASSISTANT_TEXT: Record<
     (b as { content?: { type?: string; text?: string }[] }).content?.find(
       (c) => c.type === 'text',
     )?.text,
+  responses: (b) => (b as { output_text?: string }).output_text,
 };
 
 /**
@@ -389,6 +400,14 @@ export const USAGE_CHECKS: Record<Provider, (body: unknown) => void> = {
       0,
     );
   },
+  responses: (b) => {
+    const usage = (
+      b as { usage?: { input_tokens?: number; output_tokens?: number } }
+    ).usage;
+    expect((usage?.input_tokens ?? 0) + (usage?.output_tokens ?? 0)).toBeGreaterThan(
+      0,
+    );
+  },
 };
 
 /** Model ids in a source-shaped model-list response (Gemini prefix stripped). */
@@ -404,5 +423,7 @@ export const MODEL_IDS: Record<Provider, (body: unknown) => string[]> = {
       (m) => m.name ?? '',
     ),
   anthropic: (b) =>
+    ((b as { data?: { id?: string }[] }).data ?? []).map((m) => m.id ?? ''),
+  responses: (b) =>
     ((b as { data?: { id?: string }[] }).data ?? []).map((m) => m.id ?? ''),
 };

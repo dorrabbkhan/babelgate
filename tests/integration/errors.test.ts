@@ -32,6 +32,7 @@ import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import ollamaFixtures from "../fixtures/ollama.json";
 import anthropicFixtures from "../fixtures/anthropic.json";
+import responsesFixtures from "../fixtures/responses.json";
 
 /**
  * Error-path coverage (spec §3.3): every upstream failure mode, rendered
@@ -58,6 +59,10 @@ const SOURCE_CALL: Record<Provider, { path: string; body: object }> = {
     body: { ...ollamaFixtures.requests.basic, stream: false } as object,
   },
   anthropic: { path: "/v1/messages", body: anthropicFixtures.requests.basic as object },
+  responses: {
+    path: "/v1/responses",
+    body: responsesFixtures.requests.basic as object,
+  },
 };
 
 // Upstream chat endpoint pattern per target (for msw server.use)
@@ -66,6 +71,7 @@ const UPSTREAM_CHAT_PATH: Record<Provider, string> = {
   gemini: "/v1beta/models/*",
   ollama: "/api/chat",
   anthropic: "/v1/messages",
+  responses: "/v1/responses",
 };
 
 const UPSTREAM_MESSAGE = "upstream says no";

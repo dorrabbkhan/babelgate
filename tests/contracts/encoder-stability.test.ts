@@ -38,11 +38,12 @@ const SEED = 0xec0d;
 const CASES_PER_PROVIDER = 100;
 const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "ollama"];
 
-const MESSAGE_FIELD: Record<Provider, "messages" | "contents"> = {
+const MESSAGE_FIELD: Record<Provider, "messages" | "contents" | "input"> = {
   openai: "messages",
   anthropic: "messages",
   ollama: "messages",
   gemini: "contents",
+  responses: "input",
 };
 
 /** Seeded generator — small fast PRNG, deterministic per run. */

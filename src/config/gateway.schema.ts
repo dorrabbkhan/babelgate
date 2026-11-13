@@ -62,7 +62,7 @@ const PROVIDER_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 
 const providerEntrySchema = z
   .strictObject({
-    type: z.enum(["openai", "anthropic", "gemini", "ollama"]),
+    type: z.enum(["openai", "anthropic", "gemini", "ollama", "responses"]),
     base_url: z.string().min(1),
     api_key_env: z.string().optional(),
     context_window: z.number().int().positive().optional(),
