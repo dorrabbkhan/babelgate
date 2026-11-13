@@ -217,6 +217,7 @@ export function createStreamEncoder(
           return chunk({ role: "assistant", content: "" });
         case "text_delta":
           return chunk({ content: event.text });
+        case "reasoning_start":
         case "reasoning_delta":
         case "reasoning_signature":
           // v1.4 §3.3: reasoning replay to this target lands in a

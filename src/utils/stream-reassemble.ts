@@ -1,5 +1,6 @@
 import type {
   CanonicalContentPart,
+  CanonicalReasoningOrigin,
   CanonicalReasoningSignature,
   CanonicalResponse,
   CanonicalStreamEvent,
@@ -40,7 +41,12 @@ export function reassembleStream(
   // content parts ahead of the reply text.
   const reasoning = new Map<
     number,
-    { text: string; signature?: CanonicalReasoningSignature }
+    {
+      text: string;
+      origin: CanonicalReasoningOrigin;
+      redacted: boolean;
+      signature?: CanonicalReasoningSignature;
+    }
   >();
   let nextIndex = 0;
 
@@ -63,16 +69,34 @@ export function reassembleStream(
       case "text_delta":
         text += event.text;
         break;
+      case "reasoning_start":
+        if (reasoning.has(event.index)) {
+          fail(`duplicate reasoning_start for index ${event.index}`);
+        }
+        reasoning.set(event.index, {
+          text: "",
+          origin: event.origin,
+          redacted: event.redacted === true,
+        });
+        break;
       case "reasoning_delta": {
-        const block = reasoning.get(event.index) ?? { text: "" };
+        const block = reasoning.get(event.index);
+        if (!block) {
+          fail(
+            `reasoning_delta for index ${event.index} with no reasoning_start`,
+          );
+        }
         block.text += event.text;
-        reasoning.set(event.index, block);
         break;
       }
       case "reasoning_signature": {
-        const block = reasoning.get(event.index) ?? { text: "" };
+        const block = reasoning.get(event.index);
+        if (!block) {
+          fail(
+            `reasoning_signature for index ${event.index} with no reasoning_start`,
+          );
+        }
         block.signature = event.signature;
-        reasoning.set(event.index, block);
         break;
       }
       case "tool_call_start":
@@ -139,9 +163,9 @@ export function reassembleStream(
     }));
 
   // Reasoning parts precede the reply text (thinking comes first on
-  // every provider). A reasoning block's origin comes from its
-  // signature; text-only reasoning (DeepSeek-style, no signature)
-  // uses the out-of-attempt convention {provider: "", model}.
+  // every provider). A block's origin — and whether it is redacted —
+  // comes from its reasoning_start, never from a signature, so
+  // unsigned stream reasoning (DeepSeek-style) keeps its provider.
   const reasoningParts: CanonicalContentPart[] = [
     ...reasoning.entries(),
   ]
@@ -150,7 +174,8 @@ export function reassembleStream(
       type: "reasoning" as const,
       reasoning: {
         ...(block.text !== "" && { text: block.text }),
-        origin: block.signature?.origin ?? { provider: "", model },
+        ...(block.redacted && { redacted: true as const }),
+        origin: block.origin,
       },
       ...(block.signature !== undefined && {
         signature: block.signature,

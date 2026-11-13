@@ -47,6 +47,89 @@ describe("reassembleStream", () => {
     });
   });
 
+  it("reasoning block takes origin from reasoning_start", () => {
+    const events: CanonicalStreamEvent[] = [
+      { type: "message_start", id: "msg_1", model: "deepseek-reasoner" },
+      {
+        type: "reasoning_start",
+        index: 0,
+        origin: { provider: "deepseek", model: "deepseek-reasoner" },
+      },
+      { type: "reasoning_delta", index: 0, text: "think " },
+      { type: "reasoning_delta", index: 0, text: "more" },
+      { type: "text_delta", text: "hi" },
+      { type: "message_end", finishReason: "stop" },
+    ];
+
+    expect(reassembleStream(events).message.content).toEqual([
+      {
+        type: "reasoning",
+        reasoning: {
+          text: "think more",
+          origin: { provider: "deepseek", model: "deepseek-reasoner" },
+        },
+      },
+      { type: "text", text: "hi" },
+    ]);
+  });
+
+  it("redacted reasoning block round-trips the flag", () => {
+    const signature = {
+      origin: { provider: "a", model: "claude-x" },
+      data: "OPAQUE",
+    };
+    const events: CanonicalStreamEvent[] = [
+      { type: "message_start", id: "msg_1", model: "claude-x" },
+      {
+        type: "reasoning_start",
+        index: 0,
+        origin: { provider: "a", model: "claude-x" },
+        redacted: true,
+      },
+      { type: "reasoning_signature", index: 0, signature },
+      { type: "text_delta", text: "ok" },
+      { type: "message_end", finishReason: "stop" },
+    ];
+
+    expect(reassembleStream(events).message.content).toEqual([
+      {
+        type: "reasoning",
+        reasoning: {
+          redacted: true,
+          origin: { provider: "a", model: "claude-x" },
+        },
+        signature,
+      },
+      { type: "text", text: "ok" },
+    ]);
+  });
+
+  it("reasoning_delta without reasoning_start fails", () => {
+    expect(() =>
+      reassembleStream([
+        { type: "message_start", id: "m", model: "m" },
+        { type: "reasoning_delta", index: 0, text: "think" },
+        { type: "message_end", finishReason: "stop" },
+      ]),
+    ).toThrow();
+  });
+
+  it("duplicate reasoning_start fails", () => {
+    const start = {
+      type: "reasoning_start" as const,
+      index: 0,
+      origin: { provider: "p", model: "m" },
+    };
+    expect(() =>
+      reassembleStream([
+        { type: "message_start", id: "m", model: "m" },
+        start,
+        start,
+        { type: "message_end", finishReason: "stop" },
+      ]),
+    ).toThrow();
+  });
+
   it("rejects a delta before its start", () => {
     expect(() =>
       reassembleStream([

@@ -366,6 +366,7 @@ export function createStreamEncoder(
             })
           );
         }
+        case "reasoning_start":
         case "reasoning_delta":
         case "reasoning_signature":
           // v1.4 §3.3: reasoning replay to this target lands in a

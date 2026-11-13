@@ -249,10 +249,26 @@ export interface CanonicalUsage {
  * 4. usage appears at most once, before message_end.
  * 5. Events of different blocks may interleave; encoders key tool state by
  *    index and never assume a call's events are contiguous.
+ * 6. reasoning_start(i) opens reasoning block i, once per index, before
+ *    any reasoning_delta(i) / reasoning_signature(i). Its origin is
+ *    {provider: currentAttempt().providerName,
+ *    model: currentAttempt().upstreamModel} inside an attempt, or
+ *    {provider: "", model} outside one (the plan's Task 7 convention).
  */
 export type CanonicalStreamEvent =
   | { type: "message_start"; id: string; model: string }
   | { type: "text_delta"; text: string }
+  | {
+      /** Opens a reasoning content block — the block-scoped data
+       *  (origin, redacted) that the per-delta events can't carry, like
+       *  tool_call_start opens a tool block. Own index namespace. */
+      type: "reasoning_start";
+      index: number;
+      origin: CanonicalReasoningOrigin;
+      /** Anthropic redacted_thinking — the block holds opaque data, no
+       *  readable text */
+      redacted?: boolean;
+    }
   | {
       type: "reasoning_delta";
       /** Index of the reasoning content block (own namespace — one

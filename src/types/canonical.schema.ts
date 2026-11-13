@@ -267,6 +267,12 @@ export const canonicalStreamEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("text_delta"), text: z.string() }),
   z.object({
+    type: z.literal("reasoning_start"),
+    index: streamIndexSchema,
+    origin: reasoningOriginSchema,
+    redacted: z.boolean().optional(),
+  }),
+  z.object({
     type: z.literal("reasoning_delta"),
     index: streamIndexSchema,
     text: z.string(),

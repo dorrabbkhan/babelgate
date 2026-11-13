@@ -4186,18 +4186,25 @@ decided:
   function/custom union (custom tools carry `name`, optional `description` and a `text`/`grammar`
   format); `CanonicalToolCall.signature`/`custom`; `CanonicalUsage.reasoningTokens`;
   `reasoning_delta`/`reasoning_signature` stream events; `tool_call_start` gains `custom`/`signature`.
+  Fix round 1 adds `reasoning_start {index, origin, redacted?}` — it opens a reasoning block the way
+  `tool_call_start` opens a tool block, carrying the block-scoped data the per-delta events can't:
+  unsigned stream reasoning (OpenAI-compatible/Ollama `reasoning_content`, spec §3.3) has no signature,
+  so without it the Task 8 Responses envelope would get reasoning parts with no origin; and Anthropic
+  `redacted_thinking` arrives as a content block with only `data`, so a signature alone couldn't mark
+  the reassembled part `redacted` for Task 7's re-encode.
 - **Union narrowing ripples (all required by the `CanonicalTool` union):** the four adapters that
   encode `tools[]` (anthropic.messages, openai.adapter, gemini.tools, ollama.tools) and
   `tool-diagnostics.ts` now narrow on `tool.type === "function"` and reject `type: "custom"` with a
   `ValidationError` — custom tools are lowered by `canonicalForTarget` in Task 5, so one reaching an
   encoder is a bug. `tool-diagnostics` also maps custom tools by `t.name` for `unknown_tool`.
 - **New stream-event ripples:** the four target stream encoders (anthropic/gemini/ollama/openai
-  `.stream.ts`) drop `reasoning_delta`/`reasoning_signature` — replay to a target lands in its own
-  task; reasoning a target can't take is dropped (spec §3.3). `token-estimate.ts` counts reasoning
+  `.stream.ts`) drop `reasoning_start`/`reasoning_delta`/`reasoning_signature` — replay to a target
+  lands in its own task; reasoning a target can't take is dropped (spec §3.3). `token-estimate.ts` counts reasoning
   deltas as output (billed output per §3.2). `stream-reassemble.ts` folds reasoning events into
-  reasoning content parts ahead of reply text — a signed block's `origin` comes from its signature;
-  unsigned text-only reasoning uses the out-of-attempt convention `{provider: "", model}` — and
-  carries `custom`/`signature` from `tool_call_start` onto the reassembled call.
+  reasoning content parts ahead of reply text — a block's `origin` and `redacted` come from its
+  `reasoning_start`; `reasoning_delta`/`reasoning_signature` without a prior `reasoning_start` for
+  that index, or a duplicate `reasoning_start`, fail like the tool-call index checks — and carries
+  `custom`/`signature` from `tool_call_start` onto the reassembled call.
 - **Attempt context (spec §3.2):** `runWithAttempt`/`currentAttempt` live beside `recordNote` on a
   separate `AsyncLocalStorage` in `observe/context.ts` — `{providerName, upstreamModel}` ambient for
   encode, upstream call and decode of every attempt, including fallback hops and the winning
@@ -4228,3 +4235,6 @@ decided:
     `type === "function"` before reading `.function.name` (same assertion, union-safe).
   - `src/services/attempt-context.test.ts` (new): the "each fallback hop runs in its own attempt"
     tests — the Files block named no home for the service-level context tests.
+  - `tests/contracts/stream-reasoning-drop.test.ts` (new, fix round 1): pins that all four
+    non-Responses encoders drop `reasoning_start`/`reasoning_delta`/`reasoning_signature` — the
+    wire bytes equal the same stream without them (Global Constraints).

@@ -596,6 +596,29 @@ describe('v1.4 canonical extensions (v1.4 spec §3.2)', () => {
     }
   });
 
+  it('reasoning_start needs origin', () => {
+    const noOrigin = canonicalStreamEventSchema.safeParse({
+      type: 'reasoning_start',
+      index: 0,
+    });
+    expect(noOrigin.success).toBe(false);
+
+    const valid = canonicalStreamEventSchema.safeParse({
+      type: 'reasoning_start',
+      index: 0,
+      origin: { provider: 'p', model: 'm' },
+    });
+    expect(valid.success).toBe(true);
+
+    const redacted = canonicalStreamEventSchema.safeParse({
+      type: 'reasoning_start',
+      index: 0,
+      origin: { provider: 'p', model: 'm' },
+      redacted: true,
+    });
+    expect(redacted.success).toBe(true);
+  });
+
   it('usage carries reasoningTokens only when non-negative', () => {
     const usage = {
       inputTokens: 11,
