@@ -1,6 +1,24 @@
 import { PROVIDER_ROUTES, type Provider } from "../transformers/adapters";
 
 /**
+ * Every path under /v1/responses (or /responses for clients whose base
+ * URL already ends in /v1) belongs to the responses dialect — including
+ * methods and sub-paths the route table doesn't serve (GET/DELETE
+ * /v1/responses/<id>, POST /v1/responses/compact). Detection still
+ * claims them so proxy.service can refuse the stateful endpoints in the
+ * responses envelope (v1.4 spec §2.2); no other provider shares the
+ * prefix.
+ */
+function isResponsesPath(path: string): boolean {
+  return (
+    path === "/v1/responses" ||
+    path === "/responses" ||
+    path.startsWith("/v1/responses/") ||
+    path.startsWith("/responses/")
+  );
+}
+
+/**
  * Pure request → client-format detection (spec §3.2): the request's
  * method + path prefix selects the provider whose dialect the client
  * speaks, over the same PROVIDER_ROUTES table the services match on.
@@ -29,7 +47,9 @@ export function detectSource(
         (r) => r.method === method && path.startsWith(r.pathPrefix),
       ),
   );
-  if (matches.length === 0) return undefined;
+  if (matches.length === 0) {
+    return isResponsesPath(path) ? "responses" : undefined;
+  }
   const headerNames = new Set(
     Object.keys(headers).map((name) => name.toLowerCase()),
   );

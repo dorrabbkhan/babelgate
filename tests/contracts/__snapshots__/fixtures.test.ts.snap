@@ -635,3 +635,258 @@ exports[`Adapter golden fixtures > openai > response fixtures > tool_call → ca
   },
 }
 `;
+
+exports[`Adapter golden fixtures > responses > request fixtures > basic → canonical matches snapshot 1`] = `
+{
+  "config": {},
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "Hello",
+          "type": "text",
+        },
+      ],
+      "role": "user",
+    },
+  ],
+  "model": "gpt-5-codex",
+}
+`;
+
+exports[`Adapter golden fixtures > responses > request fixtures > codex → canonical matches snapshot 1`] = `
+{
+  "config": {},
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "You are Codex.",
+          "type": "text",
+        },
+      ],
+      "role": "system",
+    },
+    {
+      "content": [
+        {
+          "text": "list files",
+          "type": "text",
+        },
+      ],
+      "role": "user",
+    },
+  ],
+  "model": "qwen/qwen3-coder",
+  "parallelToolCalls": true,
+  "stream": false,
+  "systemPrompt": "You are Codex.",
+  "toolChoice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "Run a shell command",
+        "name": "exec_command",
+        "parameters": {
+          "properties": {
+            "cmd": {
+              "type": "string",
+            },
+          },
+          "type": "object",
+        },
+      },
+      "type": "function",
+    },
+  ],
+}
+`;
+
+exports[`Adapter golden fixtures > responses > request fixtures > developer → canonical matches snapshot 1`] = `
+{
+  "config": {},
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "You are a helpful coding assistant.",
+          "type": "text",
+        },
+      ],
+      "role": "system",
+    },
+    {
+      "content": [
+        {
+          "text": "Fix the bug",
+          "type": "text",
+        },
+      ],
+      "role": "user",
+    },
+  ],
+  "model": "gpt-5-codex",
+  "systemPrompt": "You are a helpful coding assistant.",
+}
+`;
+
+exports[`Adapter golden fixtures > responses > request fixtures > multimodal → canonical matches snapshot 1`] = `
+{
+  "config": {},
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is in this image?",
+          "type": "text",
+        },
+        {
+          "image": {
+            "data": "iVBORw0KGgo=",
+            "mimeType": "image/png",
+          },
+          "type": "image",
+        },
+      ],
+      "role": "user",
+    },
+  ],
+  "model": "gpt-5-codex",
+}
+`;
+
+exports[`Adapter golden fixtures > responses > request fixtures > tools → canonical matches snapshot 1`] = `
+{
+  "config": {
+    "maxTokens": 256,
+    "temperature": 0.3,
+    "topP": 0.9,
+  },
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "What is the weather in Paris?",
+          "type": "text",
+        },
+      ],
+      "role": "user",
+    },
+    {
+      "content": "",
+      "role": "assistant",
+      "toolCalls": [
+        {
+          "function": {
+            "arguments": "{"city":"Paris"}",
+            "name": "get_weather",
+          },
+          "id": "call_1",
+          "type": "function",
+        },
+      ],
+    },
+    {
+      "content": "sunny, 22C",
+      "role": "tool",
+      "toolCallId": "call_1",
+    },
+  ],
+  "model": "gpt-5-codex",
+  "toolChoice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "Get the weather for a city",
+        "name": "get_weather",
+        "parameters": {
+          "properties": {
+            "city": {
+              "type": "string",
+            },
+          },
+          "required": [
+            "city",
+          ],
+          "type": "object",
+        },
+      },
+      "type": "function",
+    },
+  ],
+}
+`;
+
+exports[`Adapter golden fixtures > responses > response fixtures > basic → canonical matches snapshot 1`] = `
+{
+  "created": 1700000000,
+  "finishReason": "stop",
+  "id": "resp_abc123",
+  "message": {
+    "content": [
+      {
+        "text": "Hello!",
+        "type": "text",
+      },
+    ],
+    "role": "assistant",
+  },
+  "model": "gpt-5-codex",
+  "usage": {
+    "inputTokens": 12,
+    "outputTokens": 7,
+    "totalTokens": 19,
+  },
+}
+`;
+
+exports[`Adapter golden fixtures > responses > response fixtures > function_call → canonical matches snapshot 1`] = `
+{
+  "created": 1700000001,
+  "finishReason": "tool_call",
+  "id": "resp_fc1",
+  "message": {
+    "content": [],
+    "role": "assistant",
+    "toolCalls": [
+      {
+        "function": {
+          "arguments": "{"city":"Paris"}",
+          "name": "get_weather",
+        },
+        "id": "call_1",
+        "type": "function",
+      },
+    ],
+  },
+  "model": "gpt-5-codex",
+  "usage": {
+    "inputTokens": 30,
+    "outputTokens": 11,
+    "totalTokens": 41,
+  },
+}
+`;
+
+exports[`Adapter golden fixtures > responses > response fixtures > incomplete → canonical matches snapshot 1`] = `
+{
+  "created": 1700000002,
+  "finishReason": "length",
+  "id": "resp_inc1",
+  "message": {
+    "content": [
+      {
+        "text": "partial answer",
+        "type": "text",
+      },
+    ],
+    "role": "assistant",
+  },
+  "model": "gpt-5-codex",
+  "usage": {
+    "inputTokens": 12,
+    "outputTokens": 256,
+    "totalTokens": 268,
+  },
+}
+`;

@@ -1,0 +1,225 @@
+{
+  "requests": {
+    "basic": {
+      "model": "gpt-5-codex",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [{ "type": "input_text", "text": "Hello" }]
+        }
+      ],
+      "store": false
+    },
+    "developer": {
+      "model": "gpt-5-codex",
+      "input": [
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [{ "type": "input_text", "text": "You are a helpful coding assistant." }]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [{ "type": "input_text", "text": "Fix the bug" }]
+        }
+      ],
+      "store": false
+    },
+    "tools": {
+      "model": "gpt-5-codex",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [{ "type": "input_text", "text": "What is the weather in Paris?" }]
+        },
+        {
+          "type": "function_call",
+          "call_id": "call_1",
+          "name": "get_weather",
+          "arguments": "{\"city\":\"Paris\"}",
+          "status": "completed"
+        },
+        {
+          "type": "function_call_output",
+          "call_id": "call_1",
+          "output": "sunny, 22C"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "get_weather",
+          "description": "Get the weather for a city",
+          "parameters": {
+            "type": "object",
+            "properties": { "city": { "type": "string" } },
+            "required": ["city"]
+          },
+          "strict": false
+        }
+      ],
+      "tool_choice": "auto",
+      "temperature": 0.3,
+      "top_p": 0.9,
+      "max_output_tokens": 256,
+      "store": false
+    },
+    "multimodal": {
+      "model": "gpt-5-codex",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            { "type": "input_text", "text": "What is in this image?" },
+            {
+              "type": "input_image",
+              "image_url": "data:image/png;base64,iVBORw0KGgo=",
+              "detail": "auto"
+            }
+          ]
+        }
+      ],
+      "store": false
+    },
+    "codex": {
+      "model": "qwen/qwen3-coder",
+      "store": false,
+      "stream": false,
+      "parallel_tool_calls": true,
+      "tool_choice": "auto",
+      "reasoning": { "summary": "auto" },
+      "include": ["reasoning.encrypted_content"],
+      "prompt_cache_key": "session-123",
+      "client_metadata": { "turn_id": "abc" },
+      "input": [
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [{ "type": "input_text", "text": "You are Codex." }]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [{ "type": "input_text", "text": "list files" }]
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "name": "exec_command",
+          "description": "Run a shell command",
+          "parameters": { "type": "object", "properties": { "cmd": { "type": "string" } } },
+          "strict": true
+        },
+        {
+          "type": "namespace",
+          "name": "multi_agent_v1",
+          "description": "Delegate to sub-agents",
+          "tools": [
+            {
+              "type": "function",
+              "name": "spawn_agent",
+              "description": "Spawn a sub-agent",
+              "parameters": { "type": "object" }
+            }
+          ]
+        },
+        { "type": "web_search" }
+      ]
+    }
+  },
+  "responses": {
+    "basic": {
+      "id": "resp_abc123",
+      "object": "response",
+      "created_at": 1700000000,
+      "status": "completed",
+      "model": "gpt-5-codex",
+      "output": [
+        {
+          "type": "message",
+          "id": "msg_1",
+          "status": "completed",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "Hello!", "annotations": [] }]
+        }
+      ],
+      "usage": {
+        "input_tokens": 12,
+        "input_tokens_details": { "cached_tokens": 0 },
+        "output_tokens": 7,
+        "output_tokens_details": { "reasoning_tokens": 0 },
+        "total_tokens": 19
+      }
+    },
+    "function_call": {
+      "id": "resp_fc1",
+      "object": "response",
+      "created_at": 1700000001,
+      "status": "completed",
+      "model": "gpt-5-codex",
+      "output": [
+        {
+          "type": "function_call",
+          "id": "fc_1",
+          "call_id": "call_1",
+          "name": "get_weather",
+          "arguments": "{\"city\":\"Paris\"}",
+          "status": "completed"
+        }
+      ],
+      "usage": {
+        "input_tokens": 30,
+        "input_tokens_details": { "cached_tokens": 0 },
+        "output_tokens": 11,
+        "output_tokens_details": { "reasoning_tokens": 0 },
+        "total_tokens": 41
+      }
+    },
+    "incomplete": {
+      "id": "resp_inc1",
+      "object": "response",
+      "created_at": 1700000002,
+      "status": "incomplete",
+      "incomplete_details": { "reason": "max_output_tokens" },
+      "model": "gpt-5-codex",
+      "output": [
+        {
+          "type": "message",
+          "id": "msg_2",
+          "status": "incomplete",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": "partial answer", "annotations": [] }]
+        }
+      ],
+      "usage": {
+        "input_tokens": 12,
+        "input_tokens_details": { "cached_tokens": 0 },
+        "output_tokens": 256,
+        "output_tokens_details": { "reasoning_tokens": 0 },
+        "total_tokens": 268
+      }
+    }
+  },
+  "models": {
+    "object": "list",
+    "data": [
+      {
+        "id": "gpt-5-codex",
+        "object": "model",
+        "created": 1700000000,
+        "owned_by": "openai"
+      },
+      {
+        "id": "gpt-5.1",
+        "object": "model",
+        "created": 1700000001,
+        "owned_by": "openai"
+      }
+    ]
+  }
+}

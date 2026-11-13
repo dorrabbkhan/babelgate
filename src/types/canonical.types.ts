@@ -354,6 +354,10 @@ export interface CanonicalError {
   status: number;
   /** Human-readable; never contains prompt text or keys */
   message: string;
+  /** Machine-readable error code for dialects whose envelope has one (e.g. "unsupported_parameter"); never prompt text */
+  code?: string;
+  /** Request field the error names (e.g. "previous_response_id"); never a value */
+  param?: string;
   /** Seconds to wait before retrying (from upstream Retry-After) */
   retryAfterSeconds?: number;
 }

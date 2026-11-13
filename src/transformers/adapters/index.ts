@@ -2,15 +2,22 @@ import { openaiAdapter } from "./openai.adapter";
 import { geminiAdapter } from "./gemini.adapter";
 import { ollamaAdapter } from "./ollama.adapter";
 import { anthropicAdapter } from "./anthropic.adapter";
+import { responsesAdapter } from "./responses.adapter";
 import type { ProviderAdapter } from "../../types/canonical.types";
 
-export type Provider = "openai" | "gemini" | "ollama" | "anthropic";
+export type Provider =
+  | "openai"
+  | "gemini"
+  | "ollama"
+  | "anthropic"
+  | "responses";
 
 export const adapters: Record<Provider, ProviderAdapter<unknown, unknown>> = {
   openai: openaiAdapter as ProviderAdapter<unknown, unknown>,
   gemini: geminiAdapter as ProviderAdapter<unknown, unknown>,
   ollama: ollamaAdapter as ProviderAdapter<unknown, unknown>,
   anthropic: anthropicAdapter as ProviderAdapter<unknown, unknown>,
+  responses: responsesAdapter as ProviderAdapter<unknown, unknown>,
 };
 
 export type RouteKind = "chat" | "models" | "count_tokens";
@@ -191,6 +198,35 @@ export const PROVIDER_ROUTES: Record<Provider, ProviderRoute[]> = {
       requestPath: () => "/v1/models",
     },
   ],
+  responses: [
+    {
+      // Only the create endpoint is proxied — GET/DELETE /v1/responses/<id>
+      // and POST /v1/responses/compact are stateful surfaces refused by
+      // proxy.service before routing (v1.4 spec §2.2). detect-source
+      // still claims the whole prefix so their rejections render in the
+      // responses envelope.
+      kind: "chat",
+      method: "POST",
+      pathPrefix: "/v1/responses",
+      requestPath: () => "/v1/responses",
+      matchesPath: (path) => path === "/v1/responses",
+    },
+    {
+      // Clients whose base URL already ends in /v1 POST to /responses.
+      kind: "chat",
+      method: "POST",
+      pathPrefix: "/responses",
+      requestPath: () => "/v1/responses",
+      matchesPath: (path) => path === "/responses",
+    },
+    {
+      // A responses upstream answers the OpenAI model-list shape.
+      kind: "models",
+      method: "GET",
+      pathPrefix: "/v1/models",
+      requestPath: () => "/v1/models",
+    },
+  ],
 };
 
 /**
@@ -230,4 +266,10 @@ export const PROVIDER_PATHS: Record<
   { pathPrefix: string; requestPath: (model: string) => string }
 >;
 
-export { openaiAdapter, geminiAdapter, ollamaAdapter, anthropicAdapter };
+export {
+  openaiAdapter,
+  geminiAdapter,
+  ollamaAdapter,
+  anthropicAdapter,
+  responsesAdapter,
+};

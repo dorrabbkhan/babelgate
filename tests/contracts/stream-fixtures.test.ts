@@ -21,6 +21,7 @@ const WIRE_EXT: Record<Provider, string> = {
   anthropic: "sse",
   gemini: "sse",
   ollama: "ndjson",
+  responses: "sse",
 };
 
 interface StreamFixture {

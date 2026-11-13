@@ -12,6 +12,7 @@ import openaiErrors from "../fixtures/errors/openai.json";
 import geminiErrors from "../fixtures/errors/gemini.json";
 import ollamaErrors from "../fixtures/errors/ollama.json";
 import anthropicErrors from "../fixtures/errors/anthropic.json";
+import responsesErrors from "../fixtures/errors/responses.json";
 
 /**
  * Contract tests for canonical errors (spec v1.0.1 §3.3): every adapter
@@ -35,9 +36,16 @@ const FIXTURES: Record<Provider, ErrorFixture> = {
   gemini: geminiErrors,
   ollama: ollamaErrors,
   anthropic: anthropicErrors,
+  responses: responsesErrors,
 };
 
-const providers: Provider[] = ["openai", "gemini", "ollama", "anthropic"];
+const providers: Provider[] = [
+  "openai",
+  "gemini",
+  "ollama",
+  "anthropic",
+  "responses",
+];
 
 const KINDS: CanonicalErrorKind[] = [
   "invalid_request",

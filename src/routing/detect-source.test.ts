@@ -58,6 +58,39 @@ describe("detectSource", () => {
     expect(detectSource("GET", "/api/tags", noHeaders)).toBe("ollama");
   });
 
+  it("POST /v1/responses is responses", () => {
+    expect(detectSource("POST", "/v1/responses", noHeaders)).toBe("responses");
+  });
+
+  it("/responses is responses", () => {
+    expect(detectSource("POST", "/responses", noHeaders)).toBe("responses");
+  });
+
+  it("GET /v1/models stays openai", () => {
+    expect(detectSource("GET", "/v1/models", noHeaders)).toBe("openai");
+  });
+
+  // §2.2: stateful Responses endpoints are detected as responses (they
+  // share the prefix) so proxy.service can answer them in the responses
+  // envelope — the adapter never sees them.
+  it("GET /v1/responses/<id> is responses", () => {
+    expect(detectSource("GET", "/v1/responses/resp_1", noHeaders)).toBe(
+      "responses",
+    );
+  });
+
+  it("DELETE /v1/responses/<id> is responses", () => {
+    expect(detectSource("DELETE", "/v1/responses/resp_1", noHeaders)).toBe(
+      "responses",
+    );
+  });
+
+  it("POST /v1/responses/compact is responses", () => {
+    expect(detectSource("POST", "/v1/responses/compact", noHeaders)).toBe(
+      "responses",
+    );
+  });
+
   it("GET /v1/models with anthropic-version → anthropic", () => {
     expect(
       detectSource("GET", "/v1/models", {

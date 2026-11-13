@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { adapters, type Provider } from '../../src/transformers';
 import {
+  canonicalErrorSchema,
   canonicalRequestSchema,
   canonicalResponseSchema,
   canonicalStreamEventSchema,
@@ -9,6 +10,7 @@ import openaiFixtures from '../fixtures/openai.json';
 import geminiFixtures from '../fixtures/gemini.json';
 import ollamaFixtures from '../fixtures/ollama.json';
 import anthropicFixtures from '../fixtures/anthropic.json';
+import responsesFixtures from '../fixtures/responses.json';
 
 /**
  * Contract tests: every adapter's toCanonical* output must satisfy
@@ -106,6 +108,23 @@ const PROVIDER_REQUESTS: Record<Provider, unknown> = {
     top_k: 40,
     stop_sequences: ['END'],
   },
+  responses: {
+    model: 'gpt-5-codex',
+    instructions: 'You are helpful',
+    input: [
+      {
+        type: 'message',
+        role: 'user',
+        content: [
+          { type: 'input_text', text: 'What is this?' },
+          { type: 'input_image', image_url: 'data:image/png;base64,abc123' },
+        ],
+      },
+    ],
+    temperature: 0.7,
+    max_output_tokens: 150,
+    top_p: 0.9,
+  },
 };
 
 const PROVIDER_RESPONSES: Record<Provider, unknown> = {
@@ -161,9 +180,40 @@ const PROVIDER_RESPONSES: Record<Provider, unknown> = {
     stop_sequence: null,
     usage: { input_tokens: 10, output_tokens: 5 },
   },
+  responses: {
+    id: 'resp_123',
+    object: 'response',
+    created_at: 1700000000,
+    status: 'completed',
+    model: 'gpt-5-codex',
+    output: [
+      {
+        type: 'message',
+        id: 'msg_1',
+        status: 'completed',
+        role: 'assistant',
+        content: [
+          { type: 'output_text', text: 'Hello!', annotations: [] },
+        ],
+      },
+    ],
+    usage: {
+      input_tokens: 10,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 5,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 15,
+    },
+  },
 };
 
-const providers: Provider[] = ['openai', 'gemini', 'ollama', 'anthropic'];
+const providers: Provider[] = [
+  'openai',
+  'gemini',
+  'ollama',
+  'anthropic',
+  'responses',
+];
 
 describe('Canonical schema contracts', () => {
   describe.each(providers)('%s adapter', (provider) => {
@@ -563,6 +613,7 @@ describe('v1.4 canonical extensions (v1.4 spec §3.2)', () => {
         gemini: geminiFixtures,
         ollama: ollamaFixtures,
         anthropic: anthropicFixtures,
+        responses: responsesFixtures,
       };
     for (const provider of providers) {
       for (const [name, req] of Object.entries(fixtures[provider].requests)) {
@@ -643,5 +694,30 @@ describe('v1.4 canonical extensions (v1.4 spec §3.2)', () => {
       usage: { ...usage, reasoningTokens: -1 },
     });
     expect(negative.success).toBe(false);
+  });
+
+  it('canonical error code and param are optional strings', () => {
+    const withBoth = {
+      kind: 'invalid_request',
+      status: 400,
+      message: 'm',
+      code: 'unsupported_parameter',
+      param: 'store',
+    };
+    const parsed = canonicalErrorSchema.safeParse(withBoth);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).toEqual(withBoth);
+
+    expect(
+      canonicalErrorSchema.safeParse({ ...withBoth, code: 1 }).success
+    ).toBe(false);
+
+    expect(
+      canonicalErrorSchema.safeParse({
+        kind: 'invalid_request',
+        status: 400,
+        message: 'm',
+      }).success
+    ).toBe(true);
   });
 });

@@ -13,8 +13,10 @@ import { planRoute } from "../routing/plan-route";
 import { estimateInputTokens } from "../utils/token-estimate";
 import { canonicalRequestSchema } from "../types/canonical.schema";
 import {
+  NotFoundError,
   NotSupportedError,
   TransformError,
+  UnsupportedParameterError,
   ValidationError,
 } from "../utils/errors";
 import { logger } from "../utils/logger";
@@ -71,6 +73,92 @@ function methodFromPath(path: string): string {
 }
 
 /**
+ * §2.2 stateless contract for the responses dialect — refused before
+ * routing, in the responses envelope, on every responses-source path
+ * (including sub-paths the route table doesn't claim):
+ *
+ * - GET /v1/responses/<id>, DELETE /v1/responses/<id>,
+ *   POST /v1/responses/compact and any other non-create method → 404.
+ * - On POST /v1/responses: `previous_response_id`, `conversation` and
+ *   `store: true` are server state → 400 `unsupported_parameter`.
+ * - An `additional_tools` input item marks the responses-lite shape,
+ *   which is pass-through-only in v1.4 (owner decision, Task 3) →
+ *   400 naming the item.
+ */
+function rejectStatefulResponsesRequest(
+  method: string,
+  path: string,
+  body: unknown,
+): void {
+  const underResponses =
+    path === "/v1/responses" ||
+    path === "/responses" ||
+    path.startsWith("/v1/responses/") ||
+    path.startsWith("/responses/");
+  if (!underResponses) return;
+
+  const isCreate =
+    method === "POST" && (path === "/v1/responses" || path === "/responses");
+  if (!isCreate) {
+    throw new NotFoundError(
+      `babelgate is stateless: ${method} ${path} is not supported`,
+    );
+  }
+
+  if (body === null || typeof body !== "object") return;
+  const request = body as Record<string, unknown>;
+
+  for (const field of ["previous_response_id", "conversation"] as const) {
+    if (request[field] !== undefined) {
+      throw new UnsupportedParameterError(
+        field,
+        `babelgate is stateless: ${field} is not supported`,
+      );
+    }
+  }
+  if (request.store === true) {
+    throw new UnsupportedParameterError(
+      "store",
+      "babelgate is stateless: store is not supported",
+    );
+  }
+  // responses-lite markers (owner decision, Task 3): pass-through only
+  // in v1.4 — on the bridge each is a 400 naming the unsupported item.
+  const liteParam = (param: string): never => {
+    throw new UnsupportedParameterError(
+      param,
+      `${param} is not supported: responses-lite requests are pass-through only in v1.4`,
+    );
+  };
+
+  if (
+    request.reasoning !== null &&
+    typeof request.reasoning === "object" &&
+    (request.reasoning as Record<string, unknown>).context !== undefined
+  ) {
+    liteParam("reasoning.context");
+  }
+
+  if (Array.isArray(request.input)) {
+    for (const item of request.input) {
+      if (item === null || typeof item !== "object") continue;
+      const entry = item as { type?: unknown; phase?: unknown; namespace?: unknown };
+      if (entry.type === "additional_tools") liteParam("additional_tools");
+      if (entry.type === "message" && entry.phase !== undefined) {
+        liteParam("phase");
+      }
+      if (
+        (entry.type === "custom_tool_call" ||
+          entry.type === "custom_tool_call_output") &&
+        entry.namespace !== undefined
+      ) {
+        liteParam("custom_tool_call");
+      }
+    }
+  }
+}
+
+/**
  * Thin entry over the routing layer (spec §3.1):
  *   path match → config → canonical boundary validation →
  *   count_tokens → planRoute → chat/chat-stream/models services.
@@ -88,6 +176,13 @@ export async function proxyRequest(
   requestId: string,
   opts?: ProxyRequestOptions,
 ): Promise<ProxyResult | null> {
+  // §2.2: stateful Responses requests are refused before routing —
+  // before the provider-path pre-check, since the stateful sub-paths
+  // are not in the route table.
+  if (opts?.source === "responses") {
+    rejectStatefulResponsesRequest(method, path, body);
+  }
+
   // Cheap pre-check: only recognized provider API paths are proxied.
   const isProviderPath = Object.values(PROVIDER_ROUTES)
     .flat()

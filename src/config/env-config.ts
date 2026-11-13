@@ -18,7 +18,13 @@ import { logger } from "../utils/logger";
 
 dotenv.config({ quiet: true });
 
-const VALID_PROVIDERS: Provider[] = ["openai", "gemini", "ollama", "anthropic"];
+const VALID_PROVIDERS: Provider[] = [
+  "openai",
+  "gemini",
+  "ollama",
+  "anthropic",
+  "responses",
+];
 
 /**
  * One `prices:` override row (spec §3.6): USD per 1M tokens, matched
@@ -141,6 +147,7 @@ export function loadConfig(): EnvConfig {
     gemini: "GEMINI_API_KEY",
     ollama: "OLLAMA_API_KEY",
     anthropic: "ANTHROPIC_API_KEY",
+    responses: "RESPONSES_API_KEY",
   };
 
   const targetApiKey = process.env[apiKeyEnvVars[normalizedTarget]];

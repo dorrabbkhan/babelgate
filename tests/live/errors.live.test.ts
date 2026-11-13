@@ -43,6 +43,11 @@ const NOT_FOUND_CHECKS: Record<Provider, (body: unknown) => void> = {
   ollama: (b) => {
     expect(typeof (b as { error?: unknown }).error).toBe('string');
   },
+  responses: (b) => {
+    const err = (b as { error?: { type?: string; code?: string } }).error;
+    expect(err?.type).toBe('not_found_error');
+    expect(err?.code).toBe('not_found');
+  },
 };
 
 // Shape assertions for an invalid_request error in each source dialect.
@@ -68,6 +73,11 @@ const INVALID_REQUEST_CHECKS: Record<Provider, (body: unknown) => void> = {
   ollama: (b) => {
     expect(typeof (b as { error?: unknown }).error).toBe('string');
   },
+  responses: (b) => {
+    const err = (b as { error?: { type?: string; code?: string } }).error;
+    expect(err?.type).toBe('invalid_request_error');
+    expect(err?.code).toBe('invalid_request');
+  },
 };
 
 /** supertest parses SSE/NDJSON as an opaque body — collect it as text. */
@@ -90,6 +100,7 @@ const STREAM_CONTENT_TYPE: Record<Provider, string> = {
   anthropic: 'text/event-stream',
   gemini: 'text/event-stream',
   ollama: 'application/x-ndjson',
+  responses: 'text/event-stream',
 };
 
 // Terminal-event assertions per source dialect — the same checks as
@@ -125,6 +136,9 @@ const STREAM_CHECKS: Record<Provider, (body: string) => void> = {
     expect(lines.length).toBeGreaterThan(1);
     for (const line of lines) JSON.parse(line);
     expect(JSON.parse(lines.at(-1)!)).toMatchObject({ done: true });
+  },
+  responses: (body) => {
+    expect(body).toContain('response.completed');
   },
 };
 
