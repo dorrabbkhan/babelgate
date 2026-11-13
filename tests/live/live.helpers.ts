@@ -37,6 +37,14 @@ export const OPENROUTER_BASE_URL =
 /** Default OpenRouter model; override with LIVE_OPENROUTER_MODEL. */
 const DEFAULT_OPENROUTER_MODEL = 'qwen/qwen3-coder';
 
+/**
+ * OpenRouter id of the Anthropic model the cache-read live case
+ * targets (spec §4.5: an id present on the task date). Override with
+ * LIVE_OPENROUTER_ANTHROPIC_MODEL when the id moves.
+ */
+export const OPENROUTER_ANTHROPIC_MODEL =
+  process.env.LIVE_OPENROUTER_ANTHROPIC_MODEL || 'anthropic/claude-haiku-4.5';
+
 const ALL_PROVIDERS: Provider[] = [
   'openai',
   'gemini',

@@ -3654,3 +3654,110 @@ unchanged.
   before the image.
 - **Follow-ups:** none — Task 17's gate files and Task 18's CHANGELOG
   are their own tasks.
+
+## v1.3 Task 17 — Live-suite cases; release gates A, A-cache, B, C (2026-11-09) · OWNER REVIEW
+
+- **What shipped:** `tests/live/observe.live.test.ts` (three cases —
+  `gemini countTokens against babelgate`, no upstream needed; the
+  OpenRouter `anthropic/claude-haiku-4.5` cache-read pair under
+  `OPENROUTER_API_KEY`; and the conductor's Gemini 3.x
+  parallel-functionCall case under `GEMINI_API_KEY`),
+  `scripts/gates/observe-check.ts` (the gates' observability half),
+  `scripts/gates/gemini-cli-edit.sh` (gate B), the `OBSERVE_CHECK`
+  wiring in `scripts/gates/claude-code-edit.sh`,
+  `examples/claude-code-openrouter.yaml` (gate A),
+  `examples/gate-c-hybrid.yaml` (gate C), and the retirement
+  of `docs/gates/gpu-ollama.md` per D10.
+- **OBSERVE_CHECK semantics** (resolved): `OBSERVE_CHECK=1` runs
+  `observe-check.ts --base <url> --client claude-code --since <start>`
+  after the edit task; any other value is appended as extra flags
+  (A-cache runs `OBSERVE_CHECK="--expect-cache-read"`). In `config`
+  mode the script derives flags from the YAML so the plan's gate
+  commands produce the plan's flag lists: `live_prices: true` →
+  `--expect-cost`, two or more providers → `--expect-providers` in
+  file order, `would_cost_reference` → `--expect-saved`. `cache_hints`
+  is deliberately NOT derived: gate C's OpenRouter target
+  (`qwen/qwen3-coder`) reports no cache reads, so deriving
+  `--expect-cache-read` would fail a healthy run. `gemini-cli-edit.sh`
+  runs the check unconditionally with `--client gemini-cli` (gate B's
+  command shows no OBSERVE_CHECK and expects `OBSERVE PASS`).
+- **`--since <epoch-ms>` and `USAGE_DB=<temp>`:** "a row exists for
+  `--client` since start" is made exact two ways — the gate scripts
+  always point `USAGE_DB` at a temp file (so the owner's real
+  `~/.babelgate/usage.db` is untouched) and pass the gate's start
+  time as `--since`. `--since` is an addition to the named interface;
+  every named flag is implemented verbatim.
+- **Expectation semantics:** `--expect-cost` = some client row has
+  `costUsd` non-null; `--expect-cache-read` = some row has
+  `cacheReadTokens > 0`; `--expect-providers a,b` = each name appears
+  as a row's `provider`; `--expect-saved` = some row has `wouldCostUsd`
+  non-null. The inspector check requires all four stages on the latest
+  row's body (`source`, `canonical`, ≥1 `target`, `response`).
+- **Gate C config (owner decision, PR #81, option 2):** gate C runs
+  `examples/gate-c-hybrid.yaml` — `claude-*haiku*` → CPU Ollama
+  `ollama/qwen2.5-coder:3b`, `claude-*` →
+  `openrouter/qwen/qwen3-coder` with the 3b as the outage fallback,
+  and `would_cost_reference` set. The shipped
+  `examples/claude-code-hybrid.yaml`, its recipe and the README hybrid
+  block are unchanged, so they keep showing local-first routing and
+  `min_input_tokens`. This deviates from the plan's gate C command,
+  which names `claude-code-hybrid.yaml`. Revised 2026-11-13 (owner
+  decision, PR #81): Claude Code 2.1.322 requests `claude-opus-5-5`
+  for every call, background calls included, so the `claude-*haiku*`
+  rule never matched and no request reached Ollama. Gate C now routes
+  by estimated input size: `claude-*` with `min_input_tokens: 4000` →
+  `openrouter/qwen/qwen3-coder` (3b fallback), other `claude-*` →
+  `ollama/qwen2.5-coder:3b`. The shipped `examples/claude-code-hybrid.yaml`
+  has the same dead haiku rule: follow-up, not changed here.
+- **Live check from PR #58 (decision 1a):** `parallel tool calls in
+  history are accepted` sends a Gemini-format request — a model turn
+  with two `get_weather` functionCalls and matching functionResponses
+  as the last content (the validated current turn) —
+  to `gemini → gemini` on `liveModel('gemini')` (a 3.x id). Expected:
+  200. Result: 200 on `gemini-3.8-flash` (owner live run, 2026-11-13).
+- **Files outside the Files block:** `examples/claude-code-openrouter.yaml`
+  (created — the plan's Step 2 names it), `examples/gate-c-hybrid.yaml`
+  (gate C's config — owner decision, PR #81, option 2),
+  `scripts/gates/observe-check.test.ts`
+  (rule: tests ship with the code they test — pure checks over
+  `evaluateObservations`/`metricTotal`, no network).
+- **Gate runs (owner, to be recorded):**
+  - **Live suite:** `npm run test:live` — `72 passed / 72 (2026-11-13,
+    sequential: npx vitest run --config vitest.live.config.ts
+    --no-file-parallelism). openai and anthropic targets skipped: their
+    keys in .env return 401 upstream. All three new observe cases
+    passed, incl. "parallel tool calls in history are accepted" on
+    gemini-3.8-flash (200). A parallel (default) run had 12
+    OpenRouter-only failures (504 after 30 s, 429 "Provider returned
+    error", one "operation was aborted"); the same tools request took
+    0.7–1.2 s direct and 3.7 s through babelgate with a byte-identical
+    upstream body, and the sequential re-run passed 37/37 openrouter
+    cases: load on OpenRouter's qwen3-coder providers, not babelgate.`
+  - **Gate A:** `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
+    examples/claude-code-openrouter.yaml`, `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+    unset → `GATE PASS + OBSERVE PASS (7 rows, providers: openrouter).
+    Claude Code 2.1.322, openrouter/qwen/qwen3-coder, 37 s, 7 requests,
+    0 fallbacks.`
+  - **Gate A-cache:** same file edited to `anthropic/claude-haiku-4.5`
+    + `cache_hints: true`, `OBSERVE_CHECK="--expect-cache-read"` →
+    `FAIL 2026-11-13 (edit task passed; --expect-cache-read: no row has
+    cache_read_tokens > 0). Cause: Claude Code's moving cache breakpoint
+    sits on tool_result blocks, which babelgate dropped (requests 3–10:
+    4 cache_control markers in, 1 out; one cache write of 11 403 tokens
+    on request 2, no reads). Fix in a separate [OWNER REVIEW] PR; rerun
+    pending.`
+  - **Gate B:** `scripts/gates/gemini-cli-edit.sh openrouter
+    qwen/qwen3-coder` → `GATE PASS + OBSERVE PASS (13 rows for
+    gemini-cli, provider openai = OpenRouter via the OpenAI adapter).
+    Gemini CLI 0.68.0, qwen/qwen3-coder, 145 s.`
+  - **Gate C:** `ollama pull qwen2.5-coder:3b` first, then
+    `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
+    examples/gate-c-hybrid.yaml` → `FAIL 2026-11-13 with the haiku-name
+    routing (edit task passed; no row served by ollama). Rerun pending
+    with size routing.`
+  - **Cost:** `OpenRouter spend for all 2026-11-13 runs (live suite,
+    gates, diagnostics): qwen/qwen3-coder $0.0896,
+    anthropic/claude-haiku-4.5 $0.287.`
+- **Not run here:** the live suite and the gates themselves — this
+  sandbox has no API keys, Ollama, `claude` or `gemini` CLI. The owner
+  runs them and fills in the results above.

@@ -1,0 +1,37 @@
+# Release gate C (spec §4.5): Claude Code on cloud models, cheap background calls on CPU Ollama.
+# No GPU needed. The shipped hybrid example is examples/claude-code-hybrid.yaml.
+#
+# Routing by estimated input size (first match wins; anything unmatched goes to the default).
+# Claude Code 2.1.x requests the same model for every call — it no longer requests haiku
+# models, so a name rule can't separate its small background calls:
+#   claude-* with >= 4 000 estimated input tokens -> openrouter/qwen/qwen3-coder,
+#                                                  falling back to ollama/qwen2.5-coder:3b
+#   claude-*                                      -> ollama/qwen2.5-coder:3b
+default: ollama
+providers:
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434
+    context_window: 32768   # Ollama options.num_ctx, as the claude-code preset sets
+    timeout_ms: 600000      # a CPU model is slow; the preset uses the same value
+  openrouter:
+    type: openai
+    # No /v1: babelgate appends /v1/chat/completions and /v1/models itself.
+    base_url: https://openrouter.ai/api
+    api_key_env: OPENROUTER_API_KEY
+    max_output_tokens: 8000   # Claude Code asks for a large budget; spend-capped keys 4xx without a cap
+    cache_hints: true         # pass Anthropic-style prompt-cache hints through
+    live_prices: true         # cost from OpenRouter's own /models pricing
+observe:
+  # Prices local (ollama) rows against this provider/model so the Usage
+  # screen can show what staying local saved.
+  would_cost_reference: openrouter/anthropic/claude-sonnet-4.5
+routes:
+  - match: claude-*
+    when:
+      min_input_tokens: 4000   # Claude Code's main loop (~12k tokens) goes to the cloud
+    to: openrouter/qwen/qwen3-coder
+    fallback:
+      - ollama/qwen2.5-coder:3b
+  - match: claude-*            # small background calls stay local
+    to: ollama/qwen2.5-coder:3b
