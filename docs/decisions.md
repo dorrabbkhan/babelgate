@@ -3740,21 +3740,36 @@ unchanged.
     0 fallbacks.`
   - **Gate A-cache:** same file edited to `anthropic/claude-haiku-4.5`
     + `cache_hints: true`, `OBSERVE_CHECK="--expect-cache-read"` →
-    `FAIL 2026-11-13 (edit task passed; --expect-cache-read: no row has
-    cache_read_tokens > 0). Cause: Claude Code's moving cache breakpoint
-    sits on tool_result blocks, which babelgate dropped (requests 3–10:
-    4 cache_control markers in, 1 out; one cache write of 11 403 tokens
-    on request 2, no reads). Fix in a separate [OWNER REVIEW] PR; rerun
-    pending.`
+    First run: `FAIL 2026-11-13 (edit task passed; --expect-cache-read:
+    no row has cache_read_tokens > 0). Cause: Claude Code's moving cache
+    breakpoint sits on tool_result blocks, which babelgate dropped
+    (requests 3–10: 4 cache_control markers in, 1 out; one cache write
+    of 11 403 tokens on request 2, no reads). Fix in a separate
+    [OWNER REVIEW] PR; rerun pending.` Then, on the fix:
+    `PASS 2026-11-13 on PR #82 head ac3b736 (cache hints on tool
+    results): GATE PASS + OBSERVE PASS with --expect-cache-read.
+    Claude Code 2.1.322, openrouter/anthropic/claude-haiku-4.5 with
+    cache_hints: true, 17 s, 6 requests, 0 fallbacks. The earlier FAIL
+    (same day, before the fix) stays recorded: Claude Code's moving
+    breakpoint on tool_result blocks was dropped.`
   - **Gate B:** `scripts/gates/gemini-cli-edit.sh openrouter
     qwen/qwen3-coder` → `GATE PASS + OBSERVE PASS (13 rows for
     gemini-cli, provider openai = OpenRouter via the OpenAI adapter).
     Gemini CLI 0.68.0, qwen/qwen3-coder, 145 s.`
-  - **Gate C:** `ollama pull qwen2.5-coder:3b` first, then
-    `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
-    examples/gate-c-hybrid.yaml` → `FAIL 2026-11-13 with the haiku-name
-    routing (edit task passed; no row served by ollama). Rerun pending
-    with size routing.`
+  - **Gate C:** `ollama pull qwen2.5-coder:3b` first, then preload
+    `curl localhost:11434/api/generate -d '{"model":"qwen2.5-coder:3b","keep_alive":"30m"}'`,
+    then `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
+    examples/gate-c-hybrid.yaml` → `PASS 2026-11-13 with size routing:
+    GATE PASS + OBSERVE PASS (providers: ollama, openrouter). Claude
+    Code 2.1.322, 258 s, 6 requests: 5 → openrouter/qwen/qwen3-coder
+    (rule:0, min_input_tokens 4000), 1 → ollama/qwen2.5-coder:3b
+    (rule:1), 0 fallbacks. Required step: preload the model first
+    (curl localhost:11434/api/generate -d
+    '{"model":"qwen2.5-coder:3b","keep_alive":"30m"}'); on a cold CPU
+    model the background call took longer than Claude Code's -p
+    session and was aborted (route log status "aborted", no row served
+    by ollama). First runs: FAIL with the haiku-name rule (no haiku
+    requests), then FAIL cold (aborted).`
   - **Cost:** `OpenRouter spend for all 2026-11-13 runs (live suite,
     gates, diagnostics): qwen/qwen3-coder $0.0896,
     anthropic/claude-haiku-4.5 $0.287.`
@@ -3809,7 +3824,11 @@ cache.
   sticky routing pins a provider only after a cache hit is observed,
   and none ever was. What we cannot verify in-process: whether Claude
   Code's own system text is byte-stable across requests (our encoding
-  of it is).
+  of it is). Correction (conductor): Anthropic's cache prefix order is
+  tools → system → messages, so the surviving system marker covered
+  tools + system (~11k tokens), above Haiku 4.5's 4 096 minimum;
+  'below the minimum' does not explain the pre-fix requests 3–10. Not
+  investigated further: with the fix, gate A-cache reads the cache.
 - **Wire evidence:** OpenAI Chat Completions reference —
   `ChatCompletionToolMessageParam.content` is "string or array of
   ChatCompletionContentPartText"; "For tool messages, only type `text`
@@ -3835,3 +3854,7 @@ cache.
 - **Not run here:** the new live case `openrouter anthropic model
   reports cache reads across a tool loop` — no API keys in the
   sandbox; the owner runs `npm run test:live`.
+- **Owner live runs (2026-11-13):** `openrouter anthropic model
+  reports cache reads across a tool loop` passed (4.2 s) together
+  with `openrouter anthropic model reports cache reads`; gate
+  A-cache passed on this branch (see the Task 17 entry).
