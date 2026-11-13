@@ -6,6 +6,7 @@ import {
   UpstreamError,
   ConfigurationError,
   NotSupportedError,
+  UnsupportedParameterError,
 } from './errors';
 
 describe('errors', () => {
@@ -68,6 +69,18 @@ describe('errors', () => {
       expect(error.code).toBe('UPSTREAM_ERROR');
       expect(error.upstreamStatus).toBe(429);
       expect(error.upstreamBody).toEqual({ error: 'rate limited' });
+    });
+  });
+
+  describe('UnsupportedParameterError', () => {
+    it('should carry code and param on the canonical error', () => {
+      expect(new UnsupportedParameterError('store', 'm').toCanonical()).toEqual({
+        kind: 'invalid_request',
+        status: 400,
+        message: 'm',
+        code: 'unsupported_parameter',
+        param: 'store',
+      });
     });
   });
 

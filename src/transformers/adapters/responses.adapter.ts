@@ -334,21 +334,17 @@ export function toCanonicalError(
 
 /**
  * The Responses envelope shares the chat-completions error shape.
- * `code`/`param` carry the envelope detail fields UnsupportedParameterError
- * attaches to the canonical error (spec §2.2 stateful rejections);
+ * `code`/`param` carry the optional canonical fields
+ * UnsupportedParameterError sets (spec §2.2 stateful rejections);
  * other canonical kinds fall back to the kind itself, same as openai.
  */
 export function fromCanonicalError(err: CanonicalError): unknown {
-  const detail = err as CanonicalError & {
-    code?: string;
-    param?: string | null;
-  };
   return {
     error: {
       message: err.message,
       type: RESPONSES_ERROR_TYPE[err.kind],
-      param: detail.param ?? null,
-      code: detail.code ?? err.kind,
+      param: err.param ?? null,
+      code: err.code ?? err.kind,
     },
   };
 }

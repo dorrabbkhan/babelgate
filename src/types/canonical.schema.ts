@@ -239,6 +239,8 @@ export const canonicalErrorSchema = z.object({
   kind: canonicalErrorKindSchema,
   status: z.number().int(),
   message: z.string(),
+  code: z.string().optional(),
+  param: z.string().optional(),
   retryAfterSeconds: z.number().optional(),
 });
 

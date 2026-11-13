@@ -61,9 +61,9 @@ export class NotFoundError extends ProxyError {
  * §2.2: `previous_response_id`, `conversation`, `store: true`, and the
  * owner-decided `additional_tools` responses-lite marker). The
  * canonical error carries the OpenAI-style envelope details — `code`
- * and `param` — as extra fields on the CanonicalError object; dialects
- * whose error envelope has them (responses, openai) render them, the
- * rest see an ordinary invalid_request.
+ * and `param` — in the optional `CanonicalError.code`/`param` fields
+ * (owner decision 2B); dialects whose error envelope has them
+ * (responses) render them, the rest see an ordinary invalid_request.
  */
 export class UnsupportedParameterError extends ValidationError {
   constructor(
@@ -74,10 +74,11 @@ export class UnsupportedParameterError extends ValidationError {
   }
 
   toCanonical(): CanonicalError {
-    return Object.assign(super.toCanonical(), {
+    return {
+      ...super.toCanonical(),
       code: "unsupported_parameter",
       param: this.param,
-    });
+    };
   }
 }
 

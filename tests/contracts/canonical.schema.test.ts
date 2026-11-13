@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { adapters, type Provider } from '../../src/transformers';
 import {
+  canonicalErrorSchema,
   canonicalRequestSchema,
   canonicalResponseSchema,
   canonicalStreamEventSchema,
@@ -693,5 +694,30 @@ describe('v1.4 canonical extensions (v1.4 spec §3.2)', () => {
       usage: { ...usage, reasoningTokens: -1 },
     });
     expect(negative.success).toBe(false);
+  });
+
+  it('canonical error code and param are optional strings', () => {
+    const withBoth = {
+      kind: 'invalid_request',
+      status: 400,
+      message: 'm',
+      code: 'unsupported_parameter',
+      param: 'store',
+    };
+    const parsed = canonicalErrorSchema.safeParse(withBoth);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data).toEqual(withBoth);
+
+    expect(
+      canonicalErrorSchema.safeParse({ ...withBoth, code: 1 }).success
+    ).toBe(false);
+
+    expect(
+      canonicalErrorSchema.safeParse({
+        kind: 'invalid_request',
+        status: 400,
+        message: 'm',
+      }).success
+    ).toBe(true);
   });
 });
