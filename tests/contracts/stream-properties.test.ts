@@ -57,7 +57,13 @@ const WIRE_EXT: Record<Provider, string> = {
 
 const SEED = 0x5eed;
 const CASES_PER_PROVIDER = 200;
-const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "ollama"];
+const PROVIDERS: Provider[] = [
+  "openai",
+  "anthropic",
+  "gemini",
+  "ollama",
+  "responses",
+];
 
 /** Seeded generator — small fast PRNG, deterministic per run. */
 function mulberry32(seed: number): () => number {
@@ -473,10 +479,78 @@ const ANTHROPIC_ESTIMATED_INPUT = estimateInputTokens(
  *   generates one (`id: ids()` in ollama.stream.ts handleObject →
  *   "call_0" under sequentialIds).
  */
+/**
+ * Responses wire normal form: like the buffered adapters the encoder
+ * serialises each call as one output item emitted at its
+ * `tool_call_end` (output items never interleave on the wire), but
+ * Responses arguments are a raw wire string — the single
+ * `function_call_arguments.delta` carries the concatenated
+ * `argumentsDelta`s verbatim (no parseToolArguments normalisation),
+ * and an empty-arguments call emits no delta at all. `usage` is held
+ * into `response.completed`, so it lands just before `message_end`.
+ * Text deltas and the message id round-trip verbatim.
+ */
+function collapseResponsesCalls(
+  events: CanonicalStreamEvent[],
+): { out: CanonicalStreamEvent[]; usage: CanonicalUsage | undefined } {
+  const calls = new Map<number, { id: string; name: string; args: string }>();
+  const out: CanonicalStreamEvent[] = [];
+  let usage: CanonicalUsage | undefined;
+  for (const event of events) {
+    switch (event.type) {
+      case "tool_call_start":
+        calls.set(event.index, {
+          id: event.id,
+          name: event.name,
+          args: "",
+        });
+        break;
+      case "tool_call_delta": {
+        const call = calls.get(event.index);
+        if (call) call.args += event.argumentsDelta;
+        break;
+      }
+      case "tool_call_end": {
+        const call = calls.get(event.index);
+        if (!call) break;
+        calls.delete(event.index);
+        out.push({
+          type: "tool_call_start",
+          index: event.index,
+          id: call.id,
+          name: call.name,
+        });
+        if (call.args !== "") {
+          out.push({
+            type: "tool_call_delta",
+            index: event.index,
+            argumentsDelta: call.args,
+          });
+        }
+        out.push(event);
+        break;
+      }
+      case "usage":
+        usage = event.usage;
+        break;
+      default:
+        out.push(event);
+    }
+  }
+  return { out, usage };
+}
+
 function wireNormalForm(
   provider: Provider,
   events: CanonicalStreamEvent[],
 ): CanonicalStreamEvent[] {
+  if (provider === "responses") {
+    const { out, usage } = collapseResponsesCalls(events);
+    const endAt = out.findIndex((e) => e.type === "message_end");
+    if (usage) out.splice(endAt, 0, { type: "usage", usage });
+    return out;
+  }
+
   if (provider === "openai") {
     const startOrder: number[] = [];
     const endByIndex = new Map<number, CanonicalStreamEvent>();
@@ -535,7 +609,7 @@ function normalized(response: CanonicalResponse, provider: Provider) {
         id: tc.id,
         name: tc.function.name,
         arguments:
-          provider === "openai"
+          provider === "openai" || provider === "responses"
             ? tc.function.arguments
             : JSON.stringify(
                 parseToolArguments(tc.function.arguments).args,

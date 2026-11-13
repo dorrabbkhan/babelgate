@@ -39,7 +39,7 @@ import {
   kindFromStatus,
   makeCanonicalError,
 } from "../../utils/canonical-error";
-import { NotSupportedError, ValidationError } from "../../utils/errors";
+import { ValidationError } from "../../utils/errors";
 import { recordNote } from "../../observe/context";
 import { systemText } from "../system-text";
 import {
@@ -56,6 +56,8 @@ import {
   toCanonicalResponse,
   fromCanonicalResponse,
 } from "./responses.response";
+import { createStreamDecoder } from "./responses.stream.decode";
+import { createStreamEncoder } from "./responses.stream.encode";
 import type {
   ResponsesRequest,
   ResponsesResponse,
@@ -285,20 +287,9 @@ export function fromCanonicalModelList(
 }
 
 
-// ============ STREAMING (Task 4 wires the real codec) ============
-
-function createStreamDecoder(): never {
-  throw new NotSupportedError(
-    "responses streaming is not supported yet (lands in Task 4)",
-  );
-}
-
-function createStreamEncoder(): never {
-  throw new NotSupportedError(
-    "responses streaming is not supported yet (lands in Task 4)",
-  );
-}
-
+// ============ STREAMING ============
+// The SSE codec lives in ./responses.stream; the adapter object above
+// wires it like the other providers.
 
 // ============ ERRORS ============
 // Error envelope `{error: {message, type, param, code}}` per

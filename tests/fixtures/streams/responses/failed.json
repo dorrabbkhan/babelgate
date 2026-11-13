@@ -1,0 +1,26 @@
+{
+  "source": "Hand-written from https://platform.openai.com/docs/api-reference/responses-streaming (response.failed carries response.error {code, message}; spec §3.7) and codex-rs/codex-api/src/sse/responses.rs at Codex 0.169.0",
+  "date": "2026-11-13",
+  "model": "qwen/qwen3-coder",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "resp_fail1",
+      "model": "qwen/qwen3-coder"
+    },
+    {
+      "type": "text_delta",
+      "text": "partial"
+    },
+    {
+      "type": "error",
+      "error": {
+        "kind": "upstream",
+        "status": 502,
+        "message": "The model failed mid-response",
+        "code": "server_error"
+      }
+    }
+  ],
+  "nonStreaming": null
+}

@@ -245,7 +245,7 @@ function toIncompleteDetails(
   }
 }
 
-function toResponsesUsage(usage: CanonicalUsage): ResponsesUsage {
+export function toResponsesUsage(usage: CanonicalUsage): ResponsesUsage {
   return {
     input_tokens: usage.inputTokens,
     input_tokens_details: {

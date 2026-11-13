@@ -30,6 +30,7 @@ const DECODED_PROVIDERS: Provider[] = [
   "anthropic",
   "gemini",
   "ollama",
+  "responses",
 ];
 
 const EVERY_SPLIT_MAX_BYTES = 4 * 1024;
@@ -172,6 +173,26 @@ describe("stream decoders", () => {
       .join("\n");
 
     const events = decode("ollama", "qwen2.5:0.5b", [
+      new TextEncoder().encode(truncated),
+    ]);
+    expect(events.at(-1)?.type).toBe("error");
+  });
+
+  it("responses truncated stream ends with an error event", () => {
+    // Drop the `response.completed` frame — the socket just closes
+    // mid-stream and the decoder must report an in-stream error, not
+    // a silent half-message (spec §3.7).
+    const text = readFileSync(
+      join(STREAMS_DIR, "responses", "text.sse"),
+      "utf8",
+    );
+    const frames = text.split("\n\n").filter((f) => f.trim() !== "");
+    const truncated =
+      frames
+        .filter((f) => !f.includes("response.completed"))
+        .join("\n\n") + "\n\n";
+
+    const events = decode("responses", "qwen/qwen3-coder", [
       new TextEncoder().encode(truncated),
     ]);
     expect(events.at(-1)?.type).toBe("error");

@@ -1,0 +1,29 @@
+{
+  "source": "Hand-written from https://platform.openai.com/docs/api-reference/responses-streaming and the Response object's incomplete_details (https://platform.openai.com/docs/api-reference/responses/object); spec §3.7 truncation ends in response.incomplete",
+  "date": "2026-11-13",
+  "model": "qwen/qwen3-coder",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "resp_inc1",
+      "model": "qwen/qwen3-coder"
+    },
+    {
+      "type": "text_delta",
+      "text": "partial ans"
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "inputTokens": 20,
+        "outputTokens": 16,
+        "totalTokens": 36
+      }
+    },
+    {
+      "type": "message_end",
+      "finishReason": "length"
+    }
+  ],
+  "nonStreaming": null
+}
