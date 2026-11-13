@@ -3899,7 +3899,7 @@ cache.
   `v1.3.0`, `npm publish --access public`, the GHCR image, verify
   `npx -y babelgate@1.3.0 --help` and that `/ui` loads.
 
-## v1.4 Task 1 — Codex traffic recording script; recording pending (2026-11-13)
+## v1.4 Task 1 — Codex traffic recording (2026-11-13)
 
 `scripts/gates/record-codex.sh` added per the plan's Interfaces:
 `--upstream <baseUrl>` (default `https://openrouter.ai/api/v1`),
@@ -3937,7 +3937,8 @@ OpenRouter Anthropic-endpoint check (`POST /api/v1/messages`,
 config) are still open. Owner step: install Codex CLI, export
 `OPENROUTER_API_KEY`, run `scripts/gates/record-codex.sh` on this
 branch and attach the JSONL; a follow-up session then derives
-`turns.json` and the E12+ rows.
+`turns.json` and the E12+ rows. *(Resolved — see "Continuation"
+below.)*
 
 **Fix round (2026-11-13):** the conductor's run hung — `record-shapes.ts`
 called `http.request` with `protocol: "https:"`, which throws
@@ -4007,19 +4008,15 @@ enum confirmation is pending run 2):
   (`function_call_output`). No reasoning input items under fallback
   metadata.
 
-**Pending run 2** (conductor re-records with `RECORD_KEEP_ENUMS=1`):
-the `type` values, tool names (is `apply_patch` a `custom` tool with
-`format.type`/`syntax`, or absent for this model?), `include` entries,
-`tool_choice`, `reasoning` fields, the SSE event names, and the
-user-agent product tokens — then `turns.json` and the §1.2 E12+ rows.
 `record-shapes.ts` gained the opt-in `RECORD_KEEP_ENUMS=1` mode for
-this (4th-arg-free env var; default output byte-identical to v1.3):
-keep-listed enum strings verbatim, `user-agent` reduced to product
-tokens, and for `text/event-stream` replies `sseEvents`/`sseOrder`
-from `event:` names only — verified locally against a stub SSE
-upstream (`response.created` ×1, `response.output_text.delta` ×2,
-`response.completed` ×1; `format.definition`, `encrypted_content`,
-arguments and prompt text stayed `<string:N>`).
+the re-record (4th-arg-free env var; default output byte-identical to
+v1.3): keep-listed enum strings verbatim, `user-agent` reduced to
+product tokens, and for `text/event-stream` replies
+`sseEvents`/`sseOrder` from `event:` names only — verified locally
+against a stub SSE upstream (`response.created` ×1,
+`response.output_text.delta` ×2, `response.completed` ×1;
+`format.definition`, `encrypted_content`, arguments and prompt text
+stayed `<string:N>`).
 
 **Fix round 3 (2026-11-13):** the conductor's `RECORD_KEEP_ENUMS=1`
 re-record showed `sseEvents: {}` / `sseOrder: []` on every reply —
@@ -4031,3 +4028,148 @@ non-JSON/typeless payloads count as `"<untyped>"`; a
 `content-encoding` of gzip/br/deflate is decoded first, failure →
 `"<encoded:…>"`); verified locally against stubs (event+data,
 data-only, gzip, corrupt gzip, malformed).
+
+**Continuation (2026-11-13): Steps 2 and 4 done.** The conductor
+re-ran `record-codex.sh` on this branch with codex-cli **0.169.0** →
+OpenRouter, `RECORD_KEEP_ENUMS=1`, edit task PASS on both models.
+Three recordings (gitignored copies under `tmp/codex-records/`):
+`conductor-run3-qwen.jsonl` (`--model qwen/qwen3-coder`, 14 requests —
+Codex warned `Model metadata for qwen/qwen3-coder not found.
+Defaulting to fallback metadata`), `conductor-run3-gpt-6-luna.jsonl`
+(`--model openai/gpt-6-luna`, a bundled-catalog slug once the
+`openai/` namespace is stripped, 2 requests) and
+`conductor-run2-gpt-6-luna.jsonl` (an earlier luna run, 5 requests,
+request shapes only — recorded before the SSE-from-`data:` fix).
+`tests/fixtures/codex/recording.jsonl` is the qwen run verbatim (the
+shape v1.4 targets); `tests/fixtures/codex/
+recording-responses-lite.jsonl` is the luna run verbatim, kept for
+reference. **Files outside the Files block:** `tests/fixtures/codex/
+recording-responses-lite.jsonl` (the plan names only
+`recording.jsonl`; the second shape needs a home for Task 14's catalog
+work).
+
+**What the recordings show** (shapes only; values are `<string:N>`
+unless the allowlist kept them):
+
+- **Endpoints:** every request in all three runs is `POST
+  /v1/responses` → `200` `text/event-stream` (14 + 2 + 5 = 21
+  requests). No `GET /v1/models`, no other path, no query keys.
+- **Two request shapes, selected by Codex's models-manager lookup**
+  (spec E12): a slug miss gets *fallback metadata* (the qwen run); a
+  catalog slug gets the *responses-lite* shape (the luna runs).
+  Top-level keys, fallback: `model, stream, input, tools,
+  tool_choice, parallel_tool_calls, reasoning, store, include,
+  prompt_cache_key, client_metadata`. Catalog: the same minus
+  `tools`, plus `text`. Neither shape sends `previous_response_id`
+  or `max_output_tokens`.
+- **Shared fields (both shapes):** `include:
+  ["reasoning.encrypted_content"]`, `tool_choice: "auto"`, `stream`,
+  `store` and `parallel_tool_calls` booleans, `prompt_cache_key` a
+  36-char string, `client_metadata` keys `root_turn_id, session_id,
+  thread_id, turn_id, x-codex-installation-id,
+  x-codex-turn-metadata, x-codex-window-id`.
+- **Fallback `tools[]`** (9 entries, identical on all 14 requests):
+  `type: "function"` ×7 — `exec_command`, `write_stdin`,
+  `request_user_input`, `view_image`, `get_goal`, `create_goal`,
+  `update_goal`; `type: "namespace"` ×1 — `multi_agent_v1` with its
+  own `tools[]` of 5 nested function tools (`spawn_agent`,
+  `send_input`, `wait_agent`, `resume_agent`, `close_agent`);
+  `type: "web_search"` ×1 — `{type, external_web_access}`.
+  **`apply_patch` is absent on fallback** — no `custom` tool at all.
+- **Fallback `reasoning` = `{summary: "auto"}`** — no `effort`, and
+  no `text` key at all.
+- **Catalog (responses-lite) request:** `reasoning: {effort:
+  "medium", context: <string:9>}` (a `context` field the fallback
+  never sends), `text: {verbosity: "low"}`, and **no top-level
+  `tools`** — tools ride in an `additional_tools` input item
+  (`{type, id, role, tools}`, always `input[0]`) holding three
+  `namespace` tools: `functions` (4 nested: `exec` — `type:
+  "custom"`, `format: {type: "grammar", syntax: "lark", definition}`
+  — plus `wait`, `request_user_input`, `request_user_input_async`),
+  `collaboration` (6 function tools: `followup_task`,
+  `interrupt_agent`, `list_agents`, `send_message`, `spawn_agent`,
+  `wait_agent`) and `clock` (1: `sleep`). `apply_patch` is absent
+  under this catalog too — the only custom tool recorded is `exec`.
+- **Input item types, fallback:** `message`, `function_call`,
+  `function_call_output` only — every `function_call` (all named
+  `exec_command`, 91 items across the run) is resent verbatim next
+  turn with its `function_call_output`; no `reasoning` items
+  (fallback reasoning is summary-only). Keys: `message` `{type, id,
+  role, content[, status]}`; `function_call` `{type, id, call_id,
+  name, arguments, status}`; `function_call_output` `{type, call_id,
+  id, output}`.
+- **Input item types, catalog:** `additional_tools`, `message`,
+  `reasoning`, `custom_tool_call`, `custom_tool_call_output` — no
+  `function_call`/`function_call_output` at all: every tool call is a
+  `custom_tool_call` `{type, id, call_id, name, namespace, input,
+  status}` (name `exec`, `namespace` a 9-char string) with a
+  `custom_tool_call_output` `{type, call_id, id, output}`.
+  **`reasoning` items `{type, id, content, summary,
+  encrypted_content}` are resent on later turns with
+  `encrypted_content` present** — the round-trip §3.3's envelope
+  assumes. Assistant `output_text` messages also carry `phase`
+  (`<string:10>`).
+- **SSE events, fallback replies:** `response.created`,
+  `response.in_progress`, `response.output_item.added` ×2,
+  `response.content_part.added`, `response.output_text.delta`
+  (×4–80), `response.output_text.done`, `response.content_part.done`,
+  `response.output_item.done` ×2,
+  `response.function_call_arguments.delta`,
+  `response.function_call_arguments.done`, `response.completed` —
+  13 of 14 replies; the last reply was text only (one output item,
+  no `function_call_arguments.*`). Every event seen is in spec E2's
+  parser list — none outside it. E2 events not seen on this run:
+  `response.failed`, `response.incomplete`,
+  `response.reasoning_summary_part.*`,
+  `response.reasoning_summary_text.*`, `response.reasoning_text.*`,
+  `response.refusal.*`.
+- **SSE events, catalog replies (run 3):** `response.created`,
+  `response.in_progress`, `response.output_item.added`,
+  `response.custom_tool_call_input.delta` (×30, ×42),
+  `response.custom_tool_call_input.done`, `response.output_item.done`,
+  `response.completed` — all in E2's list; same unseen set as above
+  plus `content_part.*`, `output_text.*` and
+  `function_call_arguments.*` (these replies produced only a custom
+  tool call). Run 2 predates the `data:`-payload fix, so its
+  `sseEvents` are `{}`.
+- **Headers/UA:** `user-agent: codex_exec/0.169.0` on every request;
+  header names `accept, authorization, content-length,
+  content-type, host, originator, session-id, thread-id,
+  x-client-request-id, x-codex-beta-features,
+  x-codex-turn-metadata, x-codex-window-id` — the catalog runs add
+  `x-openai-internal-codex-responses-lite`.
+- **`turns.json`** is `recording.jsonl` **lines 1–3** (consecutive):
+  the edit-task prompt whose reply ended in a `function_call`
+  (`response.function_call_arguments.done` in its `sseEvents`), the
+  next request carrying that `function_call` +
+  `function_call_output`, and one more round —
+  `{codexVersion: "0.169.0", turns: […bodyShapes…]}`.
+
+Step 3's result stands as recorded above (OpenRouter `/messages`
+returns a signed `thinking` block — gate B can use the Anthropic
+format).
+
+**Step 4 scope check — owner decisions (PR #87 comments, this
+session): A + 2a.** The recording surfaced the one thing §2.2 had
+deferred — **responses-lite** (`additional_tools`, `custom_tool_call`
+items, the `x-openai-internal-codex-responses-lite` header) — which
+§2.2 scoped out "unless the Task 1 recording shows Codex sending it
+to a custom provider"; the luna runs do exactly that. The owner
+decided:
+
+- **A:** v1.4 targets Codex's **fallback-metadata** request shape —
+  what every non-OpenAI model name sends (top-level `tools` with
+  function tools, the `multi_agent_v1` namespace tool and
+  `web_search`; `reasoning {summary}`; no `apply_patch`). Tasks 3/5
+  add `namespace` tools: flattened to function tools on the bridge
+  and raised back on the way out (naming is the builder's call,
+  recorded in that task). Gates A/B (Task 14) set
+  `model_reasoning_effort` and ship a `model_catalog_json` in
+  `examples/` so `apply_patch` (custom, Lark grammar) and reasoning
+  are on. The **responses-lite** shape is **pass-through only** in
+  v1.4 — a recorded limitation on the bridge. Open question for Task
+  14: this bundled-catalog run *was* responses-lite, so if a gate
+  catalog entry triggers it, Task 14 must set it to the classic
+  shape or STOP.
+- **2a:** fix round 3 approved (the `sseSummary` `data:`-payload fix
+  above).
