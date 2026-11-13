@@ -7,7 +7,11 @@ import {
 import type { RoutePlan } from "../routing/plan-route";
 import { authHeaders } from "../routing/registry";
 import type { Hop } from "../routing/route-log";
-import { currentTrace, snapshot } from "../observe/context";
+import {
+  currentTrace,
+  runWithAttempt,
+  snapshot,
+} from "../observe/context";
 import { finishTrace } from "../observe/emit";
 import {
   diagnoseToolCalls,
@@ -65,42 +69,54 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     result = await attemptTargets(
       plan,
       config.registry,
-      async (entry, target) => {
-        const targetBody = adapters[entry.type].fromCanonicalRequest(
-          canonicalForTarget(canonical, entry, target),
-        );
-        // §3.5: one target snapshot per hop (fallbacks included).
-        snapshot("target", targetBody);
-        const targetRoute = PROVIDER_ROUTES[entry.type].find(
-          (r) => r.kind === "chat",
-        )!;
-        const url = `${entry.baseUrl}${targetRoute.requestPath(target.model)}`;
+      async (entry, target) =>
+        // v1.4 §3.2: the attempt's provider name and upstream model are
+        // ambient for its encode and upstream call — every hop gets
+        // its own scope, so a fallback never sees the previous hop's.
+        runWithAttempt(
+          {
+            providerName: target.provider,
+            upstreamModel: target.model,
+          },
+          async () => {
+            const targetBody = adapters[
+              entry.type
+            ].fromCanonicalRequest(
+              canonicalForTarget(canonical, entry, target),
+            );
+            // §3.5: one target snapshot per hop (fallbacks included).
+            snapshot("target", targetBody);
+            const targetRoute = PROVIDER_ROUTES[entry.type].find(
+              (r) => r.kind === "chat",
+            )!;
+            const url = `${entry.baseUrl}${targetRoute.requestPath(target.model)}`;
 
-        const upstream = await postJson({
-          url,
-          headers: authHeaders(entry),
-          body: targetBody,
-          timeoutMs: entry.timeoutMs ?? config.upstreamTimeoutMs,
-          retries: config.upstreamRetries,
-          requestId,
-        }).catch((err) => {
-          throw err instanceof UpstreamError
-            ? toClientFacing(err, entry.type)
-            : err;
-        });
+            const upstream = await postJson({
+              url,
+              headers: authHeaders(entry),
+              body: targetBody,
+              timeoutMs: entry.timeoutMs ?? config.upstreamTimeoutMs,
+              retries: config.upstreamRetries,
+              requestId,
+            }).catch((err) => {
+              throw err instanceof UpstreamError
+                ? toClientFacing(err, entry.type)
+                : err;
+            });
 
-        if (upstream.status < 200 || upstream.status >= 300) {
-          const err = new UpstreamError(
-            `Upstream ${entry.type} returned ${upstream.status}`,
-            upstream.status,
-            upstream.body,
-          );
-          err.retryAfterSeconds = upstream.retryAfterSeconds;
-          throw toClientFacing(err, entry.type);
-        }
+            if (upstream.status < 200 || upstream.status >= 300) {
+              const err = new UpstreamError(
+                `Upstream ${entry.type} returned ${upstream.status}`,
+                upstream.status,
+                upstream.body,
+              );
+              err.retryAfterSeconds = upstream.retryAfterSeconds;
+              throw toClientFacing(err, entry.type);
+            }
 
-        return upstream;
-      },
+            return upstream;
+          },
+        ),
       { requestId, signal: input.opts?.signal, hops },
     );
   } catch (err) {
@@ -124,9 +140,19 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
   let canonicalResp: CanonicalResponse;
   let body: unknown;
   try {
-    canonicalResp = adapters[result.entry.type].toCanonicalResponse(
-      result.value.body,
-      result.target.model,
+    // v1.4 §3.2: the winning attempt's context is ambient for its
+    // decode — reasoning parts are tagged with the origin that
+    // produced them. The client-facing encode below is no attempt.
+    canonicalResp = runWithAttempt(
+      {
+        providerName: result.target.provider,
+        upstreamModel: result.target.model,
+      },
+      () =>
+        adapters[result.entry.type].toCanonicalResponse(
+          result.value.body,
+          result.target.model,
+        ),
     );
     canonicalResp.model = requestedModel;
 

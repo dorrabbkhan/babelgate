@@ -1,4 +1,7 @@
 import type {
+  CanonicalContentPart,
+  CanonicalReasoningOrigin,
+  CanonicalReasoningSignature,
   CanonicalResponse,
   CanonicalStreamEvent,
   CanonicalToolCall,
@@ -24,7 +27,26 @@ export function reassembleStream(
   let finishReason: CanonicalResponse["finishReason"] | undefined;
   const calls = new Map<
     number,
-    { id: string; name: string; args: string; ended: boolean }
+    {
+      id: string;
+      name: string;
+      args: string;
+      ended: boolean;
+      custom?: boolean;
+      signature?: CanonicalReasoningSignature;
+    }
+  >();
+  // Reasoning blocks keyed by their own index namespace — text and
+  // signatures accumulate per index and reassemble into reasoning
+  // content parts ahead of the reply text.
+  const reasoning = new Map<
+    number,
+    {
+      text: string;
+      origin: CanonicalReasoningOrigin;
+      redacted: boolean;
+      signature?: CanonicalReasoningSignature;
+    }
   >();
   let nextIndex = 0;
 
@@ -47,6 +69,36 @@ export function reassembleStream(
       case "text_delta":
         text += event.text;
         break;
+      case "reasoning_start":
+        if (reasoning.has(event.index)) {
+          fail(`duplicate reasoning_start for index ${event.index}`);
+        }
+        reasoning.set(event.index, {
+          text: "",
+          origin: event.origin,
+          redacted: event.redacted === true,
+        });
+        break;
+      case "reasoning_delta": {
+        const block = reasoning.get(event.index);
+        if (!block) {
+          fail(
+            `reasoning_delta for index ${event.index} with no reasoning_start`,
+          );
+        }
+        block.text += event.text;
+        break;
+      }
+      case "reasoning_signature": {
+        const block = reasoning.get(event.index);
+        if (!block) {
+          fail(
+            `reasoning_signature for index ${event.index} with no reasoning_start`,
+          );
+        }
+        block.signature = event.signature;
+        break;
+      }
       case "tool_call_start":
         if (event.index !== nextIndex) {
           fail(
@@ -58,6 +110,10 @@ export function reassembleStream(
           name: event.name,
           args: "",
           ended: false,
+          ...(event.custom !== undefined && { custom: event.custom }),
+          ...(event.signature !== undefined && {
+            signature: event.signature,
+          }),
         });
         nextIndex++;
         break;
@@ -102,6 +158,28 @@ export function reassembleStream(
       id: c.id,
       type: "function" as const,
       function: { name: c.name, arguments: c.args },
+      ...(c.custom !== undefined && { custom: c.custom }),
+      ...(c.signature !== undefined && { signature: c.signature }),
+    }));
+
+  // Reasoning parts precede the reply text (thinking comes first on
+  // every provider). A block's origin — and whether it is redacted —
+  // comes from its reasoning_start, never from a signature, so
+  // unsigned stream reasoning (DeepSeek-style) keeps its provider.
+  const reasoningParts: CanonicalContentPart[] = [
+    ...reasoning.entries(),
+  ]
+    .sort(([a], [b]) => a - b)
+    .map(([, block]) => ({
+      type: "reasoning" as const,
+      reasoning: {
+        ...(block.text !== "" && { text: block.text }),
+        ...(block.redacted && { redacted: true as const }),
+        origin: block.origin,
+      },
+      ...(block.signature !== undefined && {
+        signature: block.signature,
+      }),
     }));
 
   return {
@@ -109,7 +187,15 @@ export function reassembleStream(
     model,
     message: {
       role: "assistant",
-      content: text,
+      content:
+        reasoningParts.length === 0
+          ? text
+          : [
+              ...reasoningParts,
+              ...(text !== ""
+                ? [{ type: "text" as const, text }]
+                : []),
+            ],
       ...(toolCalls.length > 0 && { toolCalls }),
     },
     // done without throwing ⇒ a message_end set finishReason

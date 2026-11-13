@@ -651,7 +651,11 @@ describe('OpenAI Adapter', () => {
       const canonical = toCanonicalRequest(input);
 
       // The request still decodes — the drop is only made visible.
-      expect(canonical.tools?.[0]?.function.name).toBe('get_weather');
+      const decodedTool = canonical.tools?.[0];
+      expect(decodedTool?.type).toBe('function');
+      expect(
+        decodedTool?.type === 'function' && decodedTool.function.name,
+      ).toBe('get_weather');
       expect(debugSpy).toHaveBeenCalledWith(
         expect.stringContaining('"strict"'),
       );

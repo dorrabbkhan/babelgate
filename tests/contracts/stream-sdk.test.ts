@@ -900,10 +900,14 @@ describe("stream encoders via the provider SDK", () => {
       mapToGeminiFinishReason(expected.finishReason),
     );
     if (expected.usage) {
+      // v1.4 §3.2: canonical outputTokens includes reasoning; Gemini
+      // splits it back into candidatesTokenCount + thoughtsTokenCount.
+      const reasoning = expected.usage.reasoningTokens ?? 0;
       expect(final.usageMetadata).toMatchObject({
         promptTokenCount: expected.usage.inputTokens,
-        candidatesTokenCount: expected.usage.outputTokens,
+        candidatesTokenCount: expected.usage.outputTokens - reasoning,
         totalTokenCount: expected.usage.totalTokens,
+        ...(reasoning > 0 && { thoughtsTokenCount: reasoning }),
       });
     }
   });
@@ -953,10 +957,14 @@ describe("stream encoders via the provider SDK", () => {
     expect(last.candidates?.[0]?.finishReason).toBe(
       mapToGeminiFinishReason(expected.finishReason),
     );
+    // v1.4 §3.2: canonical outputTokens includes reasoning; Gemini
+    // splits it back into candidatesTokenCount + thoughtsTokenCount.
+    const reasoning = expected.usage!.reasoningTokens ?? 0;
     expect(last.usageMetadata).toMatchObject({
       promptTokenCount: expected.usage!.inputTokens,
-      candidatesTokenCount: expected.usage!.outputTokens,
+      candidatesTokenCount: expected.usage!.outputTokens - reasoning,
       totalTokenCount: expected.usage!.totalTokens,
+      ...(reasoning > 0 && { thoughtsTokenCount: reasoning }),
     });
     expect(last.modelVersion).toBe("m");
   });

@@ -4176,3 +4176,65 @@ decided:
   shape or STOP.
 - **2a:** fix round 3 approved (the `sseSummary` `data:`-payload fix
   above).
+
+## v1.4 Task 2: canonical reasoning/custom-tool/responseFormat types; `currentAttempt`; Gemini `thoughtsTokenCount`
+
+- Canonical interface changes (spec §3.2, all in one commit per rule 4): `CanonicalRequest.responseFormat`
+  (`json_schema`/`json_object`) and `parallelToolCalls`; `CanonicalConfig.reasoning`
+  (`effort` enum incl. `xhigh`, `summary`, `budgetTokens`); `"reasoning"` content parts with
+  `origin`/`redacted`, `signature` on reasoning and text parts; `CanonicalTool` becomes a
+  function/custom union (custom tools carry `name`, optional `description` and a `text`/`grammar`
+  format); `CanonicalToolCall.signature`/`custom`; `CanonicalUsage.reasoningTokens`;
+  `reasoning_delta`/`reasoning_signature` stream events; `tool_call_start` gains `custom`/`signature`.
+  Fix round 1 adds `reasoning_start {index, origin, redacted?}` — it opens a reasoning block the way
+  `tool_call_start` opens a tool block, carrying the block-scoped data the per-delta events can't:
+  unsigned stream reasoning (OpenAI-compatible/Ollama `reasoning_content`, spec §3.3) has no signature,
+  so without it the Task 8 Responses envelope would get reasoning parts with no origin; and Anthropic
+  `redacted_thinking` arrives as a content block with only `data`, so a signature alone couldn't mark
+  the reassembled part `redacted` for Task 7's re-encode.
+- **Union narrowing ripples (all required by the `CanonicalTool` union):** the four adapters that
+  encode `tools[]` (anthropic.messages, openai.adapter, gemini.tools, ollama.tools) and
+  `tool-diagnostics.ts` now narrow on `tool.type === "function"` and reject `type: "custom"` with a
+  `ValidationError` — custom tools are lowered by `canonicalForTarget` in Task 5, so one reaching an
+  encoder is a bug. `tool-diagnostics` also maps custom tools by `t.name` for `unknown_tool`.
+- **New stream-event ripples:** the four target stream encoders (anthropic/gemini/ollama/openai
+  `.stream.ts`) drop `reasoning_start`/`reasoning_delta`/`reasoning_signature` — replay to a target
+  lands in its own task; reasoning a target can't take is dropped (spec §3.3). `token-estimate.ts` counts reasoning
+  deltas as output (billed output per §3.2). `stream-reassemble.ts` folds reasoning events into
+  reasoning content parts ahead of reply text — a block's `origin` and `redacted` come from its
+  `reasoning_start`; `reasoning_delta`/`reasoning_signature` without a prior `reasoning_start` for
+  that index, or a duplicate `reasoning_start`, fail like the tool-call index checks — and carries
+  `custom`/`signature` from `tool_call_start` onto the reassembled call.
+- **Attempt context (spec §3.2):** `runWithAttempt`/`currentAttempt` live beside `recordNote` on a
+  separate `AsyncLocalStorage` in `observe/context.ts` — `{providerName, upstreamModel}` ambient for
+  encode, upstream call and decode of every attempt, including fallback hops and the winning
+  non-stream decode (`chat.service.ts`). Streaming (`stream-attempt.ts`) wraps each hop's callback and
+  re-enters the attempt scope inside the decoder's `feed`/`end`, since those run later in the
+  pipeline's async context rather than inside the attempt callback.
+- **Gemini `thoughtsTokenCount` (spec §3.2/E9,
+  ai.google.dev/api/generate-content#UsageMetadata):** decode adds it to `outputTokens` and reports
+  it as `reasoningTokens` (only when > 0); encode splits it back —
+  `candidatesTokenCount = outputTokens − reasoningTokens`, `thoughtsTokenCount` re-emitted when > 0.
+  The bundled `@google/generative-ai` SDK type predates the field, so usage paths keep the existing
+  optional-field signature; tests cast the response shape.
+- **Owner-approved fixture change (D7, notes/v1.4/task2.md):** `tests/fixtures/streams/gemini/text.json`
+  outputTokens 1 → 34 + `reasoningTokens` 33; `parallel_tool_calls.json` outputTokens 54 → 131 +
+  `reasoningTokens` 77 (the `.sse` recordings already carried `thoughtsTokenCount`; the expected JSONs
+  now assert it). No `.sse` or other expected values touched. CI fixture guard is red until the owner
+  sets `ALLOW_FIXTURE_CHANGE` — expected state.
+- **Files outside the Files block:**
+  - `tests/contracts/stream-sdk.test.ts`: the Gemini encode-side `usageMetadata` assertions asserted
+    `candidatesTokenCount === outputTokens`; updated to expect the D7 split
+    (`outputTokens − reasoningTokens`, `thoughtsTokenCount` when non-zero). Required by the canonical
+    usage change, not a fixture edit.
+  - `src/transformers/adapters/{anthropic,gemini,ollama,openai}.stream.ts`,
+    `src/transformers/adapters/{anthropic.messages,openai.adapter,gemini.tools,ollama.tools}.ts`,
+    `src/observe/tool-diagnostics.ts`, `src/utils/token-estimate.ts`: union-narrowing and
+    new-event exhaustiveness fallouts listed above — typecheck-forced by the canonical type change.
+  - `src/transformers/adapters/openai.adapter.test.ts`: one assertion narrowed to
+    `type === "function"` before reading `.function.name` (same assertion, union-safe).
+  - `src/services/attempt-context.test.ts` (new): the "each fallback hop runs in its own attempt"
+    tests — the Files block named no home for the service-level context tests.
+  - `tests/contracts/stream-reasoning-drop.test.ts` (new, fix round 1): pins that all four
+    non-Responses encoders drop `reasoning_start`/`reasoning_delta`/`reasoning_signature` — the
+    wire bytes equal the same stream without them (Global Constraints).

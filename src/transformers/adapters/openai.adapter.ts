@@ -309,6 +309,13 @@ export function fromCanonicalRequest(
 
   if (request.tools && request.tools.length > 0) {
     result.tools = request.tools.map((tool) => {
+      if (tool.type !== "function") {
+        // Custom tools are lowered to function tools by
+        // canonicalForTarget before encode (v1.4 spec §3.6).
+        throw new ValidationError(
+          `Unsupported tool type "${tool.type}" in tools[]`,
+        );
+      }
       const cacheControl = toCacheControl(tool.cache);
       return {
         type: "function" as const,

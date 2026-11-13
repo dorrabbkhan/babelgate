@@ -217,6 +217,12 @@ export function createStreamEncoder(
           return chunk({ role: "assistant", content: "" });
         case "text_delta":
           return chunk({ content: event.text });
+        case "reasoning_start":
+        case "reasoning_delta":
+        case "reasoning_signature":
+          // v1.4 §3.3: reasoning replay to this target lands in a
+          // later task; reasoning a target can't take is dropped.
+          return "";
         case "tool_call_start":
           return chunk({
             tool_calls: [

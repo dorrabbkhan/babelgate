@@ -5,6 +5,10 @@ import {
   canonicalResponseSchema,
   canonicalStreamEventSchema,
 } from '../../src/types/canonical.schema';
+import openaiFixtures from '../fixtures/openai.json';
+import geminiFixtures from '../fixtures/gemini.json';
+import ollamaFixtures from '../fixtures/ollama.json';
+import anthropicFixtures from '../fixtures/anthropic.json';
 
 /**
  * Contract tests: every adapter's toCanonical* output must satisfy
@@ -367,6 +371,276 @@ describe('Canonical stream event schema', () => {
         totalTokens: 105,
         cacheReadTokens: -1,
       },
+    });
+    expect(negative.success).toBe(false);
+  });
+});
+
+describe('v1.4 canonical extensions (v1.4 spec §3.2)', () => {
+  const request = (over: Record<string, unknown>) => ({
+    model: 'm',
+    messages: [{ role: 'user', content: 'hi' }],
+    ...over,
+  });
+  const reasoningPart = {
+    type: 'reasoning',
+    reasoning: {
+      text: 'let me think',
+      origin: { provider: 'p', model: 'm' },
+    },
+  };
+
+  it('reasoning part needs origin', () => {
+    const noOrigin = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'assistant',
+            content: [{ type: 'reasoning', reasoning: { text: 't' } }],
+          },
+        ],
+      })
+    );
+    expect(noOrigin.success).toBe(false);
+
+    const noReasoning = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          { role: 'assistant', content: [{ type: 'reasoning' }] },
+        ],
+      })
+    );
+    expect(noReasoning.success).toBe(false);
+
+    const valid = canonicalRequestSchema.safeParse(
+      request({
+        messages: [{ role: 'assistant', content: [reasoningPart] }],
+      })
+    );
+    expect(valid.success).toBe(true);
+  });
+
+  it('reasoning part only on assistant messages', () => {
+    for (const role of ['user', 'system', 'tool']) {
+      const result = canonicalRequestSchema.safeParse(
+        request({
+          messages: [
+            {
+              role,
+              ...(role === 'tool' ? { toolCallId: 'c1' } : {}),
+              content: [reasoningPart],
+            },
+          ],
+        })
+      );
+      expect(result.success, `role ${role}`).toBe(false);
+    }
+
+    const assistant = canonicalRequestSchema.safeParse(
+      request({
+        messages: [{ role: 'assistant', content: [reasoningPart] }],
+      })
+    );
+    expect(assistant.success).toBe(true);
+  });
+
+  it('custom tool with grammar is valid', () => {
+    const grammar = canonicalRequestSchema.safeParse(
+      request({
+        tools: [
+          {
+            type: 'custom',
+            name: 'apply_patch',
+            description: 'Apply a patch',
+            format: { type: 'grammar', syntax: 'lark', definition: 'start: x' },
+            cache: { ttl: '5m' },
+          },
+        ],
+      })
+    );
+    expect(grammar.success).toBe(true);
+
+    const textFormat = canonicalRequestSchema.safeParse(
+      request({
+        tools: [{ type: 'custom', name: 't', format: { type: 'text' } }],
+      })
+    );
+    expect(textFormat.success).toBe(true);
+
+    const bare = canonicalRequestSchema.safeParse(
+      request({ tools: [{ type: 'custom', name: 't' }] })
+    );
+    expect(bare.success).toBe(true);
+
+    // A custom tool has no `function`; the shape stays discriminated.
+    const bad = canonicalRequestSchema.safeParse(
+      request({
+        tools: [{ type: 'custom', name: 't', format: { type: 'yaml' } }],
+      })
+    );
+    expect(bad.success).toBe(false);
+  });
+
+  it('responseFormat json_schema needs name and schema', () => {
+    const noName = canonicalRequestSchema.safeParse(
+      request({
+        responseFormat: { type: 'json_schema', schema: { type: 'object' } },
+      })
+    );
+    expect(noName.success).toBe(false);
+
+    const noSchema = canonicalRequestSchema.safeParse(
+      request({ responseFormat: { type: 'json_schema', name: 'x' } })
+    );
+    expect(noSchema.success).toBe(false);
+
+    const valid = canonicalRequestSchema.safeParse(
+      request({
+        responseFormat: {
+          type: 'json_schema',
+          name: 'x',
+          schema: { type: 'object' },
+          strict: true,
+          description: 'd',
+        },
+      })
+    );
+    expect(valid.success).toBe(true);
+
+    const jsonObject = canonicalRequestSchema.safeParse(
+      request({ responseFormat: { type: 'json_object' } })
+    );
+    expect(jsonObject.success).toBe(true);
+  });
+
+  it('parallelToolCalls is optional boolean', () => {
+    expect(
+      canonicalRequestSchema.safeParse(
+        request({ parallelToolCalls: false })
+      ).success
+    ).toBe(true);
+    expect(
+      canonicalRequestSchema.safeParse(
+        request({ parallelToolCalls: 'no' })
+      ).success
+    ).toBe(false);
+  });
+
+  it("effort xhigh valid, 'max' invalid", () => {
+    for (const effort of [
+      'none',
+      'minimal',
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+    ]) {
+      const result = canonicalRequestSchema.safeParse(
+        request({ config: { reasoning: { effort } } })
+      );
+      expect(result.success, `effort ${effort}`).toBe(true);
+    }
+    expect(
+      canonicalRequestSchema.safeParse(
+        request({ config: { reasoning: { effort: 'max' } } })
+      ).success
+    ).toBe(false);
+
+    const full = canonicalRequestSchema.safeParse(
+      request({
+        config: {
+          reasoning: { effort: 'high', summary: true, budgetTokens: 4096 },
+        },
+      })
+    );
+    expect(full.success).toBe(true);
+  });
+
+  it('existing requests still valid', () => {
+    const fixtures: Record<Provider, { requests: Record<string, unknown> }> =
+      {
+        openai: openaiFixtures,
+        gemini: geminiFixtures,
+        ollama: ollamaFixtures,
+        anthropic: anthropicFixtures,
+      };
+    for (const provider of providers) {
+      for (const [name, req] of Object.entries(fixtures[provider].requests)) {
+        const canonical = adapters[provider].toCanonicalRequest(req);
+        const result = canonicalRequestSchema.safeParse(canonical);
+        expect(result.success, `${provider}/${name}`).toBe(true);
+      }
+    }
+  });
+
+  it('reasoning stream events and flagged tool_call_start parse', () => {
+    const signature = {
+      origin: { provider: 'p', model: 'm' },
+      data: 'sig',
+    };
+    const events = [
+      { type: 'reasoning_delta', index: 0, text: 'think' },
+      { type: 'reasoning_signature', index: 0, signature },
+      {
+        type: 'tool_call_start',
+        index: 0,
+        id: 'call_0',
+        name: 'f',
+        custom: true,
+        signature,
+      },
+    ];
+    for (const event of events) {
+      const result = canonicalStreamEventSchema.safeParse(event);
+      expect(result.success, JSON.stringify(event)).toBe(true);
+    }
+  });
+
+  it('reasoning_start needs origin', () => {
+    const noOrigin = canonicalStreamEventSchema.safeParse({
+      type: 'reasoning_start',
+      index: 0,
+    });
+    expect(noOrigin.success).toBe(false);
+
+    const valid = canonicalStreamEventSchema.safeParse({
+      type: 'reasoning_start',
+      index: 0,
+      origin: { provider: 'p', model: 'm' },
+    });
+    expect(valid.success).toBe(true);
+
+    const redacted = canonicalStreamEventSchema.safeParse({
+      type: 'reasoning_start',
+      index: 0,
+      origin: { provider: 'p', model: 'm' },
+      redacted: true,
+    });
+    expect(redacted.success).toBe(true);
+  });
+
+  it('usage carries reasoningTokens only when non-negative', () => {
+    const usage = {
+      inputTokens: 11,
+      outputTokens: 34,
+      totalTokens: 45,
+      reasoningTokens: 33,
+    };
+    const ok = canonicalResponseSchema.safeParse({
+      id: 'r1',
+      model: 'm',
+      message: { role: 'assistant', content: 'hi' },
+      finishReason: 'stop',
+      usage,
+    });
+    expect(ok.success).toBe(true);
+
+    const negative = canonicalResponseSchema.safeParse({
+      id: 'r1',
+      model: 'm',
+      message: { role: 'assistant', content: 'hi' },
+      finishReason: 'stop',
+      usage: { ...usage, reasoningTokens: -1 },
     });
     expect(negative.success).toBe(false);
   });

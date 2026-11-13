@@ -19,6 +19,30 @@ export function currentTrace(): RequestTrace | undefined {
 }
 
 /**
+ * The current upstream attempt's identity (v1.4 spec §3.2): the
+ * configured provider NAME and the upstream model it is serving. The
+ * services wrap every attempt's encode, upstream call and decode —
+ * fallback hops included — so adapters can tag reasoning parts and
+ * signatures with the origin that produced them. Separate storage
+ * from the trace scope: an attempt's context is per hop, the trace's
+ * per request; nested scopes restore the outer one on return.
+ */
+export type AttemptContext = {
+  providerName: string;
+  upstreamModel: string;
+};
+
+const attemptStorage = new AsyncLocalStorage<AttemptContext>();
+
+export function runWithAttempt<T>(ctx: AttemptContext, fn: () => T): T {
+  return attemptStorage.run(ctx, fn);
+}
+
+export function currentAttempt(): AttemptContext | undefined {
+  return attemptStorage.getStore();
+}
+
+/**
  * §3.5: record a lossy-translation note — the debug line the call site
  * used to write (`message`, verbatim), plus a structured
  * TranslationNote on the ambient trace. Notes carry codes and field

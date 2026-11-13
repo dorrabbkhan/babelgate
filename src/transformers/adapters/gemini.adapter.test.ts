@@ -757,6 +757,87 @@ describe('Gemini Adapter', () => {
     });
   });
 
+  describe('reasoning-token usage (v1.4 spec §3.2, E9)', () => {
+    it('thoughtsTokenCount added to output', () => {
+      const decoded = toCanonicalResponse(
+        {
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 'Hi' }] },
+              finishReason: FinishReason.STOP,
+              index: 0,
+            },
+          ],
+          // ai.google.dev/api/generate-content#UsageMetadata adds
+          // thoughtsTokenCount on thinking models; the bundled SDK
+          // type predates it and no totalTokenCount arrives here.
+          usageMetadata: {
+            promptTokenCount: 11,
+            candidatesTokenCount: 1,
+            thoughtsTokenCount: 33,
+          },
+        } as unknown as GenerateContentResponse,
+        'gemini-2.5-flash'
+      );
+
+      expect(decoded.usage).toEqual({
+        inputTokens: 11,
+        outputTokens: 34,
+        reasoningTokens: 33,
+        totalTokens: 45,
+      });
+    });
+
+    it('no thoughts, no reasoningTokens field', () => {
+      const decoded = toCanonicalResponse(
+        {
+          candidates: [
+            {
+              content: { role: 'model', parts: [{ text: 'Hi' }] },
+              finishReason: FinishReason.STOP,
+              index: 0,
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 10,
+            candidatesTokenCount: 5,
+            totalTokenCount: 15,
+          },
+        },
+        'gemini-2.5-flash'
+      );
+
+      expect(decoded.usage).toEqual({
+        inputTokens: 10,
+        outputTokens: 5,
+        totalTokens: 15,
+      });
+      expect(decoded.usage).not.toHaveProperty('reasoningTokens');
+    });
+
+    it('encode splits back', () => {
+      const encoded = fromCanonicalResponse({
+        id: 'gemini-1',
+        model: 'gemini-2.5-flash',
+        message: { role: 'assistant', content: 'Hi' },
+        finishReason: 'stop',
+        usage: {
+          inputTokens: 11,
+          outputTokens: 34,
+          reasoningTokens: 33,
+          totalTokens: 45,
+        },
+      });
+
+      expect(encoded.usageMetadata).toStrictEqual({
+        promptTokenCount: 11,
+        candidatesTokenCount: 1,
+        totalTokenCount: 45,
+        thoughtsTokenCount: 33,
+      });
+    });
+  });
+
   describe('roundtrip', () => {
     it('should preserve data through request roundtrip', () => {
       const original: GenerateContentRequest = {

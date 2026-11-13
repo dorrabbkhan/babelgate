@@ -23,7 +23,23 @@ export interface CanonicalRequest {
   toolChoice?: CanonicalToolChoice;
   /** Enable streaming response */
   stream?: boolean;
+  /** Structured-output contract (v1.4 spec §3.5) */
+  responseFormat?: CanonicalResponseFormat;
+  /** false honoured where the target supports it (v1.4 spec §3.6) */
+  parallelToolCalls?: boolean;
 }
+
+/** Structured output, provider-neutrally (v1.4 spec §3.2). The schema
+ *  object is forwarded unchanged — never stripped or rewritten. */
+export type CanonicalResponseFormat =
+  | {
+      type: "json_schema";
+      name: string;
+      schema: Record<string, unknown>;
+      strict?: boolean;
+      description?: string;
+    }
+  | { type: "json_object" };
 
 export interface CanonicalMessage {
   /** Message role */
@@ -44,14 +60,39 @@ export interface CanonicalMessage {
 }
 
 export interface CanonicalContentPart {
-  /** Content type */
-  type: "text" | "image";
+  /** Content type; "reasoning" appears on assistant messages only */
+  type: "text" | "image" | "reasoning";
   /** Text content (when type is 'text') */
   text?: string;
   /** Image content (when type is 'image') */
   image?: CanonicalImage;
+  /** Reasoning payload (when type is 'reasoning'); origin always set */
+  reasoning?: {
+    text?: string;
+    /** Anthropic redacted_thinking — opaque data, no readable text */
+    redacted?: boolean;
+    origin: CanonicalReasoningOrigin;
+  };
+  /** Opaque model-bound artefact; on reasoning parts, and on text
+   *  parts (Gemini). Never sent to a different provider or model. */
+  signature?: CanonicalReasoningSignature;
   /** Prompt-cache breakpoint hint (Anthropic cache_control) */
   cache?: CanonicalCacheHint;
+}
+
+/** Where reasoning came from: the configured provider NAME and the
+ *  upstream model that produced it (v1.4 spec §3.2). The name, not the
+ *  type, so two providers of the same type never exchange signatures. */
+export interface CanonicalReasoningOrigin {
+  provider: string;
+  model: string;
+}
+
+/** An opaque reasoning artefact. Never interpreted, never sent to a
+ *  different provider or model than its origin's. */
+export interface CanonicalReasoningSignature {
+  origin: CanonicalReasoningOrigin;
+  data: string;
 }
 
 /** Prompt-cache breakpoint hint; ttl defaults to the provider's (5m for Anthropic). */
@@ -87,18 +128,38 @@ export interface CanonicalConfig {
   presencePenalty?: number;
   /** Minimum context window the target should allocate (Ollama num_ctx) */
   contextWindow?: number;
+  /** Reasoning configuration (v1.4 spec §3.2) */
+  reasoning?: {
+    /** Codex's full range; a target without a level uses the nearest
+     *  lower one, noted */
+    effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+    summary?: boolean;
+    budgetTokens?: number;
+  };
 }
 
 // ============ TOOLS ============
 
-export interface CanonicalTool {
-  /** Tool type (currently only 'function' is widely supported) */
-  type: "function";
-  /** Function definition */
-  function: CanonicalFunction;
-  /** Prompt-cache breakpoint hint (Anthropic cache_control) */
-  cache?: CanonicalCacheHint;
-}
+export type CanonicalTool =
+  | {
+      type: "function";
+      /** Function definition */
+      function: CanonicalFunction;
+      /** Prompt-cache breakpoint hint (Anthropic cache_control) */
+      cache?: CanonicalCacheHint;
+    }
+  | {
+      /** Freeform tool (v1.4 spec §3.6): Codex's apply_patch — named,
+       *  input is a raw string, optionally described by a grammar the
+       *  target may or may not honour */
+      type: "custom";
+      name: string;
+      description?: string;
+      format?:
+        | { type: "text" }
+        | { type: "grammar"; syntax: string; definition: string };
+      cache?: CanonicalCacheHint;
+    };
 
 export interface CanonicalFunction {
   /** Function name */
@@ -121,6 +182,11 @@ export interface CanonicalToolCall {
     /** JSON-encoded arguments */
     arguments: string;
   };
+  /** Model-bound artefact on the call (Gemini thoughtSignature) */
+  signature?: CanonicalReasoningSignature;
+  /** A call to a `type: "custom"` tool — `arguments` is the raw input
+   *  string, never parsed, diagnosed or repaired (v1.4 spec §3.6) */
+  custom?: boolean;
 }
 
 export type CanonicalToolChoice =
@@ -165,6 +231,9 @@ export interface CanonicalUsage {
   cacheReadTokens?: number;
   /** Input tokens written to cache; emitted only when present and non-zero */
   cacheWriteTokens?: number;
+  /** Reasoning/thinking tokens — included in outputTokens (OTel
+   *  convention); emitted only when present and non-zero */
+  reasoningTokens?: number;
 }
 
 // ============ STREAMING ============
@@ -180,11 +249,49 @@ export interface CanonicalUsage {
  * 4. usage appears at most once, before message_end.
  * 5. Events of different blocks may interleave; encoders key tool state by
  *    index and never assume a call's events are contiguous.
+ * 6. reasoning_start(i) opens reasoning block i, once per index, before
+ *    any reasoning_delta(i) / reasoning_signature(i). Its origin is
+ *    {provider: currentAttempt().providerName,
+ *    model: currentAttempt().upstreamModel} inside an attempt, or
+ *    {provider: "", model} outside one (the plan's Task 7 convention).
  */
 export type CanonicalStreamEvent =
   | { type: "message_start"; id: string; model: string }
   | { type: "text_delta"; text: string }
-  | { type: "tool_call_start"; index: number; id: string; name: string }
+  | {
+      /** Opens a reasoning content block — the block-scoped data
+       *  (origin, redacted) that the per-delta events can't carry, like
+       *  tool_call_start opens a tool block. Own index namespace. */
+      type: "reasoning_start";
+      index: number;
+      origin: CanonicalReasoningOrigin;
+      /** Anthropic redacted_thinking — the block holds opaque data, no
+       *  readable text */
+      redacted?: boolean;
+    }
+  | {
+      type: "reasoning_delta";
+      /** Index of the reasoning content block (own namespace — one
+       *  block per index, deltas in order) */
+      index: number;
+      text: string;
+    }
+  | {
+      type: "reasoning_signature";
+      /** Index of the reasoning content block the signature belongs to */
+      index: number;
+      signature: CanonicalReasoningSignature;
+    }
+  | {
+      type: "tool_call_start";
+      index: number;
+      id: string;
+      name: string;
+      /** A call to a `type: "custom"` tool (v1.4 spec §3.6) */
+      custom?: boolean;
+      /** Model-bound artefact on the call (Gemini thoughtSignature) */
+      signature?: CanonicalReasoningSignature;
+    }
   | { type: "tool_call_delta"; index: number; argumentsDelta: string }
   | { type: "tool_call_end"; index: number }
   | { type: "usage"; usage: CanonicalUsage }

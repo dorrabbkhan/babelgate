@@ -147,7 +147,9 @@ export function diagnoseToolCalls(
   tools: CanonicalTool[] | undefined,
 ): ToolCallDiagnostic[] {
   const byName = new Map(
-    (tools ?? []).map((t) => [t.function.name, t] as const),
+    (tools ?? []).map(
+      (t) => [t.type === "function" ? t.function.name : t.name, t] as const,
+    ),
   );
   const out: ToolCallDiagnostic[] = [];
   for (const call of calls) {
@@ -161,7 +163,7 @@ export function diagnoseToolCalls(
       out.push({ toolCallId: id, name, code: "unknown_tool" });
       continue;
     }
-    if (argCode !== undefined) continue;
+    if (argCode !== undefined || tool.type !== "function") continue;
     const parsed = JSON.parse(
       call.function.arguments.trim() === ""
         ? "{}"

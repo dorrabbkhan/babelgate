@@ -16,7 +16,8 @@
       "type": "usage",
       "usage": {
         "inputTokens": 11,
-        "outputTokens": 1,
+        "outputTokens": 34,
+        "reasoningTokens": 33,
         "totalTokens": 45
       }
     },

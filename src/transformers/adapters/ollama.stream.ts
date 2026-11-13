@@ -260,6 +260,12 @@ export function createStreamEncoder(
             role: "assistant",
             content: event.text,
           });
+        case "reasoning_start":
+        case "reasoning_delta":
+        case "reasoning_signature":
+          // v1.4 §3.3: reasoning replay to this target lands in a
+          // later task; reasoning a target can't take is dropped.
+          return "";
         case "tool_call_start":
           calls.set(event.index, {
             id: event.id,

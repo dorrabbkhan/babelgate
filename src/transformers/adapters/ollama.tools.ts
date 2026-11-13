@@ -139,20 +139,29 @@ export function toOllamaTools(
   tools: CanonicalTool[] | undefined,
 ): OllamaChatRequest["tools"] {
   if (!tools?.length) return undefined;
-  return tools.map((t) => ({
-    type: "function",
-    function: {
-      name: t.function.name,
-      ...(t.function.description !== undefined && {
-        description: t.function.description,
-      }),
-      ...(t.function.parameters !== undefined && {
-        parameters: t.function.parameters as NonNullable<
-          OllamaChatRequest["tools"]
-        >[number]["function"]["parameters"],
-      }),
-    },
-  }));
+  return tools.map((t) => {
+    if (t.type !== "function") {
+      // Custom tools are lowered to function tools by
+      // canonicalForTarget before encode (v1.4 spec §3.6).
+      throw new ValidationError(
+        `Unsupported tool type "${t.type}" in tools[]`,
+      );
+    }
+    return {
+      type: "function",
+      function: {
+        name: t.function.name,
+        ...(t.function.description !== undefined && {
+          description: t.function.description,
+        }),
+        ...(t.function.parameters !== undefined && {
+          parameters: t.function.parameters as NonNullable<
+            OllamaChatRequest["tools"]
+          >[number]["function"]["parameters"],
+        }),
+      },
+    };
+  });
 }
 
 /** Canonical call id → Ollama tool name, built by the adapter while

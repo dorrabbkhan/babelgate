@@ -8,7 +8,9 @@ import { authHeaders } from "../routing/registry";
 import type { RouteTarget } from "../routing/plan-route";
 import {
   currentTrace,
+  runWithAttempt,
   snapshot,
+  type AttemptContext,
 } from "../observe/context";
 import { finishTrace } from "../observe/emit";
 import { diagnoseToolCalls } from "../observe/tool-diagnostics";
@@ -64,41 +66,54 @@ export function attemptStreamTarget(
     entry: ProviderEntry,
     target: RouteTarget,
   ): Promise<UpstreamAttempt> => {
-    const decoder = adapters[entry.type].createStreamDecoder(
-      target.model,
-    );
-    const targetBody = adapters[entry.type].fromCanonicalRequest(
-      canonicalForTarget(canonical, entry, target),
-    );
-    // §3.5: one target snapshot per hop (fallbacks included).
-    snapshot("target", targetBody);
-    const targetRoute = PROVIDER_ROUTES[entry.type].find(
-      (r) => r.kind === "chat",
-    )!;
-    const url = `${entry.baseUrl}${
-      targetRoute.streamRequestPath?.(target.model) ??
-      targetRoute.requestPath(target.model)
-    }`;
+    // v1.4 §3.2: the attempt's provider name and upstream model are
+    // ambient for its encode and upstream call — every hop gets its
+    // own scope. The decoder's feed/end run later, in the pipeline's
+    // async scope, so they re-enter this attempt's context on every
+    // call rather than relying on ambient propagation.
+    const attempt: AttemptContext = {
+      providerName: target.provider,
+      upstreamModel: target.model,
+    };
+    return runWithAttempt(attempt, async () => {
+      const raw = adapters[entry.type].createStreamDecoder(target.model);
+      const decoder: StreamDecoder = {
+        feed: (chunk) => runWithAttempt(attempt, () => raw.feed(chunk)),
+        end: () => runWithAttempt(attempt, () => raw.end()),
+      };
+      const targetBody = adapters[entry.type].fromCanonicalRequest(
+        canonicalForTarget(canonical, entry, target),
+      );
+      // §3.5: one target snapshot per hop (fallbacks included).
+      snapshot("target", targetBody);
+      const targetRoute = PROVIDER_ROUTES[entry.type].find(
+        (r) => r.kind === "chat",
+      )!;
+      const url = `${entry.baseUrl}${
+        targetRoute.streamRequestPath?.(target.model) ??
+        targetRoute.requestPath(target.model)
+      }`;
 
-    const upstreamAc = new AbortController();
-    const upstream = await postStream({
-      url,
-      headers: authHeaders(entry),
-      body: targetBody,
-      timeoutMs: entry.timeoutMs ?? config.upstreamTimeoutMs,
-      retries: config.upstreamRetries,
-      requestId,
-      signal:
-        signal !== undefined
-          ? AbortSignal.any([signal, upstreamAc.signal])
-          : upstreamAc.signal,
-    }).catch((err) => {
-      throw err instanceof UpstreamError
-        ? toClientFacing(err, entry.type)
-        : err;
+      const upstreamAc = new AbortController();
+      const upstream = await postStream({
+        url,
+        headers: authHeaders(entry),
+        body: targetBody,
+        timeoutMs: entry.timeoutMs ?? config.upstreamTimeoutMs,
+        retries: config.upstreamRetries,
+        requestId,
+        signal:
+          signal !== undefined
+            ? AbortSignal.any([signal, upstreamAc.signal])
+            : upstreamAc.signal,
+      }).catch((err) => {
+        throw err instanceof UpstreamError
+          ? toClientFacing(err, entry.type)
+          : err;
+      });
+
+      return { upstream, upstreamAc, decoder };
     });
-
-    return { upstream, upstreamAc, decoder };
   };
 }
 

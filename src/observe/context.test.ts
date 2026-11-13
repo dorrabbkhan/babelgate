@@ -4,6 +4,8 @@ import {
   currentTrace,
   recordNote,
   snapshot,
+  runWithAttempt,
+  currentAttempt,
 } from "./context";
 import { newTrace } from "./trace";
 import { logger } from "../utils/logger";
@@ -74,6 +76,35 @@ describe("recordNote (spec §3.5)", () => {
       },
     ]);
     debugSpy.mockRestore();
+  });
+});
+
+describe("attempt context (v1.4 spec §3.2)", () => {
+  it("currentAttempt inside runWithAttempt", () => {
+    const ctx = { providerName: "primary", upstreamModel: "m1" };
+    const out = runWithAttempt(ctx, () => {
+      expect(currentAttempt()).toEqual(ctx);
+      return 42;
+    });
+    expect(out).toBe(42);
+  });
+
+  it("undefined outside", () => {
+    expect(currentAttempt()).toBeUndefined();
+  });
+
+  it("nested attempts restore the outer", () => {
+    const outer = { providerName: "primary", upstreamModel: "m1" };
+    const inner = { providerName: "second", upstreamModel: "m2" };
+
+    runWithAttempt(outer, () => {
+      expect(currentAttempt()).toEqual(outer);
+      runWithAttempt(inner, () => {
+        expect(currentAttempt()).toEqual(inner);
+      });
+      expect(currentAttempt()).toEqual(outer);
+    });
+    expect(currentAttempt()).toBeUndefined();
   });
 });
 
