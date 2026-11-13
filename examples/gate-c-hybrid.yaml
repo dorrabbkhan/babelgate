@@ -1,10 +1,12 @@
 # Release gate C (spec §4.5): Claude Code on cloud models, cheap background calls on CPU Ollama.
 # No GPU needed. The shipped hybrid example is examples/claude-code-hybrid.yaml.
 #
-# Routing (first match wins; anything unmatched goes to the default):
-#   claude-*haiku*  -> ollama/qwen2.5-coder:3b   (cheap background calls stay local)
-#   claude-*        -> openrouter/qwen/qwen3-coder,
-#                    falling back to ollama/qwen2.5-coder:3b
+# Routing by estimated input size (first match wins; anything unmatched goes to the default).
+# Claude Code 2.1.x requests the same model for every call — it no longer requests haiku
+# models, so a name rule can't separate its small background calls:
+#   claude-* with >= 4 000 estimated input tokens -> openrouter/qwen/qwen3-coder,
+#                                                  falling back to ollama/qwen2.5-coder:3b
+#   claude-*                                      -> ollama/qwen2.5-coder:3b
 default: ollama
 providers:
   ollama:
@@ -25,9 +27,11 @@ observe:
   # screen can show what staying local saved.
   would_cost_reference: openrouter/anthropic/claude-sonnet-4.5
 routes:
-  - match: claude-*haiku*   # Claude Code's cheap background calls stay small and local
-    to: ollama/qwen2.5-coder:3b
   - match: claude-*
+    when:
+      min_input_tokens: 4000   # Claude Code's main loop (~12k tokens) goes to the cloud
     to: openrouter/qwen/qwen3-coder
     fallback:
       - ollama/qwen2.5-coder:3b
+  - match: claude-*            # small background calls stay local
+    to: ollama/qwen2.5-coder:3b
