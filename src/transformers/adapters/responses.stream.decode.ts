@@ -53,9 +53,10 @@ interface DecodeCall {
  * `function_call_arguments` deltas stream through; the terminal
  * `response.completed`/`incomplete` closes open calls, emits usage
  * and `message_end`; `response.failed` and the `error` event become
- * a canonical `error`. A terminal response's `output` items never
- * seen in the stream are reconciled (a delta-only or object-only
- * upstream still yields its content). Unknown event types and item
+ * a canonical `error`. A terminal response's `output` items whose
+ * content never streamed are reconciled (a delta-only or
+ * object-only upstream still yields its content exactly once —
+ * announced-but-contentless message items included). Unknown event types and item
  * types are ignored with a debug line — Tasks 5/8 own custom-tool
  * and reasoning events. A stream ending without a terminal event
  * ends in an `error` event.
@@ -136,8 +137,12 @@ export function createStreamDecoder(
 
   /** Emit the events of one terminal `output[]` item never streamed. */
   function reconcileItem(item: Obj, out: CanonicalStreamEvent[]): void {
-    if (typeof item.id === "string" && seenItemIds.has(item.id)) return;
     if (item.type === "message") {
+      // A message item is reconciled unless its item_id already
+      // produced text (delta or done); `output_item.added` alone does
+      // not suppress it — an announced-but-contentless item still
+      // yields its terminal content.
+      if (typeof item.id === "string" && textItems.has(item.id)) return;
       for (const part of item.content ?? []) {
         if (part?.type === "output_text" && typeof part.text === "string" && part.text !== "") {
           out.push({ type: "text_delta", text: part.text });
@@ -145,6 +150,7 @@ export function createStreamDecoder(
       }
       return;
     }
+    if (typeof item.id === "string" && seenItemIds.has(item.id)) return;
     if (item.type === "function_call") {
       const call = openCall(item, out);
       if (typeof item.arguments === "string" && item.arguments !== "") {
@@ -303,6 +309,7 @@ export function createStreamDecoder(
         ) {
           ensureStarted(out);
           out.push({ type: "text_delta", text: event.text });
+          textItems.add(event.item_id);
         }
         break;
       }

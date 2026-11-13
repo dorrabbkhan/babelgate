@@ -648,6 +648,74 @@ describe("Responses adapter", () => {
       expect(events.at(-1)?.type).toBe("error");
     });
 
+    // Terminal `response.completed` reconcile of `output[]` message
+    // items: the item is skipped only when text for its item_id was
+    // already emitted — being announced by `output_item.added` alone
+    // must not suppress it, and streamed text must not be re-emitted.
+    const COMPLETED_WITH_HELLO =
+      'data: {"type":"response.completed","sequence_number":9,"response":{"id":"resp_r","object":"response","created_at":1,"status":"completed","model":"m","output":[{"id":"msg_1","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello there"}]}],"usage":{"input_tokens":3,"output_tokens":2,"total_tokens":5}}}';
+
+    function joinedText(events: CanonicalStreamEvent[]): string {
+      return events
+        .map((e) => (e.type === "text_delta" ? e.text : ""))
+        .join("");
+    }
+
+    function expectSingleStopEnd(events: CanonicalStreamEvent[]): void {
+      expect(events.filter((e) => e.type === "message_end")).toEqual([
+        { type: "message_end", finishReason: "stop" },
+      ]);
+      expect(events.at(-1)).toEqual({
+        type: "message_end",
+        finishReason: "stop",
+      });
+    }
+
+    it("reconcile does not re-emit text already streamed by deltas", () => {
+      const wire = [
+        'data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_r","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}',
+        "",
+        'data: {"type":"response.output_text.delta","sequence_number":1,"item_id":"msg_1","output_index":0,"content_index":0,"delta":"Hello there"}',
+        "",
+        COMPLETED_WITH_HELLO,
+        "",
+      ].join("\n");
+      const events = decodeAll(wire);
+      expect(joinedText(events)).toBe("Hello there");
+      expectSingleStopEnd(events);
+    });
+
+    it("reconcile emits text for a message item only announced by output_item.added", () => {
+      const wire = [
+        'data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_r","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}',
+        "",
+        'data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"msg_1","type":"message","status":"in_progress","role":"assistant","content":[]}}',
+        "",
+        COMPLETED_WITH_HELLO,
+        "",
+      ].join("\n");
+      const events = decodeAll(wire);
+      expect(joinedText(events)).toBe("Hello there");
+      expectSingleStopEnd(events);
+    });
+
+    it("reconcile does not re-emit text emitted by output_text.done", () => {
+      const wire = [
+        'data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_r","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}',
+        "",
+        'data: {"type":"response.output_text.done","sequence_number":1,"item_id":"msg_1","output_index":0,"content_index":0,"text":"Hello there"}',
+        "",
+        COMPLETED_WITH_HELLO,
+        "",
+      ].join("\n");
+      const events = decodeAll(wire);
+      expect(events.filter((e) => e.type === "text_delta")).toEqual([
+        { type: "text_delta", text: "Hello there" },
+      ]);
+      expect(joinedText(events)).toBe("Hello there");
+      expectSingleStopEnd(events);
+    });
+
     it("encoder/decode round trip keeps call ids and text", () => {
       const wire = encodeAll(EVENTS)
         .map((f) => `${f.event ? `event: ${f.event}\n` : ""}data: ${JSON.stringify(f.data)}`)
