@@ -4052,8 +4052,11 @@ work).
 unless the allowlist kept them):
 
 - **Endpoints:** every request in all three runs is `POST
-  /v1/responses` → `200` `text/event-stream` (14 + 2 + 5 = 21
-  requests). No `GET /v1/models`, no other path, no query keys.
+  /v1/responses` → `200` `text/event-stream` — 16 requests in the
+  committed fixtures (`recording.jsonl` 14,
+  `recording-responses-lite.jsonl` 2), plus a 5-request shape-only
+  run kept out of the repo. No `GET /v1/models`, no other path, no
+  query keys.
 - **Two request shapes, selected by Codex's models-manager lookup**
   (spec E12): a slug miss gets *fallback metadata* (the qwen run); a
   catalog slug gets the *responses-lite* shape (the luna runs).

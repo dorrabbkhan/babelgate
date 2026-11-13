@@ -34,10 +34,15 @@
 # env_key stays OPENROUTER_API_KEY, so put that upstream's key there.
 #
 # Env overrides: CODEX_BIN (path to a codex binary, default: `codex`
-# on PATH or `npx -y @openai/codex`), RECORD_OUT (JSONL path, default
-# tmp/ under the repo), CODEX_TIMEOUT_S (hard cap on the `codex exec`
-# run, default 900 — Codex retries a dead upstream forever, so without
-# the cap the script hangs).
+# on PATH or `npx -y @openai/codex@$CODEX_VERSION`), CODEX_VERSION
+# (the codex-cli release the recordings and spec E12–E19 are for,
+# default 0.169.0 — the npx fallback installs exactly it; a
+# CODEX_BIN/PATH codex whose `codex --version` reports another
+# version gets a RECORD WARN on stderr and in the summary but still
+# runs), RECORD_OUT (JSONL path, default tmp/ under the repo),
+# CODEX_TIMEOUT_S (hard cap on the `codex exec` run, default 900 —
+# Codex retries a dead upstream forever, so without the cap the
+# script hangs).
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -84,14 +89,28 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
   exit 1
 fi
 
-# codex binary: CODEX_BIN, then PATH, then npx. ~/.npm can be
-# read-only, so npx gets a throwaway cache.
+# codex binary: CODEX_BIN, then PATH, then npx pinned to
+# CODEX_VERSION — the recordings and spec E12–E19 are for codex-cli
+# 0.169.0. ~/.npm can be read-only, so npx gets a throwaway cache.
+CODEX_VERSION="${CODEX_VERSION:-0.169.0}"
 if [ -n "${CODEX_BIN:-}" ]; then
   codex_cmd=("$CODEX_BIN")
 elif command -v codex >/dev/null 2>&1; then
   codex_cmd=(codex)
 else
-  codex_cmd=(npx -y @openai/codex)
+  codex_cmd=(npx -y "@openai/codex@$CODEX_VERSION")
+fi
+
+# Version pin check: a CODEX_BIN/PATH codex reporting another version
+# warns on stderr (and again in the summary) but continues — the
+# request shapes may still match the pinned evidence.
+codex_version_warn=""
+if [ "${codex_cmd[0]}" != "npx" ]; then
+  reported="$("${codex_cmd[@]}" --version 2>/dev/null | head -1 || true)"
+  if [ "$reported" != "codex-cli $CODEX_VERSION" ]; then
+    codex_version_warn="RECORD WARN: ${reported:-codex-cli version unknown} != pinned $CODEX_VERSION (recordings/evidence are for $CODEX_VERSION)"
+    echo "$codex_version_warn" >&2
+  fi
 fi
 
 started="$(date +%s)"
@@ -219,6 +238,9 @@ fi
 
 elapsed="$(( $(date +%s) - started ))"
 echo "codex version: $(npm_config_cache="$npm_cache" "${codex_cmd[@]}" --version 2>&1 | head -1)"
+if [ -n "$codex_version_warn" ]; then
+  echo "$codex_version_warn"
+fi
 echo "model: $MODEL (upstream: $upstream)"
 # Fallback metadata means no apply_patch and no reasoning.effort —
 # surface Codex's warning so run 2's gaps are visible in the summary.
