@@ -303,6 +303,9 @@ function cachedUsageBody(provider: Provider): unknown {
         prompt_eval_count: c.inputTokens,
         eval_count: c.outputTokens,
       };
+    // Responses object shape: https://platform.openai.com/docs/api-reference/responses/object
+    // (`cache_write_tokens` is evidenced only by the openai 7.30.1 SDK
+    // typings — the API reference omits it).
     case "responses":
       return {
         id: "resp_cached",
@@ -382,6 +385,11 @@ function cachedUsageStreamText(provider: Provider): string {
         `{"model":"m","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop","prompt_eval_count":${c.inputTokens},"eval_count":${c.outputTokens}}`,
         "",
       ].join("\n");
+    // Responses SSE event names (`response.output_text.delta`,
+    // `response.completed`): https://platform.openai.com/docs/api-reference/responses-streaming
+    // and openai 7.30.1 `resources/responses/responses.d.ts`
+    // (`ResponseStreamEvent`); the inner Response object per
+    // /docs/api-reference/responses/object.
     case "responses":
       return [
         'data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"hi"}',
@@ -483,6 +491,10 @@ export const upstreamHandlers = [
     return HttpResponse.json(nonStreamBody("ollama"));
   }),
 
+  // POST /v1/responses — request shape per
+  // https://platform.openai.com/docs/api-reference/responses/create and
+  // the recorded Codex fallback shape (Codex 0.169.0,
+  // tests/fixtures/codex/recording.jsonl); replies per /responses/object.
   http.post(`${MOCK_BASE_URLS.responses}/v1/responses`, async ({ request }) => {
     const body = await request.json();
     capturedRequests.responses.push(body);
@@ -556,6 +568,8 @@ export const upstreamHandlers = [
     return HttpResponse.json(ollamaFixtures.models);
   }),
 
+  // GET /v1/models — OpenAI model-list shape per
+  // https://platform.openai.com/docs/api-reference/models/list.
   http.get(`${MOCK_BASE_URLS.responses}/v1/models`, ({ request }) => {
     capturedHeaders.responses.push(request.headers);
     const override = responseOverrides.responses;

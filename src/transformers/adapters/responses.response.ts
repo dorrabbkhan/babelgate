@@ -3,6 +3,16 @@
  * and from CanonicalResponse — output items, status/incomplete
  * details, and the Responses usage shape. Extracted from
  * responses.adapter.ts (rule 7).
+ *
+ * Wire-format sources:
+ *  - Response object, `status`, `incomplete_details`, `output` items
+ *    and `output_text`: https://platform.openai.com/docs/api-reference/responses/object
+ *    and `openai` npm 7.30.1 `resources/responses/responses.d.ts`
+ *    (`Response`, `ResponseOutputItem`).
+ *  - Usage (`input_tokens`/`output_tokens`/`total_tokens`,
+ *    `*_tokens_details`): same object reference + SDK `ResponseUsage`.
+ *    `cache_write_tokens` and the response echo `access_programs` are
+ *    evidenced only by the SDK typings — the API reference omits them.
  */
 import { randomUUID } from "crypto";
 import type {

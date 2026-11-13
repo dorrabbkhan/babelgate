@@ -3,6 +3,20 @@
  * function_call and function_call_output items to and from canonical
  * messages. Extracted from responses.adapter.ts (rule 7: ~400-line
  * files); the public request/response entry points live there.
+ *
+ * Wire-format sources:
+ *  - Input item shapes (`message`, `function_call`,
+ *    `function_call_output`; content parts `input_text`/`output_text`/
+ *    `input_image`): https://platform.openai.com/docs/api-reference/responses/create
+ *    and `openai` npm 7.30.1 `resources/responses/responses.d.ts`
+ *    (`ResponseInputItem`, `EasyInputMessage`). Output content parts:
+ *    `ResponseOutputItem` / `ResponseOutputMessage` in the same SDK
+ *    typings + https://platform.openai.com/docs/api-reference/responses/object.
+ *  - Codex's real item usage (roles, `call_id` round-trips): recorded
+ *    in `tests/fixtures/codex/recording.jsonl` and `turns.json`
+ *    (Codex 0.169.0, `codex-rs/core/src/client.rs`).
+ *  - `phase` on message items is a responses-lite marker — pass-through
+ *    only in v1.4 (owner decision, docs/conductor/notes/v1.4/task3.md).
  */
 import type {
   CanonicalContentPart,
@@ -159,8 +173,10 @@ function toCanonicalImage(
   const url = part.image_url ?? "";
   const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
   if (!match) {
-    // Same policy as the anthropic adapter: remote URLs are a 400
-    // naming the limitation, never a silent drop or fetch.
+    // The plan's Task 3 Interfaces block makes a remote URL a 400
+    // (`unsupported_image_url`) naming the limitation — new behaviour
+    // for this dialect (other adapters degrade remote URLs); never a
+    // silent drop or fetch.
     throw new ValidationError(
       `unsupported_image_url at ${path}.content[${index}]: only data: image URLs are supported`,
     );

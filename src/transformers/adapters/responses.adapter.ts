@@ -13,6 +13,18 @@
  * `conversation`, `store: true` and the responses-lite markers are
  * refused in proxy.service before routing; nothing stateful reaches
  * this adapter.
+ *
+ * Wire-format sources (Global Constraints: evidence per field):
+ *  - Request fields: https://platform.openai.com/docs/api-reference/responses/create
+ *    and `openai` npm 7.30.1 `resources/responses/responses.d.ts`
+ *    (`ResponseCreateParamsBase`). `client_metadata` is evidenced only
+ *    by `codex-rs/core/src/client.rs` (`build_responses_request`) at
+ *    Codex 0.169.0 + `tests/fixtures/codex/recording.jsonl`.
+ *  - Input items, tools + tool_choice, Response object: see the
+ *    per-section citations in responses.items.ts, responses.tools.ts
+ *    and responses.response.ts.
+ *  - Model list: https://platform.openai.com/docs/api-reference/models/list
+ *  - Error envelope: https://platform.openai.com/docs/guides/error-codes
  */
 import type {
   CanonicalRequest,
@@ -81,6 +93,9 @@ function note(code: string, path: string, message: string): void {
  * routing — so this list is the tolerated remainder: caching hints,
  * tiering, tracing metadata, `text`, and the fields later tasks own
  * (`reasoning` → Task 6, `include` → Task 8, `text.format` → Task 9).
+ * Names per the create reference and SDK `ResponseCreateParamsBase`
+ * (openai 7.30.1); `client_metadata` is evidenced only by codex-rs +
+ * the recording — see the file header.
  */
 const DROPPED_REQUEST_FIELDS = [
   "prompt_cache_key",
@@ -239,6 +254,8 @@ export {
 } from "./responses.response";
 
 // ============ MODEL LIST ============
+// OpenAI model-list envelope: https://platform.openai.com/docs/api-reference/models/list
+// (a `type: responses` upstream answers the same shape as chat-completions).
 
 export function toCanonicalModelList(response: unknown): CanonicalModelList {
   const res = response as ResponsesModelListResponse;
@@ -284,6 +301,10 @@ function createStreamEncoder(): never {
 
 
 // ============ ERRORS ============
+// Error envelope `{error: {message, type, param, code}}` per
+// https://platform.openai.com/docs/guides/error-codes (Responses
+// shares the chat-completions error shape; `code`/`param` carry the
+// UnsupportedParameterError detail fields).
 
 const RESPONSES_ERROR_TYPE: Record<CanonicalErrorKind, string> = {
   invalid_request: "invalid_request_error",

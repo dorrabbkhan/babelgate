@@ -3,6 +3,18 @@
  * tool_choice to and from canonical. Built-in and namespace tool
  * types parse and drop with notes — lowering them arrives in Task 5.
  * Extracted from responses.adapter.ts (rule 7).
+ *
+ * Wire-format sources:
+ *  - Function tools and `tool_choice` (`auto`/`none`/`required`/
+ *    `{type:"function", name}`): https://platform.openai.com/docs/api-reference/responses/create
+ *    and `openai` npm 7.30.1 `resources/responses/responses.d.ts`
+ *    (`Tool`, `ToolChoiceFunction`, `ToolChoiceOptions`).
+ *  - Built-in tool type names in BUILTIN_TOOL_TYPES: the SDK `Tool`
+ *    union (the create reference documents the same set under `tools`).
+ *  - `namespace` tools: SDK `NamespaceTool`; Codex's `multi_agent_v1`
+ *    usage is evidenced by `codex-rs/core/src/client.rs` at Codex
+ *    0.169.0 and `tests/fixtures/codex/recording.jsonl` — the API
+ *    reference does not document it.
  */
 import type {
   CanonicalTool,
