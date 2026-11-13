@@ -49,6 +49,9 @@ export function estimateOutputTokens(
   for (const event of events) {
     if (event.type === "text_delta") {
       chars += event.text.length;
+    } else if (event.type === "reasoning_delta") {
+      // v1.4 §3.2: reasoning tokens are billed output
+      chars += event.text.length;
     } else if (event.type === "tool_call_delta") {
       chars += event.argumentsDelta.length;
     }

@@ -1,5 +1,6 @@
 import type {
   CanonicalCacheHint,
+  CanonicalFunction,
   CanonicalMessage,
   CanonicalContentPart,
   CanonicalImage,
@@ -162,7 +163,7 @@ export function toCanonicalTool(tool: ToolUnion): CanonicalTool {
       `Unsupported tool type "${tool.type}" in tools[]`,
     );
   }
-  const fn: CanonicalTool["function"] = { name: tool.name };
+  const fn: CanonicalFunction = { name: tool.name };
   if ("description" in tool && typeof tool.description === "string") {
     fn.description = tool.description;
   }
@@ -325,6 +326,13 @@ export function toToolUseBlock(tc: CanonicalToolCall): ToolUseBlockParam {
 }
 
 export function toAnthropicTool(tool: CanonicalTool): Tool {
+  if (tool.type !== "function") {
+    // Custom tools are lowered to function tools by canonicalForTarget
+    // before encode (v1.4 spec §3.6) — one reaching here is a bug.
+    throw new ValidationError(
+      `Unsupported tool type "${tool.type}" in tools[]`,
+    );
+  }
   const cacheControl = toCacheControl(tool.cache);
   return {
     name: tool.function.name,

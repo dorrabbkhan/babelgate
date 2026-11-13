@@ -409,25 +409,32 @@ export function toCanonicalResponse(
  * usageMetadata → canonical (spec §3.2): `cachedContentTokenCount` maps to
  * cacheReadTokens; `promptTokenCount` already includes cached tokens.
  * Emitted only when non-zero (ai.google.dev/api/generate-content#UsageMetadata).
+ * v1.4 §3.2/E9: `thoughtsTokenCount` (thinking models) is billed output —
+ * it joins outputTokens and is reported as reasoningTokens.
  */
 export function geminiUsageToCanonical(usage: {
   promptTokenCount?: number;
   candidatesTokenCount?: number;
   totalTokenCount?: number;
   cachedContentTokenCount?: number;
+  thoughtsTokenCount?: number;
 }): CanonicalUsage {
   const read = usage.cachedContentTokenCount ?? 0;
   const input = usage.promptTokenCount ?? 0;
-  const output = usage.candidatesTokenCount ?? 0;
+  const thoughts = usage.thoughtsTokenCount ?? 0;
+  const output = (usage.candidatesTokenCount ?? 0) + thoughts;
   return {
     inputTokens: input,
     outputTokens: output,
     totalTokens: usage.totalTokenCount ?? input + output,
     ...(read > 0 && { cacheReadTokens: read }),
+    ...(thoughts > 0 && { reasoningTokens: thoughts }),
   };
 }
 
-/** Canonical → usageMetadata; `cachedContentTokenCount` appears only when non-zero. */
+/** Canonical → usageMetadata; `cachedContentTokenCount` and
+ *  `thoughtsTokenCount` appear only when non-zero. outputTokens
+ *  includes reasoning, so candidatesTokenCount subtracts it back. */
 export function geminiUsageFromCanonical(
   usage: NonNullable<CanonicalResponse["usage"]>,
 ): {
@@ -435,15 +442,18 @@ export function geminiUsageFromCanonical(
   candidatesTokenCount: number;
   totalTokenCount: number;
   cachedContentTokenCount?: number;
+  thoughtsTokenCount?: number;
 } {
+  const thoughts = usage.reasoningTokens ?? 0;
   return {
     promptTokenCount: usage.inputTokens,
-    candidatesTokenCount: usage.outputTokens,
+    candidatesTokenCount: usage.outputTokens - thoughts,
     totalTokenCount: usage.totalTokens,
     ...(usage.cacheReadTokens !== undefined &&
       usage.cacheReadTokens > 0 && {
         cachedContentTokenCount: usage.cacheReadTokens,
       }),
+    ...(thoughts > 0 && { thoughtsTokenCount: thoughts }),
   };
 }
 

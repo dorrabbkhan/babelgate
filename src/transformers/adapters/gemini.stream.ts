@@ -298,6 +298,11 @@ export function createStreamEncoder(
               parts: [{ text: event.text }],
             },
           });
+        case "reasoning_delta":
+        case "reasoning_signature":
+          // v1.4 §3.3: reasoning replay to this target lands in a
+          // later task; reasoning a target can't take is dropped.
+          return "";
         case "tool_call_start":
           if (calls.has(event.index)) {
             logger.warn(

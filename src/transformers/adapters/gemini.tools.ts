@@ -323,17 +323,26 @@ export function toGeminiTools(
   if (!tools?.length) return undefined;
   return [
     {
-      functionDeclarations: tools.map((tool) => ({
-        name: tool.function.name,
-        ...(tool.function.description !== undefined && {
-          description: tool.function.description,
-        }),
-        ...(tool.function.parameters !== undefined && {
-          parameters: toGeminiSchema(
-            tool.function.parameters,
-          ) as unknown as FunctionDeclaration["parameters"],
-        }),
-      })),
+      functionDeclarations: tools.map((tool) => {
+        if (tool.type !== "function") {
+          // Custom tools are lowered to function tools by
+          // canonicalForTarget before encode (v1.4 spec §3.6).
+          throw new ValidationError(
+            `Unsupported tool type "${tool.type}" in tools[]`,
+          );
+        }
+        return {
+          name: tool.function.name,
+          ...(tool.function.description !== undefined && {
+            description: tool.function.description,
+          }),
+          ...(tool.function.parameters !== undefined && {
+            parameters: toGeminiSchema(
+              tool.function.parameters,
+            ) as unknown as FunctionDeclaration["parameters"],
+          }),
+        };
+      }),
     },
   ];
 }
