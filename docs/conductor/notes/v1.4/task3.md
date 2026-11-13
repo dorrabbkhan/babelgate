@@ -15,4 +15,4 @@ The **responses-lite** shape (header `x-openai-internal-codex-responses-lite`, a
 item instead of top-level `tools`, message `phase`, `reasoning.context`, `custom_tool_call` with `namespace`)
 is **pass-through only** in v1.4. On the bridge, reject it with a 400 in the Responses envelope naming the
 unsupported item (e.g. `additional_tools`), and record that as a limitation in docs/decisions.md. Don't
-STOP on it.
+STOP on it. (The 400 is the conductor's reading of "a recorded limitation"; the owner may change it in this PR.)
