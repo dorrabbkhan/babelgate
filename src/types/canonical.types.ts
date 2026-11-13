@@ -36,6 +36,9 @@ export interface CanonicalMessage {
   toolCallId?: string;
   /** Marks a failed tool result (Anthropic is_error); role "tool" only */
   isError?: boolean;
+  /** Prompt-cache breakpoint hint (Anthropic cache_control); role
+   *  "tool" only — other roles carry hints on their content parts. */
+  cache?: CanonicalCacheHint;
   /** Optional name for the message author */
   name?: string;
 }

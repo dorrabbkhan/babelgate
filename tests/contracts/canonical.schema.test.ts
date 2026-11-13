@@ -304,6 +304,21 @@ describe('Canonical stream event schema', () => {
     expect(result.success).toBe(true);
   });
 
+  it('tool message with a cache hint is valid (Task 17a)', () => {
+    const result = canonicalRequestSchema.safeParse({
+      model: 'm',
+      messages: [
+        {
+          role: 'tool',
+          toolCallId: 'call_1',
+          content: 'result text',
+          cache: { ttl: '5m' },
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
   it('system parts must be text', () => {
     const image = canonicalRequestSchema.safeParse({
       model: 'm',

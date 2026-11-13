@@ -3740,24 +3740,121 @@ unchanged.
     0 fallbacks.`
   - **Gate A-cache:** same file edited to `anthropic/claude-haiku-4.5`
     + `cache_hints: true`, `OBSERVE_CHECK="--expect-cache-read"` →
-    `FAIL 2026-11-13 (edit task passed; --expect-cache-read: no row has
-    cache_read_tokens > 0). Cause: Claude Code's moving cache breakpoint
-    sits on tool_result blocks, which babelgate dropped (requests 3–10:
-    4 cache_control markers in, 1 out; one cache write of 11 403 tokens
-    on request 2, no reads). Fix in a separate [OWNER REVIEW] PR; rerun
-    pending.`
+    First run: `FAIL 2026-11-13 (edit task passed; --expect-cache-read:
+    no row has cache_read_tokens > 0). Cause: Claude Code's moving cache
+    breakpoint sits on tool_result blocks, which babelgate dropped
+    (requests 3–10: 4 cache_control markers in, 1 out; one cache write
+    of 11 403 tokens on request 2, no reads). Fix in a separate
+    [OWNER REVIEW] PR; rerun pending.` Then, on the fix:
+    `PASS 2026-11-13 on PR #82 head ac3b736 (cache hints on tool
+    results): GATE PASS + OBSERVE PASS with --expect-cache-read.
+    Claude Code 2.1.322, openrouter/anthropic/claude-haiku-4.5 with
+    cache_hints: true, 17 s, 6 requests, 0 fallbacks. The earlier FAIL
+    (same day, before the fix) stays recorded: Claude Code's moving
+    breakpoint on tool_result blocks was dropped.`
   - **Gate B:** `scripts/gates/gemini-cli-edit.sh openrouter
     qwen/qwen3-coder` → `GATE PASS + OBSERVE PASS (13 rows for
     gemini-cli, provider openai = OpenRouter via the OpenAI adapter).
     Gemini CLI 0.68.0, qwen/qwen3-coder, 145 s.`
-  - **Gate C:** `ollama pull qwen2.5-coder:3b` first, then
-    `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
-    examples/gate-c-hybrid.yaml` → `FAIL 2026-11-13 with the haiku-name
-    routing (edit task passed; no row served by ollama). Rerun pending
-    with size routing.`
+  - **Gate C:** `ollama pull qwen2.5-coder:3b` first, then preload
+    `curl localhost:11434/api/generate -d '{"model":"qwen2.5-coder:3b","keep_alive":"30m"}'`,
+    then `OBSERVE_CHECK=1 scripts/gates/claude-code-edit.sh config
+    examples/gate-c-hybrid.yaml` → `PASS 2026-11-13 with size routing:
+    GATE PASS + OBSERVE PASS (providers: ollama, openrouter). Claude
+    Code 2.1.322, 258 s, 6 requests: 5 → openrouter/qwen/qwen3-coder
+    (rule:0, min_input_tokens 4000), 1 → ollama/qwen2.5-coder:3b
+    (rule:1), 0 fallbacks. Required step: preload the model first
+    (curl localhost:11434/api/generate -d
+    '{"model":"qwen2.5-coder:3b","keep_alive":"30m"}'); on a cold CPU
+    model the background call took longer than Claude Code's -p
+    session and was aborted (route log status "aborted", no row served
+    by ollama). First runs: FAIL with the haiku-name rule (no haiku
+    requests), then FAIL cold (aborted).`
   - **Cost:** `OpenRouter spend for all 2026-11-13 runs (live suite,
     gates, diagnostics): qwen/qwen3-coder $0.0896,
     anthropic/claude-haiku-4.5 $0.287.`
 - **Not run here:** the live suite and the gates themselves — this
   sandbox has no API keys, Ollama, `claude` or `gemini` CLI. The owner
   runs them and fills in the results above.
+
+## v1.3 Task 17a — Cache hints on tool results (2026-11-13) · OWNER REVIEW
+
+Off-plan fix approved by the owner (PR #81, option 1) after the gate
+A-cache run showed Claude Code's moving breakpoint — which sits on the
+last `tool_result` block or inside its `content` — was dropped at
+decode (`cache_control_dropped`), so the agent loop never read the
+cache.
+
+- **Canonical shape (interface change):** `CanonicalMessage.cache?:
+  CanonicalCacheHint`, documented `role: "tool"` only — other roles
+  already carry hints on their content parts and `tools[]`/system have
+  their own shapes. This is the smallest shape that round-trips: a
+  tool message's `content` stays a `string`, no part-array reshaping
+  on either side, and the hint has exactly one home per tool result.
+  `canonical.schema.ts` moved in the same commit.
+- **Decode precedence:** the block-level `cache_control` on a
+  `tool_result` wins — it ends the whole result — else the LAST hinted
+  nested text block (Claude Code's breakpoint sits on the last block).
+  Extra hints beyond the one carried still fire
+  `cache_control_dropped` (`hasUncarriedCacheControl` counts hinted
+  positions per tool_result; >1 is uncarried).
+- **Encode:** the hint goes back onto the `tool_result` block itself
+  (never onto nested content), so `limitCacheBreakpoints` counts it in
+  the same walk; the cap test proves a tool-result hint is one of the
+  "last 4" kept. The OpenAI encoder emits a hinted tool message as
+  `content: [{type: "text", text, cache_control}]` — OpenAI's
+  ChatCompletionToolMessageParam allows `string | ChatCompletionContentPartText[]`
+  and OpenRouter forwards block-level markers to Anthropic
+  interchangeably; unhinted tool messages stay a plain string,
+  byte-identical to before.
+- **Open question answer (why requests 3–10 had neither read nor
+  write):** unit evidence (the `claude-code.test.ts` pair case):
+  anthropic decode → openai encode keeps the system text and tools
+  byte-stable across turns, and the one surviving marker lands on the
+  system message — a single `cache_control` on the joined system text,
+  however many system blocks were hinted. So the surviving breakpoint
+  covered only the system prefix; the 11 403-token write in request 2
+  was recorded at a longer breakpoint boundary (tools/messages, which
+  still went upstream that request). Anthropic only creates or reads
+  cache entries at marked boundaries at or above the model's minimum
+  cacheable length, and the moving tool_result marker — the one
+  covering the growing bulk — was dropped, leaving a marker on a
+  prefix that was likely below the minimum or not previously written
+  at that boundary. Provider drift is also possible: OpenRouter's
+  sticky routing pins a provider only after a cache hit is observed,
+  and none ever was. What we cannot verify in-process: whether Claude
+  Code's own system text is byte-stable across requests (our encoding
+  of it is). Correction (conductor): Anthropic's cache prefix order is
+  tools → system → messages, so the surviving system marker covered
+  tools + system (~11k tokens), above Haiku 4.5's 4 096 minimum;
+  'below the minimum' does not explain the pre-fix requests 3–10. Not
+  investigated further: with the fix, gate A-cache reads the cache.
+- **Wire evidence:** OpenAI Chat Completions reference —
+  `ChatCompletionToolMessageParam.content` is "string or array of
+  ChatCompletionContentPartText"; "For tool messages, only type `text`
+  is supported" (https://developers.openai.com/api/reference/resources/chat).
+  OpenRouter Prompt Caching docs — "Place `cache_control` directly on
+  individual content blocks" and "The block-level markers are
+  interchangeable: a text block marked with Anthropic-style
+  `cache_control` gets a `prompt_cache_breakpoint` when routed to a
+  supporting OpenAI model" (https://openrouter.ai/docs/features/prompt-caching).
+- **Base:** stacked on `v1.3/task-17-release-gates` (PR #81, open) —
+  the Files block names `tests/live/observe.live.test.ts`, which exists
+  only on that branch; the code changes apply identically on main.
+- **Files outside the Files block:** `tests/integration/claude-code.test.ts`
+  (the named pair test — the Files block says "the matching *.test.ts
+  files" and claude-code.test.ts is the Claude-Code-shaped request
+  suite), `tests/contracts/canonical.schema.test.ts` (schema case for
+  the new message field — required by the canonical-change rule),
+  `src/transformers/adapters/gemini.adapter.test.ts` /
+  `ollama.adapter.test.ts` (the named "unchanged output" proofs).
+  `src/transformers/adapters/anthropic.adapter.ts` was named but needed
+  no change: the note hook and the cap call already live there and
+  both helpers changed inside `anthropic.cache.ts`/`anthropic.messages.ts`.
+- **Not run here:** the new live case `openrouter anthropic model
+  reports cache reads across a tool loop` — no API keys in the
+  sandbox; the owner runs `npm run test:live`.
+- **Owner live runs (2026-11-13):** `openrouter anthropic model
+  reports cache reads across a tool loop` passed (4.2 s) together
+  with `openrouter anthropic model reports cache reads`; gate
+  A-cache passed on this branch (see the Task 17 entry).
