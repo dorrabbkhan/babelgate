@@ -9,7 +9,19 @@
 # query keys, header names and a value-free body shape — in the JSONL
 # the script prints.
 #
-#   scripts/gates/record-codex.sh [--upstream <baseUrl>]
+#   scripts/gates/record-codex.sh [--upstream <baseUrl>] [--model <slug>]
+#
+# --model is the slug written to the scratch config.toml (default
+# qwen/qwen3-coder); if Codex prints a "Model metadata ... not found"
+# warning for it, that line is echoed into the summary — under fallback
+# metadata there is no apply_patch tool and no reasoning.effort, which
+# is exactly what the recording is meant to show.
+#
+# The recorder runs with RECORD_KEEP_ENUMS=1 (record-shapes.ts): type
+# values, tool names, include entries, reasoning.effort/summary,
+# text.verbosity, format.syntax, tool_choice, model, the user-agent
+# product tokens and the SSE event names are kept verbatim; everything
+# else stays a "<string:len>" shape.
 #
 # Real upstream only — this script makes network calls and needs
 # OPENROUTER_API_KEY: exported in the environment, or present as an
@@ -34,7 +46,7 @@ PROMPT="Make the failing test pass. Run npm test to check your work."
 MODEL="qwen/qwen3-coder"
 
 usage() {
-  echo "usage: $0 [--upstream <baseUrl>]" >&2
+  echo "usage: $0 [--upstream <baseUrl>] [--model <slug>]" >&2
 }
 
 upstream="https://openrouter.ai/api/v1"
@@ -42,6 +54,10 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --upstream)
       upstream="${2:?--upstream needs a value}"
+      shift 2
+      ;;
+    --model)
+      MODEL="${2:?--model needs a value}"
       shift 2
       ;;
     *)
@@ -115,7 +131,11 @@ forward_base="$(
   ' "$upstream"
 )"
 
+# RECORD_KEEP_ENUMS=1: type values, tool names, reasoning/include/text
+# enums and the SSE event names land verbatim in the JSONL — the plan's
+# turns.json keeps those; everything else stays a "<string:len>" shape.
 npm_config_cache="$npm_cache" \
+  RECORD_KEEP_ENUMS=1 \
   npx ts-node scripts/gates/record-shapes.ts \
   "$port" "$forward_base" "$out_jsonl" \
   >"$work/recorder.log" 2>&1 &
@@ -200,6 +220,12 @@ fi
 elapsed="$(( $(date +%s) - started ))"
 echo "codex version: $(npm_config_cache="$npm_cache" "${codex_cmd[@]}" --version 2>&1 | head -1)"
 echo "model: $MODEL (upstream: $upstream)"
+# Fallback metadata means no apply_patch and no reasoning.effort —
+# surface Codex's warning so run 2's gaps are visible in the summary.
+metadata_warning="$(grep "Model metadata" "$work/codex.log" 2>/dev/null | head -1 || true)"
+if [ -n "$metadata_warning" ]; then
+  echo "codex warning: $metadata_warning"
+fi
 echo "duration: ${elapsed}s"
 echo "jsonl: $out_jsonl"
 if [ -n "$pass" ]; then

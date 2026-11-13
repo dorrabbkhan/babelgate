@@ -3958,8 +3958,65 @@ the JSONL is missing or empty, and reads `OPENROUTER_API_KEY` from
 `./.env` (via dotenv itself, only that variable) when it is not
 exported. **Files outside the Files block:** `scripts/gates/
 record-shapes.ts` (the interface the task consumes, modified to
-support `https:` forward bases) and `scripts/gates/
+support `https:` forward bases — extended again in fix round 2 with
+the opt-in `RECORD_KEEP_ENUMS=1` allowlist below) and `scripts/gates/
 check-openrouter-anthropic.sh` (Step 3 as a reusable script — prints
 status, `type`, `stop_reason`, `error.type` and per content block its
 `type` + non-empty-`signature` boolean/length; doc URLs in its
 header).
+
+**Fix round 2 (2026-11-13): conductor run 1 + allowlist mode.** The
+conductor ran `record-codex.sh` on this branch (1969c39): codex-cli
+0.169.0, 75 s, edit task PASS, 12 JSONL lines, every request
+`POST /v1/responses` → `200` `text/event-stream`, no key recorded
+(copy at `tmp/codex-records/conductor-run1.jsonl`, gitignored). Step 3
+is done — `check-openrouter-anthropic.sh` on OpenRouter's `/messages`
+for `anthropic/claude-haiku-4.5` returned `status: 200`,
+`type: message`, `stop_reason: end_turn`, `content[0]` a `thinking`
+block with a signature (`sig_len=468`), `content[1]` `text` without
+one: OpenRouter returns signed thinking blocks in Anthropic format.
+Codex also printed `warning: Model metadata for qwen/qwen3-coder not
+found. Defaulting to fallback metadata` — under fallback metadata
+there was no `apply_patch` and no `reasoning.effort`, so
+`record-codex.sh` gained `--model <slug>` (default unchanged) and now
+echoes that warning line into its summary.
+
+**What run 1 settles from shapes alone** (values were `<string:N>`;
+enum confirmation is pending run 2):
+
+- Codex calls only `POST /v1/responses` — 12 requests, no
+  `GET /v1/models`, no other path.
+- Top-level request keys (all 12, same set): `model, stream, input,
+  tools, tool_choice, parallel_tool_calls, reasoning, store, include,
+  prompt_cache_key, client_metadata` — no `text`, no
+  `previous_response_id` in this run.
+- `reasoning` had only `summary` (no `effort`) — consistent with
+  fallback metadata.
+- Request header names: `accept, authorization, content-length,
+  content-type, host, originator, session-id, thread-id, user-agent,
+  x-client-request-id, x-codex-beta-features, x-codex-turn-metadata,
+  x-codex-window-id`.
+- `tools[]` per request: 7 entries `{type, name, description, strict,
+  parameters}`, 1 entry `{type, name, description, tools}` — a
+  namespace tool with its own `tools[]` — and 1 entry `{type,
+  external_web_access}` (likely `web_search`; to be confirmed by the
+  allowlist run).
+- Input items by key set: `{type, id, role, content}` and `{type, id,
+  role, content, status}` (messages), `{type, id, call_id, name,
+  arguments, status}` (`function_call`), `{type, call_id, output}`
+  (`function_call_output`). No reasoning input items under fallback
+  metadata.
+
+**Pending run 2** (conductor re-records with `RECORD_KEEP_ENUMS=1`):
+the `type` values, tool names (is `apply_patch` a `custom` tool with
+`format.type`/`syntax`, or absent for this model?), `include` entries,
+`tool_choice`, `reasoning` fields, the SSE event names, and the
+user-agent product tokens — then `turns.json` and the §1.2 E12+ rows.
+`record-shapes.ts` gained the opt-in `RECORD_KEEP_ENUMS=1` mode for
+this (4th-arg-free env var; default output byte-identical to v1.3):
+keep-listed enum strings verbatim, `user-agent` reduced to product
+tokens, and for `text/event-stream` replies `sseEvents`/`sseOrder`
+from `event:` names only — verified locally against a stub SSE
+upstream (`response.created` ×1, `response.output_text.delta` ×2,
+`response.completed` ×1; `format.definition`, `encrypted_content`,
+arguments and prompt text stayed `<string:N>`).
