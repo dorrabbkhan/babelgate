@@ -3898,3 +3898,43 @@ cache.
 - **Owner steps after merge** (in the PR body, not done here): tag
   `v1.3.0`, `npm publish --access public`, the GHCR image, verify
   `npx -y babelgate@1.3.0 --help` and that `/ui` loads.
+
+## v1.4 Task 1 — Codex traffic recording script; recording pending (2026-11-13)
+
+`scripts/gates/record-codex.sh` added per the plan's Interfaces:
+`--upstream <baseUrl>` (default `https://openrouter.ai/api/v1`),
+`record-shapes.ts` in front of the upstream with **no babelgate in the
+loop** (Codex → recorder → native Responses), a scratch `CODEX_HOME`
+whose `config.toml` sets `model = "qwen/qwen3-coder"`,
+`model_provider = "rec"` with `base_url =
+"http://localhost:<port>/v1"`, `wire_api = "responses"`,
+`env_key = "OPENROUTER_API_KEY"`, `requires_openai_auth = false`, plus
+`approval_policy = "never"` and `sandbox_mode = "danger-full-access"`
+(the gemini recorder's `--yolo` equivalent — a sandbox-denied run
+records nothing), a temp copy of `scripts/gates/fixtures/edit-task`,
+and `codex exec --skip-git-repo-check` (the temp copy is not a git
+repo). The script prints the JSONL path and `codex --version` and,
+like `record-gemini-cli.sh`, re-runs the fixture's `npm test` and
+reports edit-task PASS/FAIL.
+
+**Recorder wiring deviation worth noting:** `record-shapes.ts` joins
+`<forwardBase>` + the request path, and Codex's `base_url` is fixed at
+`…/v1`, so it POSTs `/v1/responses`. Forwarding to `--upstream`
+verbatim would double the version segment (`/api/v1/v1/responses`),
+so the script passes `--upstream` minus its trailing `/v1` as the
+forward base — `/v1/responses` then lands at `<upstream>/responses`
+(`https://openrouter.ai/api/v1/responses` for the default; verified
+locally for `openrouter.ai/api/v1`, `api.openai.com/v1`,
+`host:port/v1` and a trailing-slash variant).
+
+**Recording pending — owner step.** The task environment has no
+`codex` binary on PATH and no `OPENROUTER_API_KEY` (verified
+2026-11-13), which is the plan's Step-2 STOP condition, so Steps 2–4
+did not run: `tests/fixtures/codex/recording.jsonl`,
+`tests/fixtures/codex/turns.json`, the §1.2 E12+ evidence rows and the
+OpenRouter Anthropic-endpoint check (`POST /api/v1/messages`,
+`anthropic/claude-haiku-4.5`, thinking enabled — decides gate B's
+config) are still open. Owner step: install Codex CLI, export
+`OPENROUTER_API_KEY`, run `scripts/gates/record-codex.sh` on this
+branch and attach the JSONL; a follow-up session then derives
+`turns.json` and the E12+ rows.
