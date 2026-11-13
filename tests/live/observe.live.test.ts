@@ -73,6 +73,84 @@ const CACHE_BODY = {
   messages: [{ role: 'user', content: 'Reply with one word.' }],
 };
 
+// Task 17a: a Claude-Code-shaped tool loop — the moving breakpoint
+// sits on the newest tool_result block. The shared prefix (hinted
+// system + tools + the first tool turn) is identical across the two
+// calls; the second call is one turn longer and moves the marker to
+// the newest tool_result.
+const toolResult = (id: string, text: string, hinted: boolean) => ({
+  role: 'user',
+  content: [
+    {
+      type: 'tool_result',
+      tool_use_id: id,
+      content: text,
+      ...(hinted ? { cache_control: { type: 'ephemeral' } } : {}),
+    },
+  ],
+});
+
+const TOOL_LOOP_TOOLS = [
+  {
+    name: 'read_file',
+    description: 'Read a file from disk.',
+    input_schema: {
+      type: 'object',
+      properties: { path: { type: 'string' } },
+    },
+  },
+];
+
+const TOOL_LOOP_TURN_1 = [
+  { role: 'user', content: 'Read package.json and summarise it.' },
+  {
+    role: 'assistant',
+    content: [
+      {
+        type: 'tool_use',
+        id: 'call_1',
+        name: 'read_file',
+        input: { path: 'package.json' },
+      },
+    ],
+  },
+];
+
+const TOOL_LOOP_BODY_1 = {
+  model: 'claude-haiku-4.5',
+  max_tokens: 512,
+  system: [CACHEABLE_SYSTEM],
+  tools: TOOL_LOOP_TOOLS,
+  messages: [
+    ...TOOL_LOOP_TURN_1,
+    toolResult('call_1', '{"name":"babelgate","version":"1.3.0"}', true),
+  ],
+};
+
+const TOOL_LOOP_BODY_2 = {
+  ...TOOL_LOOP_BODY_1,
+  messages: [
+    ...TOOL_LOOP_TURN_1,
+    toolResult('call_1', '{"name":"babelgate","version":"1.3.0"}', false),
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'call_2',
+          name: 'read_file',
+          input: { path: 'src/app.ts' },
+        },
+      ],
+    },
+    toolResult(
+      'call_2',
+      'import express from "express";\nexport const app = express();',
+      true,
+    ),
+  ],
+};
+
 if (process.env.OPENROUTER_API_KEY) {
   describe('live observe: openrouter', () => {
     it('openrouter anthropic model reports cache reads', async () => {
@@ -102,6 +180,46 @@ if (process.env.OPENROUTER_API_KEY) {
         const second = await request(app)
           .post('/v1/messages')
           .send(CACHE_BODY);
+        expect(second.status, JSON.stringify(second.body)).toBe(200);
+
+        const usage = (
+          second.body as {
+            usage?: { cache_read_input_tokens?: number };
+          }
+        ).usage;
+        expect(usage?.cache_read_input_tokens ?? 0).toBeGreaterThan(0);
+      } finally {
+        restore();
+      }
+    });
+
+    it('openrouter anthropic model reports cache reads across a tool loop', async () => {
+      const restore = useYamlConfig(OPENROUTER_CACHE_YAML);
+      try {
+        const first = await request(app)
+          .post('/v1/messages')
+          .send(TOOL_LOOP_BODY_1);
+        expect(first.status, JSON.stringify(first.body)).toBe(200);
+
+        const firstUsage = (
+          first.body as {
+            usage?: {
+              input_tokens?: number;
+              cache_creation_input_tokens?: number;
+              cache_read_input_tokens?: number;
+            };
+          }
+        ).usage;
+        expect(
+          (firstUsage?.input_tokens ?? 0) +
+            (firstUsage?.cache_creation_input_tokens ?? 0) +
+            (firstUsage?.cache_read_input_tokens ?? 0),
+          JSON.stringify(firstUsage),
+        ).toBeGreaterThanOrEqual(4096);
+
+        const second = await request(app)
+          .post('/v1/messages')
+          .send(TOOL_LOOP_BODY_2);
         expect(second.status, JSON.stringify(second.body)).toBe(200);
 
         const usage = (

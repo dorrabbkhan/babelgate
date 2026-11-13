@@ -304,6 +304,71 @@ describe('OpenAI Adapter', () => {
       );
       expect(JSON.stringify(result.tools)).not.toContain('cache_control');
     });
+
+    it('a hinted tool message emits a cache_control text part', () => {
+      // Task 17a: a tool-message hint reaching the encoder (only
+      // cache_hints targets let it through) becomes a one-part
+      // content array — the OpenAI dialect carries breakpoints on
+      // content parts, and a tool message's content may be an array
+      // of text parts.
+      const input: CanonicalRequest = {
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '{}' },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            toolCallId: 'call_1',
+            content: '18C, sunny',
+            cache: { ttl: '1h' },
+          },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages[1]).toEqual({
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: [
+          {
+            type: 'text',
+            text: '18C, sunny',
+            cache_control: { type: 'ephemeral', ttl: '1h' },
+          },
+        ],
+      });
+    });
+
+    it('an unhinted tool message stays a plain string', () => {
+      const input: CanonicalRequest = {
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'tool',
+            toolCallId: 'call_1',
+            content: '18C, sunny',
+          },
+        ],
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages[0]).toEqual({
+        role: 'tool',
+        tool_call_id: 'call_1',
+        content: '18C, sunny',
+      });
+    });
   });
 
   describe('toCanonicalResponse', () => {

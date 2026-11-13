@@ -779,3 +779,40 @@ describe("Ollama Adapter", () => {
     });
   });
 });
+
+describe("cache hints on tool results (Task 17a)", () => {
+  it("a cache hint on a tool message changes nothing on the wire", () => {
+    // Ollama reuses its KV cache by itself and carries no markers
+    // (spec §3.2); the hint is ignored, so the encoded request is
+    // byte-identical.
+    const base: CanonicalRequest = {
+      model: "llama2",
+      messages: [
+        { role: "user", content: "Weather in Paris?" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "get_weather",
+                arguments: '{"city":"Paris"}',
+              },
+            },
+          ],
+        },
+        { role: "tool", toolCallId: "call_1", content: "18C, sunny" },
+      ],
+    };
+    const hinted: CanonicalRequest = {
+      ...base,
+      messages: base.messages.map((m) =>
+        m.role === "tool" ? { ...m, cache: { ttl: "1h" } } : m,
+      ),
+    };
+
+    expect(fromCanonicalRequest(hinted)).toEqual(fromCanonicalRequest(base));
+  });
+});

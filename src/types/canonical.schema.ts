@@ -59,6 +59,7 @@ export const canonicalMessageSchema = z.object({
   toolCalls: z.array(toolCallSchema).optional(),
   toolCallId: z.string().optional(),
   isError: z.boolean().optional(),
+  cache: cacheHintSchema.optional(),
   name: z.string().optional(),
 });
 

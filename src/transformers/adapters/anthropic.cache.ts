@@ -7,6 +7,7 @@ import type {
   CacheControlEphemeral,
   MessageCreateParams,
   TextBlockParam,
+  ToolResultBlockParam,
 } from "../../types/anthropic.types";
 
 /**
@@ -183,9 +184,12 @@ export function limitCacheBreakpoints(
 
 /**
  * cache_control on text/image parts, custom tools and system blocks is
- * carried as a canonical cache hint (§3.2) — this scan only fires where a
- * hint still can't be carried: other block kinds (tool_use, tool_result
- * and their nested content, thinking, …) and server-side tools.
+ * carried as a canonical cache hint (§3.2), and a tool_result's own or
+ * nested-text hint decodes onto the canonical tool message (Task 17a) —
+ * this scan only fires where a hint still can't be carried: other block
+ * kinds (tool_use, thinking, …), a second hint inside one tool_result,
+ * cache_control anywhere else in a tool_result block, and server-side
+ * tools.
  */
 export function hasUncarriedCacheControl(
   request: MessageCreateParams,
@@ -203,6 +207,10 @@ export function hasUncarriedCacheControl(
     if (!Array.isArray(m.content)) continue;
     for (const block of m.content) {
       if (block.type === "text" || block.type === "image") continue;
+      if (block.type === "tool_result") {
+        if (uncarriedToolResultCacheControl(block, scan)) return true;
+        continue;
+      }
       if (scan(block)) return true;
     }
   }
@@ -215,4 +223,34 @@ export function hasUncarriedCacheControl(
     }
   }
   return false;
+}
+
+/**
+ * The carried positions inside one tool_result are its own
+ * cache_control and cache_control on nested text blocks — the decoder
+ * keeps exactly one per canonical tool message (Task 17a), so a second
+ * hinted position, or a cache_control anywhere else in the block, is
+ * uncarried.
+ */
+function uncarriedToolResultCacheControl(
+  block: ToolResultBlockParam,
+  scan: (value: unknown) => boolean,
+): boolean {
+  const { cache_control, content, ...rest } = block;
+  if (scan(rest)) return true;
+  let positions = cache_control != null ? 1 : 0;
+  if (Array.isArray(content)) {
+    for (const inner of content) {
+      if (inner !== null && typeof inner === "object" && inner.type === "text") {
+        const { cache_control: innerControl, ...innerRest } = inner;
+        if (innerControl != null) positions++;
+        if (scan(innerRest)) return true;
+      } else if (scan(inner)) {
+        return true;
+      }
+    }
+  } else if (scan(content)) {
+    return true;
+  }
+  return positions > 1;
 }

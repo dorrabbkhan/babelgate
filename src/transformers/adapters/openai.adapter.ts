@@ -370,6 +370,28 @@ function convertFromCanonicalMessage(
   }
 
   if (msg.role === "tool") {
+    const cacheControl = toCacheControl(msg.cache);
+    // Task 17a: a hint reaching the encoder (cache_hints targets
+    // only) becomes a one-part content array — OpenAI tool messages
+    // accept text content parts and OpenRouter passes the breakpoint
+    // through to Anthropic upstreams. Unhinted stays a plain string,
+    // byte-identical to before.
+    if (cacheControl !== undefined) {
+      const part: {
+        type: "text";
+        text: string;
+        cache_control?: OpenAICacheControl;
+      } = {
+        type: "text",
+        text: toolResultText(msg.content),
+        cache_control: cacheControl,
+      };
+      return {
+        role: "tool",
+        content: [part],
+        tool_call_id: msg.toolCallId || "",
+      } as ChatCompletionMessageParam;
+    }
     return {
       role: "tool",
       content: typeof content === "string" ? content : "",
@@ -404,6 +426,19 @@ function convertFromCanonicalMessage(
 
   // User message
   return { role: "user", content } as ChatCompletionMessageParam;
+}
+
+/**
+ * A canonical tool message's text — string content as-is; parts join
+ * their text with "\n" (the anthropic decoder's tool_result join), so
+ * the hinted part covers the whole result text.
+ */
+function toolResultText(content: string | CanonicalContentPart[]): string {
+  if (typeof content === "string") return content;
+  return content
+    .filter((p) => p.type === "text")
+    .map((p) => p.text ?? "")
+    .join("\n");
 }
 
 function convertFromCanonicalContent(

@@ -1129,6 +1129,209 @@ describe('Anthropic Adapter', () => {
       }
     });
 
+    it('cache_control on a tool_result decodes onto the tool message', () => {
+      const input = {
+        model: 'claude-3-opus-20240229',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'tool_use',
+                id: 'call_1',
+                name: 'get_weather',
+                input: { city: 'Paris' },
+              },
+            ],
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_1',
+                content: '18C, sunny',
+                cache_control: { type: 'ephemeral' },
+              },
+            ],
+          },
+        ],
+      } as unknown as MessageCreateParams;
+
+      const result = toCanonicalRequest(input);
+
+      const toolMsg = result.messages.find((m) => m.role === 'tool');
+      expect(toolMsg).toEqual({
+        role: 'tool',
+        toolCallId: 'call_1',
+        content: '18C, sunny',
+        cache: {},
+      });
+    });
+
+    it('cache_control on nested tool_result text blocks decodes the last hinted one', () => {
+      const input = {
+        model: 'claude-3-opus-20240229',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_1',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'part one',
+                    cache_control: { type: 'ephemeral', ttl: '1h' },
+                  },
+                  {
+                    type: 'text',
+                    text: 'part two',
+                    cache_control: { type: 'ephemeral' },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      } as unknown as MessageCreateParams;
+
+      const result = toCanonicalRequest(input);
+
+      const toolMsg = result.messages.find((m) => m.role === 'tool');
+      expect(toolMsg?.cache).toEqual({});
+      expect(toolMsg?.content).toBe('part one\npart two');
+    });
+
+    it('a block-level tool_result cache_control wins over a nested one', () => {
+      const input = {
+        model: 'claude-3-opus-20240229',
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 'call_1',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'part one',
+                    cache_control: { type: 'ephemeral', ttl: '1h' },
+                  },
+                ],
+                cache_control: { type: 'ephemeral' },
+              },
+            ],
+          },
+        ],
+      } as unknown as MessageCreateParams;
+
+      const result = toCanonicalRequest(input);
+
+      const toolMsg = result.messages.find((m) => m.role === 'tool');
+      expect(toolMsg?.cache).toEqual({});
+    });
+
+    it('a cache hint on a tool message encodes onto the tool_result block', () => {
+      const input: CanonicalRequest = {
+        model: 'claude-3-opus-20240229',
+        messages: [
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '{}' },
+              },
+            ],
+          },
+          {
+            role: 'tool',
+            toolCallId: 'call_1',
+            content: '18C, sunny',
+            cache: { ttl: '1h' },
+          },
+        ],
+        config: { maxTokens: 1024 },
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.messages[1]).toEqual({
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call_1',
+            content: '18C, sunny',
+            cache_control: { type: 'ephemeral', ttl: '1h' },
+          },
+        ],
+      });
+    });
+
+    it('the 4-breakpoint cap counts tool_result hints', () => {
+      // 5 hinted positions in the order Anthropic walks them —
+      // tools → system → messages — so the tool definition (the
+      // earliest) loses its breakpoint while the tool_result's,
+      // one of the last 4, survives (§3.2).
+      const input: CanonicalRequest = {
+        model: 'claude-3-opus-20240229',
+        systemPrompt: [{ type: 'text', text: 'sys', cache: {} }],
+        messages: [
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'm1', cache: {} }],
+          },
+          {
+            role: 'assistant',
+            content: '',
+            toolCalls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'get_weather', arguments: '{}' },
+              },
+            ],
+          },
+          { role: 'tool', toolCallId: 'call_1', content: 'result', cache: {} },
+          {
+            role: 'user',
+            content: [{ type: 'text', text: 'm2', cache: {} }],
+          },
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather' },
+            cache: { ttl: '1h' },
+          },
+        ],
+        config: { maxTokens: 1024 },
+      };
+
+      const result = fromCanonicalRequest(input);
+
+      expect(result.tools?.[0]).not.toHaveProperty('cache_control');
+      const system = result.system as { cache_control?: unknown }[];
+      expect(system[0]!.cache_control).toEqual({ type: 'ephemeral' });
+      const m1 = result.messages[0]!.content as { cache_control?: unknown }[];
+      expect(m1[0]!.cache_control).toEqual({ type: 'ephemeral' });
+      const toolResult = (
+        result.messages[2]!.content as { cache_control?: unknown }[]
+      )[0]!;
+      expect(toolResult.cache_control).toEqual({ type: 'ephemeral' });
+      const m2 = result.messages[3]!.content as { cache_control?: unknown }[];
+      expect(m2[0]!.cache_control).toEqual({ type: 'ephemeral' });
+    });
+
     it('no hints → request bytes identical to today', () => {
       const input: CanonicalRequest = {
         model: 'claude-3-opus-20240229',
@@ -1235,6 +1438,88 @@ describe('Anthropic Adapter', () => {
                 name: 'n',
                 input: {},
                 cache_control: { type: 'ephemeral' },
+              },
+            ],
+          },
+        ],
+        max_tokens: 1024,
+      } as unknown as MessageCreateParams;
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'cache_control_dropped',
+        path: 'cache_control',
+      });
+    });
+
+    it('carried tool_result cache_control records no note', () => {
+      // tool_result hints decode onto the canonical tool message —
+      // they stopped being "uncarried" in Task 17a.
+      const input = {
+        model: 'claude-3-opus-20240229',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 't1',
+                content: [
+                  { type: 'text', text: 'a' },
+                  {
+                    type: 'text',
+                    text: 'b',
+                    cache_control: { type: 'ephemeral' },
+                  },
+                ],
+              },
+              {
+                type: 'tool_result',
+                tool_use_id: 't2',
+                content: 'done',
+                cache_control: { type: 'ephemeral' },
+              },
+            ],
+          },
+        ],
+        max_tokens: 1024,
+      } as unknown as MessageCreateParams;
+
+      const trace = traced(() => toCanonicalRequest(input));
+
+      expect(
+        trace.notes.filter((n) => n.code === 'cache_control_dropped'),
+      ).toHaveLength(0);
+    });
+
+    it('a second hint inside one tool_result records cache_control_dropped', () => {
+      // Two breakpoints on a single tool_result — canonical carries
+      // exactly one per tool message (Task 17a), so the extra is
+      // still an uncarried drop.
+      const input = {
+        model: 'claude-3-opus-20240229',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'tool_result',
+                tool_use_id: 't1',
+                content: [
+                  {
+                    type: 'text',
+                    text: 'a',
+                    cache_control: { type: 'ephemeral' },
+                  },
+                  {
+                    type: 'text',
+                    text: 'b',
+                    cache_control: { type: 'ephemeral' },
+                  },
+                ],
               },
             ],
           },

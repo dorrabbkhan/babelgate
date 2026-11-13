@@ -1,4 +1,5 @@
 import type {
+  CanonicalCacheHint,
   CanonicalMessage,
   CanonicalContentPart,
   CanonicalImage,
@@ -65,12 +66,16 @@ export function toCanonicalMessage(
   );
 
   if (m.role === "user" && toolResults.length > 0) {
-    const out: CanonicalMessage[] = toolResults.map((r) => ({
-      role: "tool",
-      toolCallId: r.tool_use_id,
-      content: toolResultContentToString(r.content),
-      ...(r.is_error === true && { isError: true }),
-    }));
+    const out: CanonicalMessage[] = toolResults.map((r) => {
+      const cache = toolResultHint(r);
+      return {
+        role: "tool",
+        toolCallId: r.tool_use_id,
+        content: toolResultContentToString(r.content),
+        ...(r.is_error === true && { isError: true }),
+        ...(cache && { cache }),
+      };
+    });
     if (rest.length > 0) {
       out.push({
         role: "user",
@@ -88,6 +93,28 @@ export function toCanonicalMessage(
     msg.toolCalls = toolUses.map(toolUseToCanonical);
   }
   return [msg];
+}
+
+/**
+ * The cache hint a tool_result carries (Task 17a): its own
+ * cache_control — the block-level breakpoint ends the whole result —
+ * or, when absent, the last hinted nested text block (Claude Code's
+ * moving breakpoint sits on the last block of the last tool_result).
+ * Extra hints beyond the carried one still fire
+ * `cache_control_dropped` (hasUncarriedCacheControl).
+ */
+function toolResultHint(
+  r: ToolResultBlockParam,
+): CanonicalCacheHint | undefined {
+  const own = toCacheHint(r.cache_control);
+  if (own !== undefined) return own;
+  if (!Array.isArray(r.content)) return undefined;
+  const hinted = r.content.filter(
+    (b) => b.type === "text" && b.cache_control,
+  );
+  return toCacheHint(
+    hinted[hinted.length - 1]?.cache_control,
+  );
 }
 
 /**
@@ -271,12 +298,14 @@ export function toMessageParam(m: CanonicalMessage): MessageParam {
 }
 
 export function toToolResultBlock(m: CanonicalMessage): ToolResultBlockParam {
+  const cacheControl = toCacheControl(m.cache);
   return {
     type: "tool_result",
     tool_use_id: m.toolCallId ?? "",
     content: convertToAnthropicContent(m.content),
     // is_error is sent only when true; Anthropic defaults it to false.
     ...(m.isError === true && { is_error: true }),
+    ...(cacheControl && { cache_control: cacheControl }),
   };
 }
 
