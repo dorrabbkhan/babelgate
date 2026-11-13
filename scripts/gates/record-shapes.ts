@@ -31,7 +31,9 @@
  * user-agent is recorded as product tokens only (`name/version` pairs;
  * parenthesised OS/details dropped). For `text/event-stream` replies
  * the mode adds `sseEvents` ({name: count}) and `sseOrder` (first-seen
- * order) — event names only, never payloads. Field and event names
+ * order) — the block's `event:` name, or its `data:` payload's `type`
+ * field when no `event:` line exists (payload JSON parsed in memory
+ * and dropped; nothing else is read from it). Field and event names
  * follow the OpenAI Responses API reference and Codex's wire code,
  * codex-rs/core/src/client.rs and codex-rs/codex-api/src/sse/
  * responses.rs (plan v1.4 wire-format rule). Keys, prompt text, tool
@@ -42,6 +44,12 @@ import http from "node:http";
 import https from "node:https";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import {
+  brotliDecompressSync,
+  gunzipSync,
+  inflateRawSync,
+  inflateSync,
+} from "node:zlib";
 
 const [portArg, forwardBase, outJsonl] = process.argv.slice(2);
 const listenPort = Number(portArg);
@@ -233,11 +241,22 @@ function uaProducts(ua: string | string[] | undefined): string | null {
 }
 
 /**
- * Distinct `event:` names of an SSE stream in first-seen order with
- * per-name counts — the only thing recorded from a response body;
- * `data:` payloads are never read into the record. Event names per
- * codex-rs/codex-api/src/sse/responses.rs and the Responses streaming
- * reference.
+ * Distinct event names of an SSE stream in first-seen order with
+ * per-name counts — the only thing recorded from a response body.
+ * One count per event block (blank-line separated). The name is the
+ * block's `event:` line when it has one; otherwise the block's
+ * `data:` payload is parsed as JSON in memory and its string `type`
+ * field is the name — an upstream can carry the type only inside the
+ * payload (`{"type":"response.output_text.delta",…}`, no `event:`
+ * line), and Codex's parser reads it there
+ * (codex-rs/codex-api/src/sse/responses.rs). A block with both counts
+ * once: per the Responses streaming reference the two carry the same
+ * name, so `event:` wins. `data: [DONE]` is the stream terminator —
+ * never counted; a `data:` block whose payload is not JSON or has no
+ * string `type` counts as "<untyped>" so a malformed stream stays
+ * visible. Blocks with neither `event:` nor `data:` (comment
+ * keepalives) are skipped. Nothing else is read from payloads; the
+ * JSON is parsed in memory and dropped.
  */
 function sseSummary(text: string): {
   sseEvents: Record<string, number>;
@@ -245,17 +264,93 @@ function sseSummary(text: string): {
 } {
   const sseEvents: Record<string, number> = {};
   const sseOrder: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (!line.startsWith("event:")) continue;
-    const name = line.slice("event:".length).trim();
-    if (name === "") continue;
+  const count = (name: string) => {
     if (sseEvents[name] === undefined) {
       sseEvents[name] = 0;
       sseOrder.push(name);
     }
     sseEvents[name] += 1;
+  };
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    let eventName: string | null = null;
+    const dataLines: string[] = [];
+    for (const line of block.split(/\r?\n/)) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice("event:".length).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length));
+      }
+    }
+    if (eventName !== null && eventName !== "") {
+      count(eventName);
+      continue;
+    }
+    if (dataLines.length === 0) continue;
+    // A block's data lines join with "\n" per the SSE spec.
+    const payload = dataLines.join("\n").trim();
+    if (payload === "[DONE]") continue;
+    let name = "<untyped>";
+    try {
+      const parsed: unknown = JSON.parse(payload);
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        typeof (parsed as { type?: unknown }).type === "string" &&
+        (parsed as { type: string }).type !== ""
+      ) {
+        name = (parsed as { type: string }).type;
+      }
+    } catch {
+      // Non-JSON payload — stays "<untyped>".
+    }
+    count(name);
   }
   return { sseEvents, sseOrder };
+}
+
+/**
+ * `deflate` is ambiguous on the wire: zlib-wrapped for well-behaved
+ * servers, raw deflate for older IIS. Try the wrapped form first.
+ */
+function inflateDeflate(buf: Buffer): Buffer {
+  try {
+    return inflateSync(buf);
+  } catch {
+    return inflateRawSync(buf);
+  }
+}
+
+/**
+ * The recorder forwards the client's `accept-encoding`, so an SSE
+ * reply can reach it compressed — decode gzip/br/deflate before the
+ * block parse. Returns the decoded text, or `failed` naming the
+ * encoding step that could not be decoded (an encoding this recorder
+ * does not know, or a corrupt stream).
+ */
+function decodeSseBody(
+  raw: Buffer,
+  header: string | string[] | undefined,
+): { text: string } | { failed: string } {
+  const encodings = (
+    Array.isArray(header) ? header.join(",") : (header ?? "")
+  )
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter((e) => e !== "" && e !== "identity");
+  let buf = raw;
+  // Content-Encoding lists codings in the order applied, so decode
+  // in reverse.
+  for (const enc of [...encodings].reverse()) {
+    try {
+      if (enc === "gzip" || enc === "x-gzip") buf = gunzipSync(buf);
+      else if (enc === "br") buf = brotliDecompressSync(buf);
+      else if (enc === "deflate") buf = inflateDeflate(buf);
+      else return { failed: enc };
+    } catch {
+      return { failed: enc };
+    }
+  }
+  return { text: buf.toString("utf8") };
 }
 
 const server = http.createServer((req, res) => {
@@ -313,12 +408,20 @@ const server = http.createServer((req, res) => {
           const flush = () => {
             if (wrote) return;
             wrote = true;
+            const decoded = decodeSseBody(
+              Buffer.concat(sseChunks),
+              upRes.headers["content-encoding"],
+            );
+            const summary =
+              "text" in decoded
+                ? sseSummary(decoded.text)
+                : {
+                    sseEvents: { [`<encoded:${decoded.failed}>`]: 1 },
+                    sseOrder: [`<encoded:${decoded.failed}>`],
+                  };
             appendFileSync(
               outJsonl,
-              JSON.stringify({
-                ...line,
-                ...sseSummary(Buffer.concat(sseChunks).toString("utf8")),
-              }) + "\n",
+              JSON.stringify({ ...line, ...summary }) + "\n",
             );
           };
           upRes.on("data", (chunk: Buffer) => sseChunks.push(chunk));

@@ -4020,3 +4020,14 @@ from `event:` names only — verified locally against a stub SSE
 upstream (`response.created` ×1, `response.output_text.delta` ×2,
 `response.completed` ×1; `format.definition`, `encrypted_content`,
 arguments and prompt text stayed `<string:N>`).
+
+**Fix round 3 (2026-11-13):** the conductor's `RECORD_KEEP_ENUMS=1`
+re-record showed `sseEvents: {}` / `sseOrder: []` on every reply —
+OpenRouter's Responses stream carries the event type only inside each
+`data:` JSON payload (no `event:` lines), where Codex's parser reads
+it. `sseSummary` now names each SSE block by its `event:` line when
+present, else the payload's string `type` (`[DONE]` skipped;
+non-JSON/typeless payloads count as `"<untyped>"`; a
+`content-encoding` of gzip/br/deflate is decoded first, failure →
+`"<encoded:…>"`); verified locally against stubs (event+data,
+data-only, gzip, corrupt gzip, malformed).
