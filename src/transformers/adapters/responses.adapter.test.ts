@@ -188,8 +188,6 @@ describe("Responses adapter", () => {
 
       const paths = trace.notes.map((n) => n.path);
       for (const field of [
-        "reasoning",
-        "include",
         "prompt_cache_key",
         "client_metadata",
       ]) {
@@ -208,13 +206,16 @@ describe("Responses adapter", () => {
       );
       const wire = fromCanonicalRequest(canonical) as Record<string, unknown>;
       for (const field of [
-        "reasoning",
-        "include",
         "prompt_cache_key",
         "client_metadata",
       ]) {
         expect(wire[field]).toBeUndefined();
       }
+      // Task 6: reasoning + include decode into config.reasoning and
+      // encode back verbatim.
+      expect(canonical.config?.reasoning).toEqual({ summary: true });
+      expect(wire.reasoning).toEqual({ summary: "auto" });
+      expect(wire.include).toEqual(["reasoning.encrypted_content"]);
       // only the real function tool survives
       expect(wire.tools).toEqual([
         expect.objectContaining({ type: "function", name: "exec_command" }),
@@ -901,6 +902,162 @@ describe("Responses adapter", () => {
       expect(Object.keys(streamed).sort()).toEqual(
         Object.keys(unary).sort(),
       );
+    });
+  });
+
+  describe("reasoning config (v1.4 spec §3.3)", () => {
+    it("responses decoder produces config.reasoning", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          input: "hi",
+          reasoning: { effort: "high", summary: "auto" },
+          include: ["reasoning.encrypted_content"],
+        } as unknown as ResponsesRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        reasoning: { effort: "high", summary: "auto" },
+        include: ["reasoning.encrypted_content"],
+      } as unknown as ResponsesRequest);
+      expect(canonical.config?.reasoning).toEqual({
+        effort: "high",
+        summary: true,
+      });
+      expect(
+        trace.notes.filter((n) => n.code === "field_dropped"),
+      ).toEqual([]);
+    });
+
+    it("summary auto alone produces reasoning config", () => {
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        reasoning: { summary: "auto" },
+      } as unknown as ResponsesRequest);
+
+      expect(canonical.config?.reasoning).toEqual({ summary: true });
+    });
+
+    it("include reasoning.encrypted_content alone produces reasoning config", () => {
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        include: ["reasoning.encrypted_content"],
+      } as unknown as ResponsesRequest);
+
+      expect(canonical.config?.reasoning).toEqual({});
+    });
+
+    it("effort max lowers to xhigh with a note", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          input: "hi",
+          reasoning: { effort: "max" },
+        } as unknown as ResponsesRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        reasoning: { effort: "max" },
+      } as unknown as ResponsesRequest);
+      expect(canonical.config?.reasoning).toEqual({ effort: "xhigh" });
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "responses",
+        code: "reasoning_effort_lowered",
+        path: "reasoning.effort",
+      });
+    });
+
+    it("deprecated generate_summary also maps to summary", () => {
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        reasoning: { generate_summary: "detailed" },
+      } as unknown as ResponsesRequest);
+
+      expect(canonical.config?.reasoning).toEqual({ summary: true });
+    });
+
+    it("unrelated include values are still dropped with a note", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          input: "hi",
+          include: ["message.output_text.logprobs"],
+        } as unknown as ResponsesRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        include: ["message.output_text.logprobs"],
+      } as unknown as ResponsesRequest);
+      expect(canonical.config?.reasoning).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "responses",
+        code: "field_dropped",
+        path: "include",
+      });
+    });
+
+    it("encoder emits reasoning effort, summary auto and include", () => {
+      const result = fromCanonicalRequest({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        config: { reasoning: { effort: "medium", summary: true } },
+      }) as unknown as Record<string, unknown>;
+
+      expect(result.reasoning).toEqual({
+        effort: "medium",
+        summary: "auto",
+      });
+      expect(result.include).toEqual(["reasoning.encrypted_content"]);
+    });
+
+    it("encoder emits bare reasoning and include when config is empty", () => {
+      const result = fromCanonicalRequest({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        config: { reasoning: {} },
+      }) as unknown as Record<string, unknown>;
+
+      expect(result.reasoning).toEqual({});
+      expect(result.include).toEqual(["reasoning.encrypted_content"]);
+    });
+
+    it("no reasoning config means no reasoning or include fields", () => {
+      const result = fromCanonicalRequest({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        config: {},
+      }) as unknown as Record<string, unknown>;
+
+      expect(result.reasoning).toBeUndefined();
+      expect(result.include).toBeUndefined();
+    });
+
+    it("budgetTokens is dropped with a note", () => {
+      const trace = traced(() =>
+        fromCanonicalRequest({
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          config: { reasoning: { budgetTokens: 4096 } },
+        }),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: "encode",
+        adapter: "responses",
+        code: "reasoning_budget_dropped",
+        path: "reasoning.budget_tokens",
+      });
     });
   });
 });

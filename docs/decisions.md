@@ -4309,3 +4309,65 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
 - **Follow-up noted, not done:** the same suffix rule could apply to `response.completed`/
   `incomplete` `output[]` items for calls still open (a stream that sends partial deltas and skips
   both `.done` events keeps the partial arguments today). Out of the named handlers' scope.
+
+## v1.4 Task 6: Reasoning config mapping, all adapters
+
+- **Canonical → wire, per target (spec §3.3):** `src/transformers/reasoning-effort.ts` (new) carries
+  `EFFORT_LADDER` (`none|minimal|low|medium|high|xhigh`), `nearestSupported` (nearest level at or
+  below the request on the ladder, `none` if nothing lower qualifies) and `budgetFor` (spec's
+  starting budgets minimal 1024 / low 2048 / medium 8192 / high 24576 / xhigh 32000, `none` → 0) —
+  pure, no provider names; each adapter holds its own supported sets.
+- **Responses:** the only decoder that produces `config.reasoning` — `reasoning.effort` (the six
+  canonical levels pass; `max`, the one documented level above the ladder, → `xhigh` +
+  `reasoning_effort_lowered`; unknown strings → `field_dropped`), `reasoning.summary`/`generate_summary`
+  (any set value → `summary: true`), and `include` containing `reasoning.encrypted_content` (marks the
+  request reasoning-capable even with no `reasoning` object; other `include` values keep their
+  `field_dropped` note). Encode mirrors it: `reasoning: {effort, summary:"auto" when summary}` +
+  `include: ["reasoning.encrypted_content"]`; `budgetTokens` → `reasoning_budget_dropped`.
+  Sources: https://developers.openai.com/api/docs/guides/reasoning and the `openai` SDK's
+  `Shared.Reasoning`/`ReasoningEffort` typings (7.30.1).
+- **OpenAI Chat:** `reasoning_effort` passes the canonical ladder verbatim — the Chat Completions
+  reference (https://developers.openai.com/api/reference/resources/chat) documents the
+  none/minimal/low/medium/high/xhigh set as model-dependent, so no model list is kept.
+  `budgetTokens`/`summary` → `reasoning_budget_dropped`/`reasoning_summary_dropped`.
+- **Anthropic:** `ADAPTIVE_MODELS` (prefix list in `anthropic.adapter.ts`) = the `supportedModels`
+  list on https://platform.claude.com/docs/en/build-with-claude/effort — Fable 5.x, Mythos
+  5.x/Preview, Opus 5.x, Sonnet 5.x, Haiku 5.5, Opus 4.8/4.7/4.6/4.5, Sonnet 4.6. Those get
+  `thinking: {type:"adaptive"}` + `output_config.effort` (low/medium/high/xhigh per the same page;
+  `xhigh` exists only on the listed subset so Sonnet 4.6/Opus 4.6/Opus 4.5/Mythos Preview lower to
+  `high` + `reasoning_effort_lowered`; `minimal` has no wire level → thinking omitted +
+  `reasoning_effort_lowered`; `none` → no thinking). All other models get legacy extended thinking
+  `thinking: {type:"enabled", budget_tokens}` per
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking — minimum budget 1024,
+  `budgetTokens ?? budgetFor(effort)` (no effort → 8192), and `max_tokens` raised to budget+1024
+  when it would not exceed the budget (`max_tokens_raised`, numbers only). `summary` → dropped.
+- **Gemini:** `THINKING_LEVEL_MODELS` (prefix list in `gemini.adapter.ts`) — the generateContent
+  reference marks `thinkingLevel` "Recommended for Gemini 3 or later models. Use with earlier
+  models results in an error" (https://ai.google.dev/api/generate-content#ThinkingConfig), so
+  2.5-class models get `thinkingBudget` instead; the Interactions API table does list 2.5 levels,
+  but babelgate speaks generateContent. `levels` per model = the thinking doc's per-model table
+  (https://ai.google.dev/gemini-api/docs/thinking#thinking-levels); `xhigh` exists only on
+  `gemini-4-hydrogen`. Unsupported efforts → `nearestSupported` + `reasoning_effort_lowered`;
+  below the model's floor (incl. `none`, which has no wire off) → floor level +
+  `reasoning_effort_clamped`. Budget path: `budgetTokens ?? budgetFor(effort)`, `none` → 0
+  (thinking off), reasoning-without-effort → -1 (dynamic). `summary` → `includeThoughts` (same
+  reference).
+- **Ollama:** `think` per https://docs.ollama.com/capabilities/thinking and
+  https://docs.ollama.com/api/chat — `true` when reasoning is requested without an effort,
+  `false` for `none` (and `minimal`, floor-below-`low`, + `reasoning_effort_lowered`), level
+  strings `low`/`medium`/`high` pass through, `xhigh` → `"high"` + `reasoning_effort_lowered`.
+  `/api/show` advertises per-model supported strings; the encode cannot query it, so the
+  documented legacy set is used.
+- **Non-Responses sources:** unchanged — OpenAI `reasoning_effort`, Anthropic `thinking`, Gemini
+  `thinkingConfig`, Ollama `think` decode to no `config.reasoning` and the encoded upstream body
+  to every target is byte-identical to v1.3 (asserted in the adapter tests).
+- **Notes carry levels/numbers only** — `max_tokens_raised` and the effort notes name levels and
+  budgets, never prompt/completion content.
+- **Files outside the Files block:** none yet in source; **pending — `tests/contracts/__snapshots__/fixtures.test.ts.snap`**:
+  the `codex → canonical` golden gains `"reasoning": {"summary": true}` under `config` because the
+  committed codex fixture carries `reasoning: {summary:"auto"}` + `include`, and this task makes
+  the decoder produce `config.reasoning`. An existing-snapshot change outside D7's approved scope
+  → owner gate (stopped for approval).
+- **Existing test updated (Files block test file):** `responses.adapter.test.ts`
+  "dropped fields are noted, never sent" — `reasoning`/`include` leave the dropped list and now
+  assert the decode→encode round-trip, matching the task's new decode semantics.

@@ -10,6 +10,24 @@ import type { CanonicalRequest, CanonicalResponse } from '../../types/canonical.
 import type { GenerateContentRequest, GenerateContentResponse, Content, FunctionResponsePart } from '../../types/gemini.types';
 import { sequentialIds } from '../../utils/ids';
 import { ValidationError } from '../../utils/errors';
+import { fromCanonicalRequest as anthropicFromCanonical } from './anthropic.adapter';
+import { fromCanonicalRequest as openaiFromCanonical } from './openai.adapter';
+import { fromCanonicalRequest as ollamaFromCanonical } from './ollama.adapter';
+import { fromCanonicalRequest as responsesFromCanonical } from './responses.adapter';
+import { runWithTrace } from '../../observe/context';
+import { newTrace, type RequestTrace } from '../../observe/trace';
+
+/** Run `fn` inside a trace scope and return the filled trace (§3.5). */
+function traced<T>(fn: () => T): RequestTrace {
+  const trace = newTrace({
+    requestId: 'r1',
+    startedAt: 0,
+    client: 'other',
+    sourceApi: 'gemini',
+  });
+  runWithTrace(trace, fn);
+  return trace;
+}
 
 describe('Gemini Adapter', () => {
   describe('toCanonicalRequest', () => {
@@ -891,5 +909,215 @@ describe('cache hints on tool results (Task 17a)', () => {
     };
 
     expect(fromCanonicalRequest(hinted)).toEqual(fromCanonicalRequest(base));
+  });
+
+  describe('reasoning config encode (v1.4 spec §3.3)', () => {
+    const request = (
+      model: string,
+      reasoning: NonNullable<CanonicalRequest['config']>['reasoning'],
+    ): CanonicalRequest => ({
+      model,
+      messages: [{ role: 'user', content: 'hi' }],
+      config: { reasoning },
+    });
+
+    const thinkingConfigOf = (
+      result: GenerateContentRequest,
+    ): Record<string, unknown> | undefined =>
+      (result.generationConfig as Record<string, unknown> | undefined)
+        ?.thinkingConfig as Record<string, unknown> | undefined;
+
+    it.each(['minimal', 'low', 'medium', 'high'] as const)(
+      'effort %s becomes thinkingLevel on a 3.x model',
+      (effort) => {
+        const result = fromCanonicalRequest(
+          request('gemini-3-flash-preview', { effort }),
+        );
+
+        expect(thinkingConfigOf(result)).toEqual({
+          thinkingLevel: effort,
+        });
+      },
+    );
+
+    it('xhigh is sent on models that document it', () => {
+      const result = fromCanonicalRequest(
+        request('gemini-4-hydrogen', { effort: 'xhigh' }),
+      );
+
+      expect(thinkingConfigOf(result)).toEqual({
+        thinkingLevel: 'xhigh',
+      });
+    });
+
+    it('xhigh lowers to high where the model lacks it, with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('gemini-3-flash-preview', { effort: 'xhigh' }),
+        ),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'gemini',
+        code: 'reasoning_effort_lowered',
+        path: 'reasoning.effort',
+      });
+    });
+
+    it('medium lowers to low on gemini-3-pro-preview (no medium level)', () => {
+      const result = fromCanonicalRequest(
+        request('gemini-3-pro-preview', { effort: 'medium' }),
+      );
+
+      expect(thinkingConfigOf(result)).toEqual({
+        thinkingLevel: 'low',
+      });
+    });
+
+    it('effort none clamps to the model floor with a note on 3.x', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('gemini-3-flash-preview', { effort: 'none' }),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('gemini-3-flash-preview', { effort: 'none' }),
+      );
+      expect(thinkingConfigOf(result)).toEqual({
+        thinkingLevel: 'minimal',
+      });
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'gemini',
+        code: 'reasoning_effort_clamped',
+        path: 'reasoning.effort',
+      });
+    });
+
+    it('effort none clamps to low on gemini-3-pro-preview (its floor)', () => {
+      const result = fromCanonicalRequest(
+        request('gemini-3-pro-preview', { effort: 'none' }),
+      );
+
+      expect(thinkingConfigOf(result)).toEqual({
+        thinkingLevel: 'low',
+      });
+    });
+
+    it.each([
+      ['minimal', 1024],
+      ['low', 2048],
+      ['medium', 8192],
+      ['high', 24576],
+      ['xhigh', 32000],
+    ] as const)(
+      'effort %s becomes thinkingBudget %i on a 2.5 model',
+      (effort, budget) => {
+        const result = fromCanonicalRequest(
+          request('gemini-2.5-flash', { effort }),
+        );
+
+        expect(thinkingConfigOf(result)).toEqual({
+          thinkingBudget: budget,
+        });
+      },
+    );
+
+    it('effort none becomes thinkingBudget 0 on a 2.5 model', () => {
+      const result = fromCanonicalRequest(
+        request('gemini-2.5-flash', { effort: 'none' }),
+      );
+
+      expect(thinkingConfigOf(result)).toEqual({ thinkingBudget: 0 });
+    });
+
+    it('reasoning without effort enables dynamic thinking on a 2.5 model', () => {
+      const result = fromCanonicalRequest(
+        request('gemini-2.5-flash-lite', {}),
+      );
+
+      expect(thinkingConfigOf(result)).toEqual({ thinkingBudget: -1 });
+    });
+
+    it('explicit budgetTokens becomes thinkingBudget on a 2.5 model', () => {
+      const result = fromCanonicalRequest(
+        request('gemini-2.5-flash', { budgetTokens: 5000 }),
+      );
+
+      expect(thinkingConfigOf(result)).toEqual({
+        thinkingBudget: 5000,
+      });
+    });
+
+    it('explicit budgetTokens is dropped with a note on a 3.x model', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('gemini-3-flash-preview', { budgetTokens: 5000 }),
+        ),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'gemini',
+        code: 'reasoning_budget_dropped',
+        path: 'reasoning.budget_tokens',
+      });
+    });
+
+    it('summary becomes includeThoughts', () => {
+      const result = fromCanonicalRequest(
+        request('gemini-3-flash-preview', { effort: 'low', summary: true }),
+      );
+
+      expect(thinkingConfigOf(result)).toEqual({
+        thinkingLevel: 'low',
+        includeThoughts: true,
+      });
+    });
+  });
+
+  describe('reasoning fields still dropped (v1.4 spec §3.3)', () => {
+    it('gemini thinkingConfig produces no config.reasoning, body unchanged for every target', () => {
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 1024 },
+        },
+      } as GenerateContentRequest);
+
+      expect(canonical.config?.reasoning).toBeUndefined();
+
+      expect(fromCanonicalRequest(canonical)).toEqual({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {},
+      });
+      expect(anthropicFromCanonical(canonical)).toEqual({
+        model: 'gemini-pro',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 4096,
+      });
+      expect(openaiFromCanonical(canonical)).toEqual({
+        model: 'gemini-pro',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(ollamaFromCanonical(canonical)).toEqual({
+        model: 'gemini-pro',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      });
+      expect(responsesFromCanonical(canonical)).toEqual({
+        model: 'gemini-pro',
+        input: [
+          {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'hi' }],
+          },
+        ],
+        store: false,
+      });
+    });
   });
 });
