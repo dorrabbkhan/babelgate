@@ -355,18 +355,20 @@ function toThinkingConfig(
 
   // `thinkingBudget` path — token budget per
   // https://ai.google.dev/gemini-api/docs/thinking (budget models
-  // take 0 = off, -1 = dynamic).
+  // take 0 = off, -1 = dynamic). No effort and no budget → thinking
+  // stays off (no `thinkingBudget`); an explicit budget alone
+  // still enables it.
   const thinkingConfig: Record<string, unknown> = {};
   if (reasoning.effort !== undefined || reasoning.budgetTokens !== undefined) {
     thinkingConfig.thinkingBudget =
       reasoning.budgetTokens ?? budgetFor(reasoning.effort!);
-  } else {
-    thinkingConfig.thinkingBudget = -1;
   }
   if (reasoning.summary === true) {
     thinkingConfig.includeThoughts = true;
   }
-  return thinkingConfig;
+  return Object.keys(thinkingConfig).length > 0
+    ? thinkingConfig
+    : undefined;
 }
 
 export function fromCanonicalRequest(

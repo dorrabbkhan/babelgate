@@ -888,10 +888,19 @@ describe("cache hints on tool results (Task 17a)", () => {
       expect(result.think).toBe(false);
     });
 
-    it("reasoning without effort becomes think true", () => {
+    it("reasoning {} sends no think field", () => {
       const result = fromCanonicalRequest(request({}));
 
-      expect(result.think).toBe(true);
+      expect(result.think).toBeUndefined();
+    });
+
+    it("no effort leaves thinking off", () => {
+      // The Codex case (summary only) emits no think field.
+      expect(fromCanonicalRequest(request({ summary: true }))).toEqual({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        stream: false,
+      });
     });
 
     it("budgetTokens is dropped with a note", () => {
@@ -899,6 +908,9 @@ describe("cache hints on tool results (Task 17a)", () => {
         fromCanonicalRequest(request({ budgetTokens: 4096 })),
       );
 
+      // A budget alone still enables thinking (no wire budget).
+      const result = fromCanonicalRequest(request({ budgetTokens: 4096 }));
+      expect(result.think).toBe(true);
       expect(trace.notes).toContainEqual({
         stage: "encode",
         adapter: "ollama",

@@ -1033,12 +1033,41 @@ describe('cache hints on tool results (Task 17a)', () => {
       expect(thinkingConfigOf(result)).toEqual({ thinkingBudget: 0 });
     });
 
-    it('reasoning without effort enables dynamic thinking on a 2.5 model', () => {
+    it('reasoning {} sends no thinkingConfig on a 2.5 model', () => {
       const result = fromCanonicalRequest(
         request('gemini-2.5-flash-lite', {}),
       );
 
-      expect(thinkingConfigOf(result)).toEqual({ thinkingBudget: -1 });
+      expect(thinkingConfigOf(result)).toBeUndefined();
+    });
+
+    it('no effort leaves thinking off', () => {
+      // 2.5 (budget path) — the Codex case (summary only) emits
+      // includeThoughts but no thinkingBudget.
+      expect(
+        fromCanonicalRequest(
+          request('gemini-2.5-flash', { summary: true }),
+        ),
+      ).toEqual({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          thinkingConfig: { includeThoughts: true },
+        },
+      });
+    });
+
+    it('no effort leaves thinking off', () => {
+      // 3.x (level path) — includeThoughts but no thinkingLevel.
+      expect(
+        fromCanonicalRequest(
+          request('gemini-3-flash-preview', { summary: true }),
+        ),
+      ).toEqual({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          thinkingConfig: { includeThoughts: true },
+        },
+      });
     });
 
     it('explicit budgetTokens becomes thinkingBudget on a 2.5 model', () => {

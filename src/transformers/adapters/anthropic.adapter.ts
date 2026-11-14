@@ -231,9 +231,9 @@ function applyReasoning(
     }
     const effort = reasoning.effort;
     if (effort === undefined || effort === "none") {
-      // No effort → adaptive thinking at the model's default;
-      // none → no thinking at all.
-      if (effort === undefined) {
+      // No effort → thinking stays off (a dropped budget keeps the
+      // old model-default adaptive mode); none → no thinking at all.
+      if (effort === undefined && reasoning.budgetTokens !== undefined) {
         (result as { thinking?: unknown }).thinking = {
           type: "adaptive",
         };
@@ -279,14 +279,12 @@ function applyReasoning(
   // — minimum 1024, and the budget counts toward (must stay below)
   // max_tokens.
   if (reasoning.effort === "none") return;
+  // No effort and no budget → thinking stays off; an explicit
+  // budget alone still enables it.
+  if (reasoning.effort === undefined && reasoning.budgetTokens === undefined)
+    return;
 
-  const budget =
-    reasoning.budgetTokens ??
-    (reasoning.effort !== undefined
-      ? budgetFor(reasoning.effort)
-      : // Reasoning requested without a level: the spec's default is
-        // the medium starting budget.
-        8192);
+  const budget = reasoning.budgetTokens ?? budgetFor(reasoning.effort!);
   (result as { thinking?: unknown }).thinking = {
     type: "enabled",
     budget_tokens: budget,

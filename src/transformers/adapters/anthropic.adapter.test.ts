@@ -1790,14 +1790,36 @@ describe('Anthropic Adapter', () => {
       });
     });
 
-    it('reasoning without effort enables thinking on extended models', () => {
-      const result = fromCanonicalRequest(
-        request('claude-sonnet-4-5', {}),
-      );
+    it('reasoning {} sends no thinking field', () => {
+      for (const model of ['claude-opus-5-5', 'claude-sonnet-4-5']) {
+        const result = fromCanonicalRequest(request(model, {}));
 
-      expect(result.thinking).toEqual({
-        type: 'enabled',
-        budget_tokens: 8192,
+        expect(result.thinking).toBeUndefined();
+        expect(result.output_config).toBeUndefined();
+      }
+    });
+
+    it('no effort leaves thinking off', () => {
+      // Adaptive model — the Codex case (summary only) emits no
+      // thinking and no output_config.
+      expect(
+        fromCanonicalRequest(request('claude-opus-5-5', { summary: true })),
+      ).toEqual({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 4096,
+      });
+    });
+
+    it('no effort leaves thinking off', () => {
+      // Legacy extended-thinking model — no thinking and
+      // max_tokens unchanged.
+      expect(
+        fromCanonicalRequest(request('claude-sonnet-4-5', { summary: true })),
+      ).toEqual({
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 4096,
       });
     });
 

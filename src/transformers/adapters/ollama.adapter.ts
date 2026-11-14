@@ -220,7 +220,9 @@ export function fromCanonicalRequest(
     const reasoning = c.reasoning;
     if (reasoning !== undefined) {
       if (reasoning.effort === undefined) {
-        result.think = true;
+        // No effort → thinking stays off; a (dropped) budget alone
+        // keeps the old think:true for that case.
+        if (reasoning.budgetTokens !== undefined) result.think = true;
       } else if (reasoning.effort === "none") {
         result.think = false;
       } else if (reasoning.effort === "minimal") {

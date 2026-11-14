@@ -1043,6 +1043,30 @@ describe("Responses adapter", () => {
       expect(result.include).toBeUndefined();
     });
 
+    it("no effort leaves thinking off", () => {
+      // The Codex case (summary only) keeps summary:"auto" with no
+      // effort field.
+      expect(
+        fromCanonicalRequest({
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          config: { reasoning: { summary: true } },
+        }),
+      ).toEqual({
+        model: "m",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "hi" }],
+          },
+        ],
+        store: false,
+        reasoning: { summary: "auto" },
+        include: ["reasoning.encrypted_content"],
+      });
+    });
+
     it("budgetTokens is dropped with a note", () => {
       const trace = traced(() =>
         fromCanonicalRequest({

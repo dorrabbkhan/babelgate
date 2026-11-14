@@ -852,6 +852,14 @@ describe('OpenAI Adapter', () => {
       expect(result.reasoning_effort).toBeUndefined();
     });
 
+    it('no effort leaves thinking off', () => {
+      // The Codex case (summary only) emits no reasoning_effort.
+      expect(fromCanonicalRequest(request({ summary: true }))).toEqual({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+    });
+
     it('budgetTokens is dropped with a note', () => {
       const trace = traced(() =>
         fromCanonicalRequest(request({ budgetTokens: 4096 })),

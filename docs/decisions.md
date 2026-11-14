@@ -4339,7 +4339,8 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   `reasoning_effort_lowered`; `none` → no thinking). All other models get legacy extended thinking
   `thinking: {type:"enabled", budget_tokens}` per
   https://platform.claude.com/docs/en/build-with-claude/extended-thinking — minimum budget 1024,
-  `budgetTokens ?? budgetFor(effort)` (no effort → 8192), and `max_tokens` raised to budget+1024
+  `budgetTokens ?? budgetFor(effort)` (no effort and no budget → thinking stays off), and
+  `max_tokens` raised to budget+1024
   when it would not exceed the budget (`max_tokens_raised`, numbers only). `summary` → dropped.
 - **Gemini:** `THINKING_LEVEL_MODELS` (prefix list in `gemini.adapter.ts`) — the generateContent
   reference marks `thinkingLevel` "Recommended for Gemini 3 or later models. Use with earlier
@@ -4350,24 +4351,41 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   `gemini-4-hydrogen`. Unsupported efforts → `nearestSupported` + `reasoning_effort_lowered`;
   below the model's floor (incl. `none`, which has no wire off) → floor level +
   `reasoning_effort_clamped`. Budget path: `budgetTokens ?? budgetFor(effort)`, `none` → 0
-  (thinking off), reasoning-without-effort → -1 (dynamic). `summary` → `includeThoughts` (same
-  reference).
+  (thinking off), no effort and no budget → no `thinkingBudget` at all (thinking stays off —
+  fix round 1 changed the previous `-1` dynamic default). `summary` → `includeThoughts` (same
+  reference) on both paths, including when thinking is off.
 - **Ollama:** `think` per https://docs.ollama.com/capabilities/thinking and
-  https://docs.ollama.com/api/chat — `true` when reasoning is requested without an effort,
+  https://docs.ollama.com/api/chat — no `think` field when reasoning is requested without an
+  effort (a budget alone keeps `think: true`),
   `false` for `none` (and `minimal`, floor-below-`low`, + `reasoning_effort_lowered`), level
   strings `low`/`medium`/`high` pass through, `xhigh` → `"high"` + `reasoning_effort_lowered`.
   `/api/show` advertises per-model supported strings; the encode cannot query it, so the
   documented legacy set is used.
+- **No effort means no thinking (fix round 1, owner-approved):** every target enables thinking
+  only on an explicit `effort` or `budgetTokens` — a `reasoning` config with neither (the Codex
+  fixture's `summary`-only case) emits no `thinking`/`output_config` (Anthropic, adaptive and
+  legacy), no `think` (Ollama) and no `thinkingBudget`/`thinkingLevel` (Gemini; `includeThoughts`
+  still carries `summary`). Previously the no-effort case switched thinking on by default
+  (adaptive `thinking:{type:"adaptive"}`, legacy `budget_tokens:8192`, `think:true`,
+  `thinkingBudget:-1`) — a cost the client didn't ask for, plus Anthropic's thinking-in-tool-loop
+  rule, would hit Codex tool loops before Task 8's continuity guard exists. An explicit
+  `budgetTokens` alone keeps the previous behaviour on each target.
 - **Non-Responses sources:** unchanged — OpenAI `reasoning_effort`, Anthropic `thinking`, Gemini
   `thinkingConfig`, Ollama `think` decode to no `config.reasoning` and the encoded upstream body
   to every target is byte-identical to v1.3 (asserted in the adapter tests).
 - **Notes carry levels/numbers only** — `max_tokens_raised` and the effort notes name levels and
   budgets, never prompt/completion content.
-- **Files outside the Files block:** none yet in source; **pending — `tests/contracts/__snapshots__/fixtures.test.ts.snap`**:
-  the `codex → canonical` golden gains `"reasoning": {"summary": true}` under `config` because the
-  committed codex fixture carries `reasoning: {summary:"auto"}` + `include`, and this task makes
-  the decoder produce `config.reasoning`. An existing-snapshot change outside D7's approved scope
-  → owner gate (stopped for approval).
+- **Files outside the Files block — `tests/contracts/__snapshots__/fixtures.test.ts.snap` (owner-approved,
+  fix round 1):** the `codex → canonical` golden gains `"reasoning": {"summary": true}` under
+  `config` because the committed codex fixture carries `reasoning: {summary:"auto"}` + `include`,
+  and this task makes the decoder produce `config.reasoning`.
 - **Existing test updated (Files block test file):** `responses.adapter.test.ts`
   "dropped fields are noted, never sent" — `reasoning`/`include` leave the dropped list and now
   assert the decode→encode round-trip, matching the task's new decode semantics.
+- **Existing tests updated (fix round 1):** three tests that asserted the old thinking-on default
+  now assert off — Anthropic "reasoning {} sends no thinking field" (was "reasoning without effort
+  enables thinking on extended models", `budget_tokens: 8192`), Ollama "reasoning {} sends no
+  think field" (was "becomes think true"), Gemini "reasoning {} sends no thinkingConfig on a 2.5
+  model" (was "enables dynamic thinking", `thinkingBudget: -1`). New "no effort leaves thinking
+  off" tests assert the exact encoded body for the summary-only case on Anthropic adaptive +
+  legacy, Gemini 2.5 + 3.x, Ollama, OpenAI and Responses (which keeps `summary: "auto"`).
