@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   toCanonicalRequest,
   fromCanonicalRequest,
@@ -12,6 +12,7 @@ import { createStreamEncoder } from "./responses.stream.encode";
 import { runWithTrace } from "../../observe/context";
 import { newTrace, type RequestTrace } from "../../observe/trace";
 import { ValidationError } from "../../utils/errors";
+import { logger } from "../../utils/logger";
 import { sequentialIds } from "../../utils/ids";
 import type {
   CanonicalRequest,
@@ -721,6 +722,185 @@ describe("Responses adapter", () => {
         .map((f) => `${f.event ? `event: ${f.event}\n` : ""}data: ${JSON.stringify(f.data)}`)
         .join("\n\n");
       expect(decodeAll(`${wire}\n\n`)).toEqual(EVENTS);
+    });
+
+    // A `.done` event's `arguments` is the call's full arguments: when
+    // it extends the streamed deltas the decoder emits the missing
+    // suffix so the concatenated deltas are the arguments exactly as
+    // sent (canonical rule 3); a mismatch keeps the streamed deltas
+    // and only logs the event type and call index — never the args.
+    const ARGS_STREAM = {
+      created:
+        'data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_a","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}',
+      added:
+        'data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"f","arguments":"","status":"in_progress"}}',
+      completed:
+        'data: {"type":"response.completed","sequence_number":9,"response":{"id":"resp_a","object":"response","created_at":1,"status":"completed","model":"m","output":[],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}',
+      delta: (text: string, seq: number) =>
+        `data: {"type":"response.function_call_arguments.delta","sequence_number":${seq},"item_id":"fc_1","output_index":0,"delta":${JSON.stringify(text)}}`,
+      argsDone: (args: string, seq: number) =>
+        `data: {"type":"response.function_call_arguments.done","sequence_number":${seq},"item_id":"fc_1","output_index":0,"arguments":${JSON.stringify(args)}}`,
+      itemDone: (args: string, seq: number) =>
+        `data: {"type":"response.output_item.done","sequence_number":${seq},"output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","name":"f","arguments":${JSON.stringify(args)},"status":"completed"}}`,
+    };
+
+    function joinedArgs(events: CanonicalStreamEvent[], index = 0): string {
+      return events
+        .map((e) =>
+          e.type === "tool_call_delta" && e.index === index
+            ? e.argumentsDelta
+            : "",
+        )
+        .join("");
+    }
+
+    it("deltas then a longer full arguments at .done emit the suffix", () => {
+      const wire = [
+        ARGS_STREAM.created,
+        "",
+        ARGS_STREAM.added,
+        "",
+        ARGS_STREAM.delta('{"a":', 2),
+        "",
+        ARGS_STREAM.argsDone('{"a":1}', 3),
+        "",
+        ARGS_STREAM.completed,
+        "",
+      ].join("\n");
+      expect(joinedArgs(decodeAll(wire))).toBe('{"a":1}');
+    });
+
+    it("output_item.done alone emits the suffix over partial deltas", () => {
+      const wire = [
+        ARGS_STREAM.created,
+        "",
+        ARGS_STREAM.added,
+        "",
+        ARGS_STREAM.delta('{"a":', 2),
+        "",
+        ARGS_STREAM.itemDone('{"a":1}', 3),
+        "",
+        ARGS_STREAM.completed,
+        "",
+      ].join("\n");
+      expect(joinedArgs(decodeAll(wire))).toBe('{"a":1}');
+    });
+
+    it("equal full arguments at .done emit no extra delta", () => {
+      const wire = [
+        ARGS_STREAM.created,
+        "",
+        ARGS_STREAM.added,
+        "",
+        ARGS_STREAM.delta('{"a":1}', 2),
+        "",
+        ARGS_STREAM.argsDone('{"a":1}', 3),
+        "",
+        ARGS_STREAM.itemDone('{"a":1}', 4),
+        "",
+        ARGS_STREAM.completed,
+        "",
+      ].join("\n");
+      const events = decodeAll(wire);
+      expect(events.filter((e) => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", index: 0, argumentsDelta: '{"a":1}' },
+      ]);
+      expect(joinedArgs(events)).toBe('{"a":1}');
+    });
+
+    it("mismatched full arguments keep the streamed deltas", () => {
+      const debugSpy = vi
+        .spyOn(logger, "debug")
+        .mockImplementation(() => logger);
+      try {
+        const wire = [
+          ARGS_STREAM.created,
+          "",
+          ARGS_STREAM.added,
+          "",
+          ARGS_STREAM.delta('{"b":', 2),
+          "",
+          ARGS_STREAM.argsDone('{"a":1}', 3),
+          "",
+          ARGS_STREAM.itemDone('{"a":1}', 4),
+          "",
+          ARGS_STREAM.completed,
+          "",
+        ].join("\n");
+        expect(joinedArgs(decodeAll(wire))).toBe('{"b":');
+        // The debug line names only the event type and call index —
+        // the arguments themselves are content and are never logged.
+        expect(debugSpy).toHaveBeenCalledWith(
+          { type: "response.function_call_arguments.done", index: 0 },
+          expect.any(String),
+        );
+        const logged = JSON.stringify(debugSpy.mock.calls);
+        expect(logged).not.toContain('{"a":1}');
+        expect(logged).not.toContain('{"b":');
+      } finally {
+        debugSpy.mockRestore();
+      }
+    });
+
+    it("response.failed carries usage: null when no usage arrived", () => {
+      const frames = encodeAll([
+        { type: "message_start", id: "r", model: "m" },
+        { type: "text_delta", text: "partial" },
+        {
+          type: "error",
+          error: { kind: "upstream", status: 502, message: "boom" },
+        },
+      ]);
+      const failed = frames.at(-1)!.data;
+      expect(failed.type).toBe("response.failed");
+      expect(failed.response).toHaveProperty("usage", null);
+    });
+
+    it("response.failed keeps usage when a usage event arrived", () => {
+      const frames = encodeAll([
+        { type: "message_start", id: "r", model: "m" },
+        {
+          type: "usage",
+          usage: { inputTokens: 7, outputTokens: 3, totalTokens: 10 },
+        },
+        {
+          type: "error",
+          error: { kind: "upstream", status: 502, message: "boom" },
+        },
+      ]);
+      const failed = frames.at(-1)!.data;
+      expect(failed.type).toBe("response.failed");
+      expect(failed.response.usage?.input_tokens).toBe(7);
+    });
+
+    it("terminal response.completed carries the unary field set", () => {
+      const frames = encodeAll(EVENTS);
+      const streamed = frames.find(
+        (f) => f.data.type === "response.completed",
+      )!.data.response as Record<string, unknown>;
+      const unary = fromCanonicalResponse({
+        id: "resp_1",
+        model: "client-model",
+        message: {
+          role: "assistant",
+          content: "Hello",
+          toolCalls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "get_weather",
+                arguments: '{"location":"Paris"}',
+              },
+            },
+          ],
+        },
+        finishReason: "tool_call",
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      }) as unknown as Record<string, unknown>;
+      expect(Object.keys(streamed).sort()).toEqual(
+        Object.keys(unary).sort(),
+      );
     });
   });
 });

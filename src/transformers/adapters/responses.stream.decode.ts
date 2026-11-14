@@ -135,6 +135,40 @@ export function createStreamDecoder(
     return call;
   }
 
+  /**
+   * A `.done` event's `arguments` is the call's full arguments
+   * (https://platform.openai.com/docs/api-reference/responses-streaming
+   * `response.function_call_arguments.done`,
+   * `response.output_item.done`). When it extends the streamed deltas
+   * emit the missing suffix so the joined deltas are the arguments
+   * exactly as sent (canonical rule 3); equal means nothing more is
+   * owed; a non-prefix mismatch keeps the streamed deltas and logs
+   * only the event type and call index — never the arguments
+   * (privacy rule).
+   */
+  function settleArguments(
+    call: DecodeCall,
+    full: string,
+    type: string,
+    out: CanonicalStreamEvent[],
+  ): void {
+    if (full === call.args) return;
+    if (full.startsWith(call.args)) {
+      const suffix = full.slice(call.args.length);
+      call.args = full;
+      out.push({
+        type: "tool_call_delta",
+        index: call.index,
+        argumentsDelta: suffix,
+      });
+      return;
+    }
+    logger.debug(
+      { type, index: call.index },
+      "responses stream: done arguments do not extend the streamed deltas; keeping the deltas",
+    );
+  }
+
   /** Emit the events of one terminal `output[]` item never streamed. */
   function reconcileItem(item: Obj, out: CanonicalStreamEvent[]): void {
     if (item.type === "message") {
@@ -238,17 +272,8 @@ export function createStreamDecoder(
         if (!call.done) {
           call.done = true;
           openCalls.splice(openCalls.indexOf(call.index), 1);
-          if (
-            call.args === "" &&
-            typeof item.arguments === "string" &&
-            item.arguments !== ""
-          ) {
-            call.args = item.arguments;
-            out.push({
-              type: "tool_call_delta",
-              index: call.index,
-              argumentsDelta: item.arguments,
-            });
+          if (typeof item.arguments === "string") {
+            settleArguments(call, item.arguments, type, out);
           }
           out.push({ type: "tool_call_end", index: call.index });
         }
@@ -273,20 +298,11 @@ export function createStreamDecoder(
       }
       case "response.function_call_arguments.done": {
         const call = callFor(event);
-        if (
-          call &&
-          call.args === "" &&
-          typeof event.arguments === "string" &&
-          event.arguments !== ""
-        ) {
+        if (call && typeof event.arguments === "string") {
           // An upstream that skipped deltas still yields the full
-          // arguments at done.
-          call.args = event.arguments;
-          out.push({
-            type: "tool_call_delta",
-            index: call.index,
-            argumentsDelta: event.arguments,
-          });
+          // arguments at done; partial deltas are extended, never
+          // silently truncated.
+          settleArguments(call, event.arguments, type, out);
         }
         break;
       }

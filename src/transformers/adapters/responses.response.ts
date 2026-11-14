@@ -152,6 +152,54 @@ function toCanonicalUsage(usage: {
 
 // ============ RESPONSE: Canonical → Responses ============
 
+/**
+ * The one Response object field set shared by the unary body and
+ * every stream frame's `response` — the `response.created` /
+ * `in_progress` skeleton carries it with `output: []` and
+ * `usage: null`; the terminal `response.completed`/`incomplete`/
+ * `failed` object carries the same keys (the stream encoder in
+ * responses.stream.encode.ts builds both through this helper — no
+ * duplicated literal). `usage` is always present: the usage object
+ * when one arrived, `null` otherwise — the field is nullable per the
+ * object reference and per Codex's `Response` (`usage: Option<…>` in
+ * `codex-rs/codex-api/src/sse/responses.rs` at Codex 0.169.0).
+ * Field sources: https://platform.openai.com/docs/api-reference/responses/object
+ * and `openai` npm 7.30.1 `resources/responses/responses.d.ts`.
+ */
+export function toResponsesResponseObject(fields: {
+  id: string;
+  createdAt: number;
+  status: NonNullable<ResponsesResponse["status"]>;
+  model: string;
+  output: Array<Record<string, unknown>>;
+  outputText: string;
+  error: { code: string; message: string } | null;
+  incompleteDetails: { reason: string } | null;
+  usage: ResponsesUsage | null;
+}): ResponsesResponse {
+  return {
+    id: fields.id,
+    object: "response",
+    created_at: fields.createdAt,
+    status: fields.status,
+    incomplete_details: fields.incompleteDetails,
+    model: fields.model,
+    output: fields.output,
+    output_text: fields.outputText,
+    error: fields.error,
+    instructions: null,
+    metadata: null,
+    access_programs: null,
+    parallel_tool_calls: true,
+    temperature: null,
+    tool_choice: "auto",
+    tools: [],
+    top_p: null,
+    store: false,
+    usage: fields.usage,
+  } as unknown as ResponsesResponse;
+}
+
 export function fromCanonicalResponse(
   response: CanonicalResponse,
 ): ResponsesResponse {
@@ -189,33 +237,22 @@ export function fromCanonicalResponse(
     });
   }
 
-  const body: Record<string, unknown> = {
+  return toResponsesResponseObject({
     id: response.id.startsWith("resp_")
       ? response.id
       : `resp_${response.id}`,
-    object: "response",
-    created_at: response.created ?? Math.floor(Date.now() / 1000),
+    createdAt: response.created ?? Math.floor(Date.now() / 1000),
     status,
-    incomplete_details: toIncompleteDetails(response.finishReason),
+    incompleteDetails: toIncompleteDetails(response.finishReason),
     model: response.model,
     output,
-    output_text: content
+    outputText: content
       .filter((p) => p.type === "output_text")
       .map((p) => p.text)
       .join(""),
     error: null,
-    instructions: null,
-    metadata: null,
-    access_programs: null,
-    parallel_tool_calls: true,
-    temperature: null,
-    tool_choice: "auto",
-    tools: [],
-    top_p: null,
-    store: false,
-    ...(response.usage && { usage: toResponsesUsage(response.usage) }),
-  };
-  return body as unknown as ResponsesResponse;
+    usage: response.usage ? toResponsesUsage(response.usage) : null,
+  });
 }
 
 function toResponsesStatus(
