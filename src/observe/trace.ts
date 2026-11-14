@@ -83,6 +83,12 @@ export interface RequestTrace extends RouteLogRecord {
   userAgent?: string;
   status: "ok" | "error" | "aborted";
   httpStatus: number;
+  /**
+   * v1.4 §3.4: set only when the request was relayed to a `type:
+   * responses` entry byte for byte — absent on every translated
+   * request, so existing traces and sink shapes are unchanged.
+   */
+  passthrough?: boolean;
   /** canonical error kind, never a message body */
   errorType?: CanonicalErrorKind | string;
   cacheReadTokens?: number;

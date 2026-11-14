@@ -1177,3 +1177,449 @@ routes:
     });
   });
 });
+
+// ===== v1.4 Task 10: pass-through (spec §3.4) =====
+
+/**
+ * Responses → `type: responses` entry: the request is relayed with
+ * only `model` rewritten (+ the max_output_tokens clamp), the reply
+ * byte for byte with `response.model` restored inside the lifecycle
+ * events only. Fallbacks to non-Responses entries stay bridged.
+ *
+ * Lifecycle event/field names cited per
+ * https://platform.openai.com/docs/api-reference/responses-streaming
+ * and `response.*.response` per /docs/api-reference/responses/object.
+ */
+describe("pass-through (v1.4 spec §3.4)", () => {
+  async function waitForTraces(n: number, ms = 3000): Promise<void> {
+    const deadline = Date.now() + ms;
+    while (traces.length < n && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  /** A `type: responses` provider + a gemini entry for fallbacks. */
+  const passYaml = (route = "pass-*", repair = false) => `default: or
+providers:
+  or:
+    type: responses
+    base_url: ${MOCK_BASE_URLS.responses}
+    api_key_env: RESPONSES_API_KEY${repair ? "\n    repair_tool_calls: true" : ""}
+  gem:
+    type: gemini
+    base_url: ${MOCK_BASE_URLS.gemini}
+    api_key_env: GEMINI_API_KEY
+routes:
+  - match: "${route}"
+    to: or/upstream-model
+  - match: fall-*
+    to: or/upstream-model
+    fallback: [gem/gem-model]
+prices:
+  or/*: {input: 1, output: 2}
+`;
+
+  it("only model is rewritten in the forwarded body", async () => {
+    useTarget("responses", passYaml());
+    const clientBody = {
+      model: "pass-codex",
+      stream: false,
+      store: false,
+      include: ["reasoning.encrypted_content"],
+      reasoning: { effort: "medium" },
+      tools: [
+        { type: "web_search", external_web_access: true },
+        {
+          type: "function",
+          name: "get_weather",
+          parameters: { type: "object" },
+        },
+      ],
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "hi" }],
+        },
+        { type: "reasoning", encrypted_content: "bg1.sig" },
+      ],
+      metadata: { caller: "codex" },
+      max_output_tokens: 512,
+    };
+    const res = await request(app).post("/v1/responses").send(clientBody);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // Byte compare after replacing model — nothing else was touched.
+    expect(capturedRequests.responses).toHaveLength(1);
+    expect(JSON.stringify(capturedRequests.responses[0])).toBe(
+      JSON.stringify({ ...clientBody, model: "upstream-model" }),
+    );
+
+    // The non-stream reply's `response.model` is restored to the
+    // client's model (the mock body carries the upstream name).
+    responseOverrides.responses = {
+      status: 200,
+      body: {
+        ...(responseOverrides.responses?.body as object | undefined),
+        id: "resp_pt",
+        object: "response",
+        created_at: 1,
+        status: "completed",
+        model: "upstream-model",
+        output: [],
+        usage: null,
+      },
+    };
+    const res2 = await request(app)
+      .post("/v1/responses")
+      .send(clientBody);
+    expect(res2.status).toBe(200);
+    expect(res2.body.model).toBe("pass-codex");
+    expect(res2.body.id).toBe("resp_pt");
+    expect(res2.body.status).toBe("completed");
+  });
+
+  it("clamps max_output_tokens on the forwarded body", async () => {
+    const yaml = `default: or
+providers:
+  or:
+    type: responses
+    base_url: ${MOCK_BASE_URLS.responses}
+    api_key_env: RESPONSES_API_KEY
+    max_output_tokens: 100
+routes:
+  - match: "*"
+    to: or/upstream-model
+`;
+    useTarget("responses", yaml);
+    const res = await request(app).post("/v1/responses").send({
+      model: "pass-codex",
+      input: [],
+      max_output_tokens: 512,
+    });
+    expect(res.status).toBe(200);
+    expect(
+      (capturedRequests.responses[0] as Record<string, unknown>)
+        .max_output_tokens,
+    ).toBe(100);
+    // An unset one is filled with the cap, matching the bridge.
+    capturedRequests.responses.length = 0;
+    const res2 = await request(app).post("/v1/responses").send({
+      model: "pass-codex",
+      input: [],
+    });
+    expect(res2.status).toBe(200);
+    expect(
+      (capturedRequests.responses[0] as Record<string, unknown>)
+        .max_output_tokens,
+    ).toBe(100);
+  });
+
+  it("stream relayed byte-identical except model in lifecycle events", async () => {
+    useTarget("responses", passYaml());
+    const lifecycle = (type: string, extra = "") =>
+      JSON.stringify({
+        type,
+        sequence_number: 0,
+        response: {
+          id: "resp_pt",
+          object: "response",
+          created_at: 1,
+          status:
+            type === "response.completed" ? "completed" : "in_progress",
+          model: "upstream-model",
+          output: [],
+          usage: null,
+          ...(extra ? { note: extra } : {}),
+        },
+      });
+    // A realistic mix: `event:` lines, the no-event-line OpenRouter
+    // shape, an oddly-formatted non-lifecycle event (kept verbatim),
+    // several events in one chunk, and `data: [DONE]`.
+    const oddDelta =
+      'data:  {"type":"response.output_text.delta", "delta" :"weird",  "spacing":true}\n\n';
+    const created = `event: response.created\ndata: ${lifecycle("response.created")}\n\n`;
+    const inProgress = `data: ${lifecycle("response.in_progress")}\n\n`;
+    const delta = `data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"hi"}\n\n`;
+    const completed = `event: response.completed\ndata: ${lifecycle("response.completed")}\n\n`;
+    const done = "data: [DONE]\n\n";
+    const upstreamText =
+      created + inProgress + oddDelta + delta + completed + done;
+
+    server.use(
+      http.post(`${MOCK_BASE_URLS.responses}/v1/responses`, () => {
+        const bytes = new TextEncoder().encode(upstreamText);
+        const stream = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(bytes.subarray(0, created.length));
+            c.enqueue(
+              bytes.subarray(
+                created.length,
+                created.length + inProgress.length + oddDelta.length,
+              ),
+            );
+            c.enqueue(bytes.subarray(created.length + inProgress.length + oddDelta.length));
+            c.close();
+          },
+        });
+        return new HttpResponse(stream, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }),
+    );
+
+    const res = await postResponsesStream({
+      model: "pass-codex",
+      input: [],
+      stream: true,
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/event-stream");
+    const text = res.body as unknown as string;
+    const blocks = text.split("\n\n").filter((b) => b !== "");
+
+    // Byte-compare per block: only the lifecycle events differ, and
+    // only inside `response.model`.
+    const upstreamBlocks = upstreamText
+      .split("\n\n")
+      .filter((b) => b !== "");
+    expect(blocks).toHaveLength(upstreamBlocks.length);
+    for (const [i, block] of blocks.entries()) {
+      const lines = block.split("\n");
+      const dataLine = lines.find((l) => l.startsWith("data:"));
+      const dataText = dataLine?.slice(5).replace(/^ /, "") ?? "";
+      let parsed:
+        | { type?: string; response?: { model?: string } }
+        | undefined;
+      if (dataText !== "" && dataText !== "[DONE]") {
+        parsed = JSON.parse(dataText) as {
+          type?: string;
+          response?: { model?: string };
+        };
+      }
+      const isLifecycle =
+        parsed !== undefined &&
+        [
+          "response.created",
+          "response.in_progress",
+          "response.completed",
+          "response.incomplete",
+          "response.failed",
+        ].includes(parsed.type ?? "");
+      if (!isLifecycle) {
+        expect(block).toBe(upstreamBlocks[i]);
+        continue;
+      }
+      // Same event: line; data parses with the client model restored.
+      expect(parsed?.response?.model).toBe("pass-codex");
+      const upstreamData = JSON.parse(
+        upstreamBlocks[i]
+          .split("\n")
+          .find((l) => l.startsWith("data:"))!
+          .slice(5)
+          .replace(/^ /, ""),
+      ) as { response?: { model?: string } };
+      expect({ ...parsed, response: { ...parsed?.response } })
+        .toMatchObject({
+          type: parsed?.type,
+        });
+      expect(upstreamData.response?.model).toBe("upstream-model");
+      if (block.startsWith("event:")) {
+        expect(block.split("\n")[0]).toBe(
+          upstreamBlocks[i].split("\n")[0],
+        );
+      }
+    }
+    expect(text.endsWith("data: [DONE]\n\n")).toBe(true);
+  });
+
+  it("usage and cost from response.completed", async () => {
+    useTarget("responses", passYaml());
+    // `response.completed.response.usage` per
+    // https://platform.openai.com/docs/api-reference/responses-streaming
+    // — input_tokens_details.cached_tokens → cacheReadTokens.
+    const completed = JSON.stringify({
+      type: "response.completed",
+      sequence_number: 4,
+      response: {
+        id: "resp_usage",
+        object: "response",
+        created_at: 1,
+        status: "completed",
+        model: "upstream-model",
+        output: [],
+        usage: {
+          input_tokens: 100,
+          input_tokens_details: { cached_tokens: 40 },
+          output_tokens: 30,
+          output_tokens_details: { reasoning_tokens: 12 },
+          total_tokens: 130,
+        },
+      },
+    });
+    server.use(
+      http.post(`${MOCK_BASE_URLS.responses}/v1/responses`, () =>
+        new HttpResponse(`data: ${completed}\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    const before = traces.length;
+    const res = await postResponsesStream({
+      model: "pass-codex",
+      input: [],
+      stream: true,
+    });
+    expect(res.status).toBe(200);
+    await waitForTraces(before + 1);
+
+    const trace = traces[before];
+    expect(trace).toMatchObject({
+      status: "ok",
+      stream: true,
+      passthrough: true,
+      inputTokens: 100,
+      outputTokens: 30,
+      cacheReadTokens: 40,
+      finishReason: "stop",
+      priceSource: "override",
+    });
+    // (100*1 + 30*2) USD per 1M from the or/* price glob.
+    expect(trace.costUsd).toBeCloseTo((100 + 60) / 1e6, 12);
+  });
+
+  it("fallback to a gemini entry is bridged", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    useTarget("responses", passYaml());
+    responseOverrides.responses = { status: 503, body: { error: "down" } };
+
+    const clientBody = {
+      model: "fall-codex",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "hi" }],
+        },
+      ],
+      tools: [{ type: "web_search" }],
+      store: false,
+    };
+    const res = await request(app).post("/v1/responses").send(clientBody);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // The Gemini fallback received the BRIDGED request — a Gemini
+    // `contents` body built from canonical, not the client body
+    // (Gemini carries the model in its URL path, not the body — the
+    // winning hop proves routing).
+    expect(res.headers["x-babelgate-provider"]).toBe("gem");
+    expect(res.headers["x-babelgate-attempts"]).toBe("2");
+    expect(capturedRequests.gemini).toHaveLength(1);
+    expect(capturedRequests.gemini[0]).toMatchObject({
+      contents: expect.any(Array),
+    });
+    expect(capturedRequests.gemini[0]).not.toHaveProperty("input");
+    // The reply is the normal Responses envelope (encoded by the
+    // responses adapter), not a relayed body.
+    expect(res.body.object).toBe("response");
+  });
+
+  it("a 4xx before the first byte follows the normal error mapping", async () => {
+    useTarget("responses", passYaml());
+    responseOverrides.responses = {
+      status: 400,
+      body: { error: { message: "bad request", type: "invalid_request_error" } },
+    };
+
+    const res = await request(app).post("/v1/responses").send({
+      model: "pass-codex",
+      input: [],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatchObject({
+      type: "invalid_request_error",
+      message: "bad request",
+    });
+    // A 400 is never fallback-eligible — the gemini entry saw nothing.
+    expect(capturedRequests.gemini).toHaveLength(0);
+    expect(res.headers["x-babelgate-attempts"]).toBe("1");
+  });
+
+  it("repair_tool_calls ignored on pass-through", async () => {
+    useTarget("responses", passYaml("*", true));
+    // Fenced, valid JSON inside — diagnoseArguments codes this
+    // `fenced_json` (a fence around non-JSON is plain `invalid_json`).
+    const fenced = '```json\n{"city":"Paris"}\n```';
+    responseOverrides.responses = {
+      status: 200,
+      body: {
+        id: "resp_repair",
+        object: "response",
+        created_at: 1,
+        status: "completed",
+        model: "upstream-model",
+        output: [
+          {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "get_weather",
+            arguments: fenced,
+            status: "completed",
+          },
+        ],
+        usage: null,
+      },
+    };
+
+    const before = traces.length;
+    const res = await request(app).post("/v1/responses").send({
+      model: "pass-codex",
+      input: [],
+      tools: [
+        {
+          type: "function",
+          name: "get_weather",
+          parameters: {
+            type: "object",
+            properties: { city: { type: "string" } },
+          },
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    // The client received the arguments verbatim — repair would have
+    // altered bytes, so it never runs on pass-through.
+    const call = (res.body.output as Record<string, unknown>[])[0];
+    expect(call.arguments).toBe(fenced);
+
+    await waitForTraces(before + 1);
+    // Diagnostics still run on the relayed call; repairs stay empty.
+    const trace = traces[before];
+    expect(trace.passthrough).toBe(true);
+    expect(trace.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "fenced_json" }),
+    );
+    expect(trace.repairs).toEqual([]);
+  });
+
+  it("responses-lite bodies relay to a pass-through target", async () => {
+    useTarget("responses", passYaml());
+    const res = await request(app).post("/v1/responses").send({
+      model: "pass-codex",
+      input: [
+        { type: "additional_tools", tools: [{ type: "namespace" }] },
+        { type: "message", role: "user", phase: "commentary", content: [] },
+      ],
+      reasoning: { context: "…" },
+      store: false,
+    });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(capturedRequests.responses).toHaveLength(1);
+    expect(
+      JSON.stringify(capturedRequests.responses[0]),
+    ).toContain("additional_tools");
+  });
+});
