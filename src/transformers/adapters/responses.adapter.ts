@@ -368,7 +368,10 @@ export function fromCanonicalRequest(
       tools: request.tools.map(toResponsesTool),
     }),
     ...(request.toolChoice !== undefined && {
-      tool_choice: toResponsesToolChoice(request.toolChoice),
+      tool_choice: toResponsesToolChoice(
+        request.toolChoice,
+        request.tools,
+      ),
     }),
   };
 

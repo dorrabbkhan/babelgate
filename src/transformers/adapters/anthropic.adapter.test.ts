@@ -380,10 +380,11 @@ describe('Anthropic Adapter', () => {
 
     // v1.4 spec §3.6: `parallelToolCalls: false` →
     // `tool_choice.disable_parallel_tool_use: true`. Anthropic carries
-    // the flag inside tool_choice on every type — `auto` (the default
-    // when no tool_choice is sent → at most one call, text answers
-    // still allowed), `any` and `tool` (exactly one call), and `none`.
-    // https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use
+    // the flag inside tool_choice on the forms that use tools — `auto`
+    // (the default when no tool_choice is sent → at most one call,
+    // text answers still allowed), `any` and `tool` (exactly one
+    // call). `none` has no such field; the flag is dropped.
+    // https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
     describe('parallelToolCalls → disable_parallel_tool_use', () => {
       const withTools = (
         extra: Partial<CanonicalRequest>,
@@ -422,15 +423,12 @@ describe('Anthropic Adapter', () => {
         });
       });
 
-      it('tool_choice none keeps the flag', () => {
+      it('tool_choice none sends no flag', () => {
         const result = withTools({
           toolChoice: 'none',
           parallelToolCalls: false,
         });
-        expect(result.tool_choice).toEqual({
-          type: 'none',
-          disable_parallel_tool_use: true,
-        });
+        expect(result.tool_choice).toEqual({ type: 'none' });
       });
 
       it('tool_choice required → any with the flag', () => {

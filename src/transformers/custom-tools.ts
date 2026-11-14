@@ -170,6 +170,7 @@ function flattenNamespace(
             parameters: leaf.function.parameters,
           }),
         },
+        ...(leaf.cache !== undefined && { cache: leaf.cache }),
       });
     } else {
       const lowered = lowerCustomTool(leaf);

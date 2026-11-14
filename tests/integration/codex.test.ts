@@ -502,6 +502,55 @@ const TARGET_PATHS: Record<string, string> = {
   ollama: `${MOCK_BASE_URLS.ollama}/api/chat`,
 };
 
+/** OpenAI-dialect SSE carrying one function call whose arguments
+ *  arrive in `pieces`. */
+function openaiCallStream(name: string, pieces: string[]): string {
+  const chunk = (
+    delta: Record<string, unknown>,
+    finish: string | null = null,
+  ) =>
+    `data: ${JSON.stringify({
+      id: "c",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "m",
+      choices: [{ index: 0, delta, finish_reason: finish }],
+    })}`;
+  return [
+    chunk({
+      role: "assistant",
+      tool_calls: [
+        {
+          index: 0,
+          id: "call_1",
+          type: "function",
+          function: { name, arguments: "" },
+        },
+      ],
+    }),
+    ...pieces.map((p) =>
+      chunk({ tool_calls: [{ index: 0, function: { arguments: p } }] }),
+    ),
+    chunk({}, "tool_calls"),
+    "data: [DONE]",
+    "",
+  ].join("\n\n");
+}
+
+/** supertest parses SSE as an opaque body — collect it as text. */
+function postResponsesStream(body: unknown): request.Test {
+  return request(app)
+    .post("/v1/responses")
+    .send(body)
+    .buffer(true)
+    .parse((res, cb) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => (text += chunk));
+      res.on("end", () => cb(null, text));
+    });
+}
+
 function parseSseFrames(text: string): Array<Record<string, unknown>> {
   return text
     .split("\n\n")
@@ -644,6 +693,163 @@ routes:
     expect(trace).toBeDefined();
     expect(trace.diagnostics).toEqual([]);
     expect(trace.repairs).toEqual([]);
+  });
+
+  it("custom input streams byte-identical end to end with repair on (Review Focus 4)", async () => {
+    // A streaming Responses request with apply_patch and
+    // repair_tool_calls on, routed to a non-Responses target that
+    // streams the lowered {"input": …} call across several deltas —
+    // the input must arrive byte-identical, never diagnosed or
+    // repaired.
+    const INPUT = "*** Begin Patch\n```\n{\n```";
+    const yaml = `default: fix
+providers:
+  fix:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+    repair_tool_calls: true
+routes:
+  - match: "*"
+    to: fix/m
+`;
+    useTarget("openai", yaml);
+    const args = JSON.stringify({ input: INPUT });
+    // Split mid-string and mid-fence.
+    const pieces = [args.slice(0, 25), args.slice(25, 42), args.slice(42)];
+    server.use(
+      http.post(TARGET_PATHS.openai, () =>
+        new HttpResponse(openaiCallStream("apply_patch", pieces), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    const before = traces.length;
+    const res = await postResponsesStream(customRequest({ stream: true }));
+    expect(res.status).toBe(200);
+
+    const frames = parseSseFrames(res.body as unknown as string);
+    const joined = frames
+      .filter((f) => f.type === "response.custom_tool_call_input.delta")
+      .map((f) => f.delta as string)
+      .join("");
+    expect(joined).toBe(INPUT);
+    const inputDone = frames.find(
+      (f) => f.type === "response.custom_tool_call_input.done",
+    );
+    expect(inputDone?.input).toBe(INPUT);
+    const item = frames.find(
+      (f) =>
+        f.type === "response.output_item.done" &&
+        (f.item as Record<string, unknown>)?.type === "custom_tool_call",
+    )?.item as Record<string, unknown> | undefined;
+    expect(item?.input).toBe(INPUT);
+
+    const trace = traces[before];
+    expect(trace).toBeDefined();
+    expect(trace.diagnostics).toEqual([]);
+    expect(trace.repairs).toEqual([]);
+  });
+
+  it("a split {input} wrapper with fences produces no diagnostics (streaming)", async () => {
+    // fix round 2: finishStreamTrace diagnoses the RAISED calls, the
+    // same as the unary path — a lowered {input} wrapper never shows
+    // as a diagnostic.
+    useTarget("openai");
+    const INPUT = "*** Begin Patch\n```\n{\n```";
+    const args = JSON.stringify({ input: INPUT });
+    const pieces = [args.slice(0, 25), args.slice(25, 42), args.slice(42)];
+    server.use(
+      http.post(TARGET_PATHS.openai, () =>
+        new HttpResponse(openaiCallStream("apply_patch", pieces), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    const before = traces.length;
+    const res = await postResponsesStream(customRequest({ stream: true }));
+    expect(res.status).toBe(200);
+
+    const frames = parseSseFrames(res.body as unknown as string);
+    const inputDone = frames.find(
+      (f) => f.type === "response.custom_tool_call_input.done",
+    );
+    expect(inputDone?.input).toBe(INPUT);
+    expect(traces[before]?.diagnostics).toEqual([]);
+  });
+
+  it("a namespaced custom-leaf call streams with no diagnostics", async () => {
+    // fix round 2: the observed call carries the lowered ns__leaf
+    // name; diagnosing the raised call keeps a custom leaf's raw
+    // input out of unknown_tool/invalid_json checks.
+    useTarget("openai");
+    const args = JSON.stringify({ input: "echo hi" });
+    server.use(
+      http.post(TARGET_PATHS.openai, () =>
+        new HttpResponse(
+          openaiCallStream("functions__exec", [
+            args.slice(0, 11),
+            args.slice(11),
+          ]),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    );
+
+    const before = traces.length;
+    const res = await postResponsesStream({
+      model: "gpt-5-codex",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run it" }],
+        },
+      ],
+      store: false,
+      stream: true,
+      tools: [
+        {
+          type: "namespace",
+          name: "functions",
+          tools: [{ type: "custom", name: "exec" }],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const frames = parseSseFrames(res.body as unknown as string);
+    const item = frames.find(
+      (f) =>
+        f.type === "response.output_item.done" &&
+        (f.item as Record<string, unknown>)?.type === "custom_tool_call",
+    )?.item as Record<string, unknown> | undefined;
+    expect(item).toMatchObject({
+      name: "exec",
+      namespace: "functions",
+      input: "echo hi",
+    });
+    expect(traces[before]?.diagnostics).toEqual([]);
+  });
+
+  it("tool_choice naming a custom tool round-trips as {type:custom} on a responses target", async () => {
+    // {type:"custom", name} per the Responses create reference +
+    // openai 7.30.1 SDK ToolChoiceCustom (fix round 2).
+    useTarget("responses");
+    const res = await request(app)
+      .post("/v1/responses")
+      .send(
+        customRequest({
+          tool_choice: { type: "custom", name: "apply_patch" },
+        }),
+      );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    expect(capturedRequests.responses[0]).toMatchObject({
+      tool_choice: { type: "custom", name: "apply_patch" },
+    });
   });
 
   it.each(["openai", "anthropic", "gemini", "ollama"] as const)(

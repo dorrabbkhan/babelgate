@@ -436,6 +436,32 @@ describe("namespace flattening (owner decision A)", () => {
     ).toBe(true);
   });
 
+  it("a function leaf's cache hint survives flattening (like lowerCustomTool)", () => {
+    const hinted: CanonicalTool = {
+      type: "namespace",
+      name: "ns",
+      tools: [
+        {
+          type: "function",
+          function: { name: "leaf", parameters: { type: "object" } },
+          cache: { ttl: "1h" },
+        },
+      ],
+    };
+
+    const out = lowerCustomTools(req([hinted]));
+
+    expect(out.tools?.[0]).toEqual({
+      type: "function",
+      function: {
+        name: "ns__leaf",
+        description: "Namespace: ns",
+        parameters: { type: "object" },
+      },
+      cache: { ttl: "1h" },
+    });
+  });
+
   it("a custom leaf flattens and lowers, and its call raises namespaced", () => {
     // A `{type:"custom"}` tool inside a namespace is real Codex
     // traffic — recording-responses-lite.jsonl's "functions"

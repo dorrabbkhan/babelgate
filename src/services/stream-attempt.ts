@@ -225,7 +225,7 @@ export async function finishStreamTrace(opts: {
         ),
       );
       for (const d of diagnoseToolCalls(
-        canonicalResp.message.toolCalls ?? [],
+        raised.message.toolCalls ?? [],
         canonical.tools,
       )) {
         if (!seen.has(`${d.toolCallId} ${d.code} ${d.detail ?? ""}`)) {

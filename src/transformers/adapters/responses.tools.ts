@@ -304,12 +304,27 @@ export function toResponsesTool(tool: CanonicalTool): ResponsesTool {
   };
 }
 
+/**
+ * Canonical toolChoice → Responses `tool_choice`. A named choice
+ * re-encodes as `{type:"custom", name}` when the request's tools
+ * declare a custom tool of that name — per the Responses create
+ * reference (`tool_choice` accepts `{type:"custom", name}` for custom
+ * tools) and the openai 7.30.1 SDK's `ToolChoiceCustom`; codex-rs
+ * sends the same shape. Anything else named stays `{type:"function"}`.
+ */
 export function toResponsesToolChoice(
   choice: CanonicalToolChoice,
+  tools?: CanonicalTool[],
 ): ResponsesRequest["tool_choice"] {
   if (choice === "auto" || choice === "none" || choice === "required") {
     return choice;
   }
-  return { type: "function", name: choice.function.name };
+  const name = choice.function.name;
+  if (
+    tools?.some((t) => t.type === "custom" && t.name === name) === true
+  ) {
+    return { type: "custom", name };
+  }
+  return { type: "function", name };
 }
 

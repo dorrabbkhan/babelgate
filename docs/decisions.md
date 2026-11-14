@@ -4459,9 +4459,15 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   follows §3.6 on the bridge.
 - **`parallelToolCalls`:** OpenAI Chat and Responses emit `parallel_tool_calls`
   verbatim; Anthropic folds `false` into `tool_choice.disable_parallel_tool_use`
-  on all four `tool_choice` forms (and synthesizes `{type:"auto", …}` when absent)
-  per https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use;
-  Gemini and Ollama have no field → `field_dropped` note.
+  on the tool-using `tool_choice` forms — `auto` (synthesized when absent),
+  `any` and `tool` — per
+  https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
+  and the SDK's ToolChoice types. `{type:"none"}` has no such field (fix
+  round 2): with no tool use the flag means nothing, so it is dropped
+  silently. Gemini and Ollama have no field → `field_dropped` note.
+  A `tool_choice` naming a custom tool re-encodes on Responses targets as
+  `{type:"custom", name}` (Responses create reference + openai 7.30.1 SDK
+  `ToolChoiceCustom`; fix round 2).
 - **Wire-format sources cited in code comments:** OpenAI Responses API reference
   (`tools[].type:"custom"`, `format{text|grammar,syntax,definition}`,
   `custom_tool_call{call_id,name,input,namespace?}`,
@@ -4478,7 +4484,8 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   `src/utils/stream-reassemble.ts` (carry `namespace`/`custom` through
   reassembly), `src/services/stream-attempt.ts` + `canonical-stream.service.ts`
   (the custom transform is wired before repair; `observedDecoder` takes the
-  canonical request).
+  canonical request), `src/services/attempt-targets.test.ts` (the
+  `canonicalForTarget` lowering pins).
 - **Contract snapshot (owner-approved, fix round 1):** `codex → canonical
   matches snapshot 1` in `tests/contracts/__snapshots__/fixtures.test.ts.snap`
   gained the `multi_agent_v1` namespace variant — additive only, hand-edited;

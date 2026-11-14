@@ -1193,6 +1193,52 @@ describe("Responses adapter", () => {
       ).toBe(true);
     });
 
+    it("tool_choice naming a custom tool round-trips as {type:custom}", () => {
+      // `{type:"custom", name}` per the Responses create reference and
+      // the openai 7.30.1 SDK's ToolChoiceCustom — canonical's named
+      // choice is provider-agnostic, so the encode decides from the
+      // request's tools.
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        tools: [{ type: "custom", name: "apply_patch" }],
+        tool_choice: { type: "custom", name: "apply_patch" },
+      } as unknown as ResponsesRequest);
+      expect(canonical.toolChoice).toEqual({
+        type: "function",
+        function: { name: "apply_patch" },
+      });
+
+      const wire = fromCanonicalRequest(canonical) as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(wire.tool_choice).toEqual({
+        type: "custom",
+        name: "apply_patch",
+      });
+    });
+
+    it("tool_choice naming a function tool stays {type:function}", () => {
+      const wire = fromCanonicalRequest({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [
+          {
+            type: "function",
+            function: { name: "get_weather" },
+          },
+          { type: "custom", name: "apply_patch" },
+        ],
+        toolChoice: { type: "function", function: { name: "get_weather" } },
+      }) as unknown as Record<string, unknown>;
+
+      expect(wire.tool_choice).toEqual({
+        type: "function",
+        name: "get_weather",
+      });
+    });
+
     it("custom_tool_call round-trips", () => {
       // Item shapes per
       // https://platform.openai.com/docs/api-reference/responses/object
