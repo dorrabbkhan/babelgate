@@ -4324,24 +4324,37 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   request reasoning-capable even with no `reasoning` object; other `include` values keep their
   `field_dropped` note). Encode mirrors it: `reasoning: {effort, summary:"auto" when summary}` +
   `include: ["reasoning.encrypted_content"]`; `budgetTokens` → `reasoning_budget_dropped`.
+  Malformed inputs keep 1.3's `field_dropped` notes instead of dropping silently (fix round 2):
+  a non-object `reasoning` → `reasoning`, a non-string `reasoning.effort` → `reasoning.effort`,
+  a non-array `include` → `include` — field path only, no values in the message.
   Sources: https://developers.openai.com/api/docs/guides/reasoning and the `openai` SDK's
   `Shared.Reasoning`/`ReasoningEffort` typings (7.30.1).
 - **OpenAI Chat:** `reasoning_effort` passes the canonical ladder verbatim — the Chat Completions
   reference (https://developers.openai.com/api/reference/resources/chat) documents the
   none/minimal/low/medium/high/xhigh set as model-dependent, so no model list is kept.
   `budgetTokens`/`summary` → `reasoning_budget_dropped`/`reasoning_summary_dropped`.
-- **Anthropic:** `ADAPTIVE_MODELS` (prefix list in `anthropic.adapter.ts`) = the `supportedModels`
-  list on https://platform.claude.com/docs/en/build-with-claude/effort — Fable 5.x, Mythos
-  5.x/Preview, Opus 5.x, Sonnet 5.x, Haiku 5.5, Opus 4.8/4.7/4.6/4.5, Sonnet 4.6. Those get
-  `thinking: {type:"adaptive"}` + `output_config.effort` (low/medium/high/xhigh per the same page;
-  `xhigh` exists only on the listed subset so Sonnet 4.6/Opus 4.6/Opus 4.5/Mythos Preview lower to
-  `high` + `reasoning_effort_lowered`; `minimal` has no wire level → thinking omitted +
-  `reasoning_effort_lowered`; `none` → no thinking). All other models get legacy extended thinking
+- **Anthropic:** `ADAPTIVE_MODELS` (prefix list in `anthropic.adapter.ts`) = the models that accept
+  `thinking: {type:"adaptive"}` per the per-model thinking table on
+  https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting — Fable 5.x,
+  Mythos 5.x/Preview, Opus 5.x, Sonnet 5.x, Haiku 5.x, Opus 4.8/4.7/4.6, Sonnet 4.6. Those get
+  `thinking: {type:"adaptive"}` + `output_config.effort` (levels per
+  https://platform.claude.com/docs/en/build-with-claude/effort; `xhigh` exists only on the listed
+  subset so Sonnet 4.6/Opus 4.6/Mythos Preview lower to `high` + `reasoning_effort_lowered`;
+  `minimal` has no wire level → thinking omitted + `reasoning_effort_lowered`; `none` → no
+  thinking). All other models get legacy extended thinking
   `thinking: {type:"enabled", budget_tokens}` per
   https://platform.claude.com/docs/en/build-with-claude/extended-thinking — minimum budget 1024,
   `budgetTokens ?? budgetFor(effort)` (no effort and no budget → thinking stays off), and
   `max_tokens` raised to budget+1024
   when it would not exceed the budget (`max_tokens_raised`, numbers only). `summary` → dropped.
+  Fix round 2 (docs-verified): `claude-opus-4-5` leaves `ADAPTIVE_MODELS` — the
+  thinking-troubleshooting table marks it extended-only (`"adaptive"` → 400) while the effort doc
+  names it "the only extended-thinking-only model that supports effort", paired with
+  `budget_tokens`; `EXTENDED_EFFORT_MODELS` encodes that: legacy `thinking.enabled` + budget (and
+  the `max_tokens` raise) plus `output_config.effort` for its level set low/medium/high
+  (`xhigh` → `high` + `reasoning_effort_lowered`; `minimal` → no level emitted, `reasoning_effort_lowered`,
+  the 1024 budget still applies). Also fix round 2: `{effort:"none", budgetTokens:X}` on the
+  legacy path now records `reasoning_budget_dropped` instead of dropping silently.
 - **Gemini:** `THINKING_LEVEL_MODELS` (prefix list in `gemini.adapter.ts`) — the generateContent
   reference marks `thinkingLevel` "Recommended for Gemini 3 or later models. Use with earlier
   models results in an error" (https://ai.google.dev/api/generate-content#ThinkingConfig), so
@@ -4354,6 +4367,16 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   (thinking off), no effort and no budget → no `thinkingBudget` at all (thinking stays off —
   fix round 1 changed the previous `-1` dynamic default). `summary` → `includeThoughts` (same
   reference) on both paths, including when thinking is off.
+  Fix round 2 (docs-verified): `THINKING_BUDGET_MODELS` keeps the per-model `thinkingBudget`
+  ranges and off-switches from the 2.5 budget table on
+  https://ai.google.dev/gemini-api/docs/thinking ("Thinking budgets", generateContent variant) —
+  2.5 Pro 128–32768 cannot disable, 2.5 Flash/Flash Preview 0–24576, 2.5 Flash Lite/Lite Preview
+  512–24576, Robotics-ER 1.6 Preview 0–24576 (`gemini-robotics-er-1.6` prefix). A budget over the
+  maximum clamps down, under the minimum raises up (`reasoning_budget_clamped`, numbers only);
+  `0` on a `canDisable` model and `-1` (dynamic) pass through. `effort:"none"` on 2.5 Pro emits
+  no `thinkingBudget` at all (`0` is not legal there) + `reasoning_effort_raised` (levels only);
+  an accompanying `budgetTokens` gets `reasoning_budget_dropped`. Unlisted models keep the raw
+  encoding.
 - **Ollama:** `think` per https://docs.ollama.com/capabilities/thinking and
   https://docs.ollama.com/api/chat — no `think` field when reasoning is requested without an
   effort (a budget alone keeps `think: true`),

@@ -219,7 +219,10 @@ export function toCanonicalRequest(
  * true` — canonical carries a boolean, not the wire's level).
  * `include: ["reasoning.encrypted_content"]` marks the request as
  * reasoning-capable on its own (Codex sends it every turn, E16);
- * other `include` values keep their `field_dropped` note.
+ * other `include` values keep their `field_dropped` note. Malformed
+ * inputs — a non-object `reasoning`, a non-string `effort`, a
+ * non-array `include` — keep 1.3's `field_dropped` note on the
+ * field path, no values echoed.
  */
 type CanonicalReasoning = NonNullable<
   NonNullable<CanonicalRequest["config"]>["reasoning"]
@@ -230,49 +233,80 @@ function toCanonicalReasoning(
 ): CanonicalReasoning | undefined {
   let reasoning: CanonicalReasoning | undefined;
 
-  const wire = request.reasoning as
-    | { effort?: unknown; summary?: unknown; generate_summary?: unknown }
-    | null
-    | undefined;
-  if (wire !== undefined && wire !== null && typeof wire === "object") {
-    reasoning = {};
-    if (typeof wire.effort === "string") {
-      if ((EFFORT_LADDER as readonly string[]).includes(wire.effort)) {
-        reasoning.effort = wire.effort as Effort;
-      } else if (wire.effort === "max") {
-        // `max` is the only documented level above the ladder
-        // (ReasoningEffort in shared.d.ts + the reasoning guide).
-        reasoning.effort = "xhigh";
-        note(
-          "reasoning_effort_lowered",
-          "reasoning.effort",
-          'Lowering reasoning effort "max" to "xhigh" (canonical maximum)',
-        );
-      } else {
-        note(
-          "field_dropped",
-          "reasoning.effort",
-          `Dropping unknown reasoning effort "${wire.effort}"`,
-        );
+  const wire = request.reasoning;
+  if (wire !== undefined) {
+    if (wire !== null && typeof wire === "object" && !Array.isArray(wire)) {
+      reasoning = {};
+      const fields = wire as {
+        effort?: unknown;
+        summary?: unknown;
+        generate_summary?: unknown;
+      };
+      if (fields.effort !== undefined) {
+        if (typeof fields.effort === "string") {
+          if (
+            (EFFORT_LADDER as readonly string[]).includes(fields.effort)
+          ) {
+            reasoning.effort = fields.effort as Effort;
+          } else if (fields.effort === "max") {
+            // `max` is the only documented level above the ladder
+            // (ReasoningEffort in shared.d.ts + the reasoning guide).
+            reasoning.effort = "xhigh";
+            note(
+              "reasoning_effort_lowered",
+              "reasoning.effort",
+              'Lowering reasoning effort "max" to "xhigh" (canonical maximum)',
+            );
+          } else {
+            note(
+              "field_dropped",
+              "reasoning.effort",
+              "Dropping unknown reasoning effort level",
+            );
+          }
+        } else {
+          note(
+            "field_dropped",
+            "reasoning.effort",
+            'Dropping request field "reasoning.effort" (not a level string)',
+          );
+        }
       }
-    }
-    if (wire.summary !== undefined || wire.generate_summary !== undefined) {
-      reasoning.summary = true;
+      if (
+        fields.summary !== undefined ||
+        fields.generate_summary !== undefined
+      ) {
+        reasoning.summary = true;
+      }
+    } else {
+      note(
+        "field_dropped",
+        "reasoning",
+        'Dropping request field "reasoning" (not an object)',
+      );
     }
   }
 
   const include = request.include;
-  if (Array.isArray(include)) {
-    for (const entry of include) {
-      if (entry === "reasoning.encrypted_content") {
-        reasoning ??= {};
-      } else {
-        note(
-          "field_dropped",
-          "include",
-          `Dropping include value "${String(entry)}" (no canonical equivalent)`,
-        );
+  if (include !== undefined) {
+    if (Array.isArray(include)) {
+      for (const entry of include) {
+        if (entry === "reasoning.encrypted_content") {
+          reasoning ??= {};
+        } else {
+          note(
+            "field_dropped",
+            "include",
+            "Dropping an include value (no canonical equivalent)",
+          );
+        }
       }
+    } else {
+      note(
+        "field_dropped",
+        "include",
+        'Dropping request field "include" (not an array)',
+      );
     }
   }
 

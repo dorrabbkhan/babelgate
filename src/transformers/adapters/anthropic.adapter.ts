@@ -155,15 +155,16 @@ export function toCanonicalRequest(
 // ============ REQUEST: Canonical → Anthropic ============
 
 /**
- * Models that take adaptive thinking + `output_config.effort` —
- * the `supportedModels` list on
- * https://platform.claude.com/docs/en/build-with-claude/effort
- * (matched by prefix so dated variants like
- * `claude-opus-4-5-20251101` resolve). `xhigh: true` marks the
- * subset whose level table includes `xhigh` per the same page —
- * every effort-supported model takes low/medium/high, and `max`
- * has no canonical slot so it never appears here. Models not in
- * the list take legacy extended thinking instead
+ * Models that accept `thinking: {type: "adaptive"}` — the per-model
+ * thinking table on
+ * https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
+ * decides adaptive support (extended-only models — the whole 4.5
+ * family — reject `"adaptive"` with a 400). `xhigh: true` marks the
+ * subset whose effort-level table includes `xhigh` on
+ * https://platform.claude.com/docs/en/build-with-claude/effort —
+ * `max` has no canonical slot so it never appears here. Matched by
+ * prefix so dated variants resolve. Models not in the list take
+ * legacy extended thinking instead
  * (`thinking: {type:"enabled", budget_tokens}` —
  * https://platform.claude.com/docs/en/build-with-claude/extended-thinking).
  */
@@ -178,6 +179,17 @@ const ADAPTIVE_MODELS: { prefix: string; xhigh: boolean }[] = [
   { prefix: "claude-opus-4-7", xhigh: true },
   { prefix: "claude-opus-4-6", xhigh: false },
   { prefix: "claude-sonnet-4-6", xhigh: false },
+];
+
+/**
+ * Extended-thinking-only models that additionally take
+ * `output_config.effort` alongside `budget_tokens` — the effort doc
+ * calls `claude-opus-4-5` "the only extended-thinking-only model
+ * that supports effort" and pairs it with `budget_tokens`
+ * (https://platform.claude.com/docs/en/build-with-claude/effort);
+ * its level set is low/medium/high, so `xhigh` lowers to `high`.
+ */
+const EXTENDED_EFFORT_MODELS: { prefix: string; xhigh: boolean }[] = [
   { prefix: "claude-opus-4-5", xhigh: false },
 ];
 
@@ -187,11 +199,21 @@ function adaptiveModel(
   return ADAPTIVE_MODELS.find((entry) => model.startsWith(entry.prefix));
 }
 
+function extendedEffortModel(
+  model: string,
+): { prefix: string; xhigh: boolean } | undefined {
+  return EXTENDED_EFFORT_MODELS.find((entry) =>
+    model.startsWith(entry.prefix),
+  );
+}
+
 /**
  * Canonical `config.reasoning` → `thinking`/`output_config` (v1.4
  * spec §3.3). Adaptive models get `thinking:{type:"adaptive"}` plus
  * `output_config.effort`; legacy models get
- * `thinking:{type:"enabled", budget_tokens}` (min budget 1024, and
+ * `thinking:{type:"enabled", budget_tokens}` — `claude-opus-4-5`
+ * also gets `output_config.effort` alongside it per the effort doc
+ * (min budget 1024, and
  * `budget_tokens` must stay below `max_tokens`, so max_tokens is
  * raised when needed). `budget_tokens` counts toward max_tokens —
  * https://platform.claude.com/docs/en/build-with-claude/extended-thinking.
@@ -278,7 +300,20 @@ function applyReasoning(
   // https://platform.claude.com/docs/en/build-with-claude/extended-thinking
   // — minimum 1024, and the budget counts toward (must stay below)
   // max_tokens.
-  if (reasoning.effort === "none") return;
+  if (reasoning.effort === "none") {
+    if (reasoning.budgetTokens !== undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "anthropic",
+          code: "reasoning_budget_dropped",
+          path: "reasoning.budget_tokens",
+        },
+        'Dropping reasoning.budget_tokens (effort "none" leaves thinking off)',
+      );
+    }
+    return;
+  }
   // No effort and no budget → thinking stays off; an explicit
   // budget alone still enables it.
   if (reasoning.effort === undefined && reasoning.budgetTokens === undefined)
@@ -301,6 +336,43 @@ function applyReasoning(
       `Raising max_tokens from ${result.max_tokens} to ${raised} (thinking budget ${budget} must stay below it)`,
     );
     result.max_tokens = raised;
+  }
+
+  // `claude-opus-4-5` is extended-only but still takes
+  // `output_config.effort` alongside `budget_tokens` per
+  // https://platform.claude.com/docs/en/build-with-claude/effort.
+  const extended = extendedEffortModel(request.model);
+  if (extended !== undefined && reasoning.effort !== undefined) {
+    if (reasoning.effort === "minimal") {
+      // Below the wire floor — the 1024-token budget already
+      // carries it; there is no level to send.
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "anthropic",
+          code: "reasoning_effort_lowered",
+          path: "reasoning.effort",
+        },
+        `Dropping reasoning effort "minimal" (${request.model} takes low/medium/high)`,
+      );
+    } else {
+      let wireEffort: string = reasoning.effort;
+      if (wireEffort === "xhigh" && !extended.xhigh) {
+        wireEffort = "high";
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "anthropic",
+            code: "reasoning_effort_lowered",
+            path: "reasoning.effort",
+          },
+          `Lowering reasoning effort "xhigh" to "high" (${request.model} has no xhigh level)`,
+        );
+      }
+      (result as { output_config?: unknown }).output_config = {
+        effort: wireEffort,
+      };
+    }
   }
 }
 

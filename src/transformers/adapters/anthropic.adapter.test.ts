@@ -1771,6 +1771,71 @@ describe('Anthropic Adapter', () => {
       }
     });
 
+    it('opus 4.5 takes the budget path', () => {
+      // Opus 4.5 is extended-thinking-only — `adaptive` is rejected
+      // with a 400 per the thinking-troubleshooting per-model table —
+      // and the one such model that pairs `output_config.effort` with
+      // `budget_tokens` per the effort doc.
+      for (const model of ['claude-opus-4-5', 'claude-opus-4-5-20251101']) {
+        const result = fromCanonicalRequest(
+          request(model, { effort: 'high' }, 40000),
+        );
+
+        expect(result).toEqual({
+          model,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 40000,
+          thinking: { type: 'enabled', budget_tokens: 24576 },
+          output_config: { effort: 'high' },
+        });
+      }
+    });
+
+    it('xhigh lowers to high on opus 4.5 with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-opus-4-5', { effort: 'xhigh' }, 40000),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('claude-opus-4-5', { effort: 'xhigh' }, 40000),
+      );
+      expect(result.thinking).toEqual({
+        type: 'enabled',
+        budget_tokens: 32000,
+      });
+      expect(result.output_config).toEqual({ effort: 'high' });
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_effort_lowered',
+        path: 'reasoning.effort',
+      });
+    });
+
+    it('effort none with a budget records reasoning_budget_dropped on legacy models', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-sonnet-4-5', {
+            effort: 'none',
+            budgetTokens: 4096,
+          }),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('claude-sonnet-4-5', { effort: 'none', budgetTokens: 4096 }),
+      );
+      expect(result.thinking).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_budget_dropped',
+        path: 'reasoning.budget_tokens',
+      });
+    });
+
     it('minimal lowers to none on adaptive models (no low-min level)', () => {
       const trace = traced(() =>
         fromCanonicalRequest(

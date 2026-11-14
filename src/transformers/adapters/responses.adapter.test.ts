@@ -1007,6 +1007,75 @@ describe("Responses adapter", () => {
       });
     });
 
+    it("a non-object reasoning is dropped with a note", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          input: "hi",
+          reasoning: "high",
+        } as unknown as ResponsesRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        reasoning: "high",
+      } as unknown as ResponsesRequest);
+      expect(canonical.config?.reasoning).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "responses",
+        code: "field_dropped",
+        path: "reasoning",
+      });
+    });
+
+    it("a non-string effort is dropped with a note", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          input: "hi",
+          reasoning: { effort: 5 },
+        } as unknown as ResponsesRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        reasoning: { effort: 5 },
+      } as unknown as ResponsesRequest);
+      expect(canonical.config?.reasoning).toEqual({});
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "responses",
+        code: "field_dropped",
+        path: "reasoning.effort",
+      });
+    });
+
+    it("a non-array include is dropped with a note", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          input: "hi",
+          include: "reasoning.encrypted_content",
+        } as unknown as ResponsesRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        include: "reasoning.encrypted_content",
+      } as unknown as ResponsesRequest);
+      expect(canonical.config?.reasoning).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "responses",
+        code: "field_dropped",
+        path: "include",
+      });
+    });
+
     it("encoder emits reasoning effort, summary auto and include", () => {
       const result = fromCanonicalRequest({
         model: "m",

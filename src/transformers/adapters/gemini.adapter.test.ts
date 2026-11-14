@@ -1015,8 +1015,10 @@ describe('cache hints on tool results (Task 17a)', () => {
     ] as const)(
       'effort %s becomes thinkingBudget %i on a 2.5 model',
       (effort, budget) => {
+        // gemini-2.5-pro's documented range (128–32768) covers every
+        // budget, so the raw mapping shows unclamped.
         const result = fromCanonicalRequest(
-          request('gemini-2.5-flash', { effort }),
+          request('gemini-2.5-pro', { effort }),
         );
 
         expect(thinkingConfigOf(result)).toEqual({
@@ -1031,6 +1033,63 @@ describe('cache hints on tool results (Task 17a)', () => {
       );
 
       expect(thinkingConfigOf(result)).toEqual({ thinkingBudget: 0 });
+    });
+
+    it('none on 2.5 pro omits thinkingBudget with a note', () => {
+      // 2.5 Pro cannot turn thinking off (its budget table row has
+      // no off switch), so the wire gets no budget at all.
+      const trace = traced(() =>
+        fromCanonicalRequest(request('gemini-2.5-pro', { effort: 'none' })),
+      );
+
+      const result = fromCanonicalRequest(
+        request('gemini-2.5-pro', { effort: 'none' }),
+      );
+      expect(thinkingConfigOf(result)).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'gemini',
+        code: 'reasoning_effort_raised',
+        path: 'reasoning.effort',
+      });
+    });
+
+    it('budget clamped to the model maximum', () => {
+      // xhigh's 32000 exceeds 2.5 Flash's documented 24576 maximum.
+      const trace = traced(() =>
+        fromCanonicalRequest(request('gemini-2.5-flash', { effort: 'xhigh' })),
+      );
+
+      const result = fromCanonicalRequest(
+        request('gemini-2.5-flash', { effort: 'xhigh' }),
+      );
+      expect(thinkingConfigOf(result)).toEqual({ thinkingBudget: 24576 });
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'gemini',
+        code: 'reasoning_budget_clamped',
+        path: 'reasoning.effort',
+      });
+    });
+
+    it('budget below the model minimum is raised', () => {
+      // 2.5 Pro's documented floor is 128.
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('gemini-2.5-pro', { budgetTokens: 100 }),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('gemini-2.5-pro', { budgetTokens: 100 }),
+      );
+      expect(thinkingConfigOf(result)).toEqual({ thinkingBudget: 128 });
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'gemini',
+        code: 'reasoning_budget_clamped',
+        path: 'reasoning.budget_tokens',
+      });
     });
 
     it('reasoning {} sends no thinkingConfig on a 2.5 model', () => {
