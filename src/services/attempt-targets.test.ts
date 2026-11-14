@@ -200,6 +200,76 @@ describe("canonicalForTarget", () => {
     expect(inRequest.config).toEqual({ temperature: 0.2 });
     expect(inRequest.model).toBe("decoded-model");
   });
+
+  it.each(["openai", "anthropic", "gemini", "ollama"] as const)(
+    "never hands a namespace tool to a %s entry (spec §3.6)",
+    (type) => {
+      const inRequest: CanonicalRequest = {
+        ...canonical(),
+        tools: [
+          {
+            type: "namespace",
+            name: "multi_agent_v1",
+            description: "Sub-agents",
+            tools: [
+              {
+                type: "function",
+                function: { name: "spawn_agent", parameters: { type: "object" } },
+              },
+            ],
+          },
+        ],
+      };
+      const e: ProviderEntry = {
+        name: type,
+        type,
+        baseUrl: `http://${type}.test`,
+      };
+
+      const out = canonicalForTarget(inRequest, e, {
+        provider: type,
+        model: "m",
+      });
+
+      // Every tool upstream is a function tool; the namespace itself
+      // is gone, flattened to `ns__leaf`.
+      expect(out.tools).toHaveLength(1);
+      expect(out.tools?.every((t) => t.type === "function")).toBe(true);
+      expect(
+        out.tools?.map((t) =>
+          t.type === "function" ? t.function.name : t.name,
+        ),
+      ).toEqual(["multi_agent_v1__spawn_agent"]);
+      // The decoded request is never mutated.
+      expect(inRequest.tools?.[0]?.type).toBe("namespace");
+    },
+  );
+
+  it("hands a namespace tool natively to a responses entry", () => {
+    const ns = {
+      type: "namespace" as const,
+      name: "multi_agent_v1",
+      tools: [
+        {
+          type: "function" as const,
+          function: { name: "spawn_agent", parameters: { type: "object" } },
+        },
+      ],
+    };
+    const inRequest: CanonicalRequest = { ...canonical(), tools: [ns] };
+    const e: ProviderEntry = {
+      name: "responses",
+      type: "responses",
+      baseUrl: "http://responses.test",
+    };
+
+    const out = canonicalForTarget(inRequest, e, {
+      provider: "responses",
+      model: "m",
+    });
+
+    expect(out.tools).toEqual([ns]);
+  });
 });
 
 describe("max_output_tokens cap (spec §3.3)", () => {

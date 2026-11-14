@@ -1,11 +1,9 @@
 /**
  * Responses tool codec (v1.4 spec §3.1/§3.6): function, custom and
- * namespace tools and tool_choice to and from canonical. Custom tools
- * pass through natively; `{type:"namespace"}` rides canonical as a
- * `type: "custom"` carrier (`format.syntax === "namespace"`, nested
- * tools JSON in `format.definition`) — the services-side lowering in
- * custom-tools.ts flattens it for non-Responses targets. Built-in
- * tool types parse and drop with `builtin_tool_dropped`.
+ * namespace tools and tool_choice to and from canonical. Custom and
+ * namespace tools pass through natively; the services-side lowering
+ * in custom-tools.ts flattens both for non-Responses targets.
+ * Built-in tool types parse and drop with `builtin_tool_dropped`.
  * Extracted from responses.adapter.ts (rule 7).
  *
  * Wire-format sources:
@@ -21,6 +19,8 @@
  *    reference does not document it.
  */
 import type {
+  CanonicalCustomTool,
+  CanonicalFunctionTool,
   CanonicalTool,
   CanonicalToolChoice,
 } from "../../types/canonical.types";
@@ -111,26 +111,32 @@ export function toCanonicalTool(
     // `{type:"namespace", name, description, tools}` — SDK
     // `NamespaceTool`; Codex's `multi_agent_v1` usage is evidenced by
     // codex-rs/core/src/client.rs at 0.169.0 and the Task 1
-    // recording. The carrier rides canonical as a custom tool whose
-    // grammar syntax is the literal "namespace" and whose definition
-    // is the nested tools array verbatim (Task 5 lowers it for
-    // non-Responses targets; a Responses target keeps it native).
+    // recording. Canonical keeps it as the `type:"namespace"`
+    // variant; a Responses target re-emits it natively, other targets
+    // get the leaves flattened (custom-tools.ts).
     const n = tool as {
       name?: string;
       description?: string | null;
       tools?: unknown;
     };
+    const nested: Array<CanonicalFunctionTool | CanonicalCustomTool> =
+      [];
+    for (const [j, leaf] of (
+      Array.isArray(n.tools) ? n.tools : []
+    ).entries()) {
+      // Only function and custom leaves are evidenced in the Codex
+      // source (recording.jsonl and recording-responses-lite.jsonl —
+      // the latter's "functions" namespace holds a custom `exec`).
+      const decoded = toCanonicalNestedTool(leaf, index, j);
+      if (decoded !== undefined) nested.push(decoded);
+    }
     return {
-      type: "custom",
+      type: "namespace",
       name: n.name ?? "",
       ...(typeof n.description === "string" && {
         description: n.description,
       }),
-      format: {
-        type: "grammar",
-        syntax: "namespace",
-        definition: JSON.stringify(n.tools ?? []),
-      },
+      tools: nested,
     };
   }
   if (typeof t.type === "string" && BUILTIN_TOOL_TYPES.has(t.type)) {
@@ -144,6 +150,69 @@ export function toCanonicalTool(
   throw new ValidationError(
     `Unsupported tool type "${t.type ?? "unknown"}" in tools[]`,
   );
+}
+
+/**
+ * One leaf inside a `{type:"namespace"}` tool: function and custom
+ * leaves decode like their top-level counterparts (path
+ * `tools[i].tools[j]`); anything else — including a nested namespace,
+ * for which there is no Codex evidence — is noted and dropped.
+ */
+function toCanonicalNestedTool(
+  leaf: unknown,
+  index: number,
+  j: number,
+): CanonicalFunctionTool | CanonicalCustomTool | undefined {
+  const l = leaf as { type?: string };
+  const path = `tools[${index}].tools[${j}]`;
+  if (l?.type === "function") {
+    const fn = leaf as {
+      name?: string;
+      description?: string | null;
+      parameters?: Record<string, unknown> | null;
+      strict?: boolean | null;
+    };
+    if (fn.strict !== undefined && fn.strict !== null) {
+      note(
+        "tool_strict_dropped",
+        `${path}.strict`,
+        'Dropping tool field "strict" (no canonical equivalent)',
+      );
+    }
+    return {
+      type: "function",
+      function: {
+        name: fn.name ?? "",
+        ...(typeof fn.description === "string" && {
+          description: fn.description,
+        }),
+        ...(fn.parameters !== undefined &&
+          fn.parameters !== null && { parameters: fn.parameters }),
+      },
+    };
+  }
+  if (l?.type === "custom") {
+    const c = leaf as {
+      name?: string;
+      description?: string | null;
+      format?: unknown;
+    };
+    const format = toCanonicalCustomFormat(c.format);
+    return {
+      type: "custom",
+      name: c.name ?? "",
+      ...(typeof c.description === "string" && {
+        description: c.description,
+      }),
+      ...(format !== undefined && { format }),
+    };
+  }
+  note(
+    "field_dropped",
+    path,
+    `Dropping nested tool of type "${l?.type ?? "unknown"}" (namespace leaves are function or custom tools)`,
+  );
+  return undefined;
 }
 
 /** `format` on a custom tool: `{type:"text"}` or the grammar pair. */
@@ -202,30 +271,21 @@ export function toCanonicalToolChoice(choice: unknown): CanonicalToolChoice {
 // ============ Tools: Canonical → Responses ============
 
 export function toResponsesTool(tool: CanonicalTool): ResponsesTool {
+  if (tool.type === "namespace") {
+    // Namespaces stay native on a Responses target; the leaves
+    // re-encode through the same function/custom path as top-level
+    // tools (SDK `NamespaceTool`; nested custom leaves are evidenced
+    // by recording-responses-lite.jsonl).
+    return {
+      type: "namespace",
+      name: tool.name,
+      ...(tool.description !== undefined && {
+        description: tool.description,
+      }),
+      tools: tool.tools.map(toResponsesTool),
+    } as unknown as ResponsesTool;
+  }
   if (tool.type === "custom") {
-    // The namespace carrier re-encodes natively
-    // (`format.syntax === "namespace"`); every other custom tool
-    // re-encodes as `type: "custom"`.
-    if (
-      tool.format?.type === "grammar" &&
-      tool.format.syntax === "namespace"
-    ) {
-      let nested: unknown = [];
-      try {
-        nested = JSON.parse(tool.format.definition);
-      } catch {
-        // A carrier the decode side never produced — emit an empty
-        // namespace rather than malformed JSON.
-      }
-      return {
-        type: "namespace",
-        name: tool.name,
-        ...(tool.description !== undefined && {
-          description: tool.description,
-        }),
-        tools: nested,
-      } as unknown as ResponsesTool;
-    }
     return {
       type: "custom",
       name: tool.name,

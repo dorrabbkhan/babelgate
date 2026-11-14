@@ -1333,14 +1333,19 @@ describe("Responses adapter", () => {
 
       expect(canonical.tools).toEqual([
         {
-          type: "custom",
+          type: "namespace",
           name: "multi_agent_v1",
           description: "Sub-agents",
-          format: {
-            type: "grammar",
-            syntax: "namespace",
-            definition: JSON.stringify(nested),
-          },
+          tools: [
+            {
+              type: "function",
+              function: {
+                name: "spawn_agent",
+                description: "Spawn",
+                parameters: { type: "object" },
+              },
+            },
+          ],
         },
       ]);
 
@@ -1352,7 +1357,15 @@ describe("Responses adapter", () => {
           type: "namespace",
           name: "multi_agent_v1",
           description: "Sub-agents",
-          tools: nested,
+          tools: [
+            {
+              type: "function",
+              name: "spawn_agent",
+              description: "Spawn",
+              parameters: { type: "object" },
+              strict: null,
+            },
+          ],
         },
       ]);
     });

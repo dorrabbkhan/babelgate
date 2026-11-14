@@ -66,9 +66,9 @@ export function canonicalForTarget(
       maxTokens: clamp.to,
     };
   }
-  // §3.6: custom tools and namespace carriers lower to function
-  // tools for non-Responses targets; a Responses target keeps them
-  // native (the same copy carries the lowered call history).
+  // §3.6: custom and namespace tools lower to function tools for
+  // non-Responses targets; a Responses target keeps them native (the
+  // same copy carries the lowered call history).
   const lowered =
     entry.type === "responses" ? out : lowerCustomTools(out, entry.type);
   // §3.2: Anthropic and providers with cache_hints honour hints;

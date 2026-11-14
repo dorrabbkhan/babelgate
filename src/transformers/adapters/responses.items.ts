@@ -89,10 +89,14 @@ export function decodeInputItem(
     // reference and the SDK's ResponseCustomToolCall; raw `input`
     // stays the call's arguments verbatim, marked `custom` so
     // diagnostics and repair never parse it (v1.4 spec §3.6).
+    // `namespace` rides it the same way it rides function_call —
+    // custom_tool_call{namespace} is real Codex traffic
+    // (recording-responses-lite.jsonl).
     const call = item as {
       call_id?: string | null;
       id?: string;
       name?: string;
+      namespace?: string;
       input?: string;
     };
     messages.push({
@@ -106,6 +110,9 @@ export function decodeInputItem(
           function: {
             name: call.name ?? "",
             arguments: typeof call.input === "string" ? call.input : "",
+            ...(typeof call.namespace === "string" && {
+              namespace: call.namespace,
+            }),
           },
         },
       ],
@@ -289,12 +296,16 @@ export function encodeMessage(
       for (const call of message.toolCalls ?? []) {
         if (call.custom === true) {
           // `custom_tool_call` {call_id, name, input} — raw input
-          // verbatim (v1.4 spec §3.6).
+          // verbatim (v1.4 spec §3.6); `namespace` rides it the same
+          // way it rides function_call (recording-responses-lite.jsonl).
           customCallIds?.add(call.id);
           items.push({
             type: "custom_tool_call",
             call_id: call.id,
             name: call.function.name,
+            ...(call.function.namespace !== undefined && {
+              namespace: call.function.namespace,
+            }),
             input: call.function.arguments,
             status: "completed",
           });

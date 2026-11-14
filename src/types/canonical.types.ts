@@ -140,24 +140,44 @@ export interface CanonicalConfig {
 
 // ============ TOOLS ============
 
+export interface CanonicalFunctionTool {
+  type: "function";
+  /** Function definition */
+  function: CanonicalFunction;
+  /** Prompt-cache breakpoint hint (Anthropic cache_control) */
+  cache?: CanonicalCacheHint;
+}
+
+export interface CanonicalCustomTool {
+  /** Freeform tool (v1.4 spec §3.6): Codex's apply_patch — named,
+   *  input is a raw string, optionally described by a grammar the
+   *  target may or may not honour */
+  type: "custom";
+  name: string;
+  description?: string;
+  format?:
+    | { type: "text" }
+    | { type: "grammar"; syntax: string; definition: string };
+  cache?: CanonicalCacheHint;
+}
+
 export type CanonicalTool =
+  | CanonicalFunctionTool
+  | CanonicalCustomTool
   | {
-      type: "function";
-      /** Function definition */
-      function: CanonicalFunction;
-      /** Prompt-cache breakpoint hint (Anthropic cache_control) */
-      cache?: CanonicalCacheHint;
-    }
-  | {
-      /** Freeform tool (v1.4 spec §3.6): Codex's apply_patch — named,
-       *  input is a raw string, optionally described by a grammar the
-       *  target may or may not honour */
-      type: "custom";
+      /** Responses namespace tool (v1.4 spec §3.6, owner decision A):
+       *  a named group of tools — Codex's `multi_agent_v1`. A
+       *  Responses target keeps it native; every other target gets
+       *  the leaves as `ns__leaf` function tools (custom-tools.ts).
+       *  Nested tools are function tools, and custom tools too — a
+       *  `{type:"custom"}` leaf inside a namespace is real Codex
+       *  traffic (`tests/fixtures/codex/recording-responses-lite.jsonl`:
+       *  namespace "functions" holds the custom `exec` tool).
+       *  Namespaces do not nest (no evidence in the Codex source). */
+      type: "namespace";
       name: string;
       description?: string;
-      format?:
-        | { type: "text" }
-        | { type: "grammar"; syntax: string; definition: string };
+      tools: (CanonicalFunctionTool | CanonicalCustomTool)[];
       cache?: CanonicalCacheHint;
     };
 

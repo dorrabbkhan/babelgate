@@ -16,8 +16,7 @@ import {
 /**
  * v1.4 spec §3.6 + owner decision A: custom tools lower to one-string
  * function tools on non-Responses targets; `{type:"namespace"}` tools
- * ride canonical as a custom tool whose `format.syntax` is
- * "namespace" and flatten to `ns__leaf` function tools.
+ * flatten to `ns__leaf` function tools.
  */
 
 function traced<T>(fn: () => T): { result: T; trace: RequestTrace } {
@@ -42,29 +41,28 @@ const APPLY_PATCH: CanonicalTool = {
   },
 };
 
-/** The canonical carrier a Responses `{type:"namespace"}` tool decodes to. */
+/** The canonical form a Responses `{type:"namespace"}` tool decodes to. */
 const NAMESPACE: CanonicalTool = {
-  type: "custom",
+  type: "namespace",
   name: "multi_agent_v1",
   description: "Tools for spawning and managing sub-agents.",
-  format: {
-    type: "grammar",
-    syntax: "namespace",
-    definition: JSON.stringify([
-      {
-        type: "function",
+  tools: [
+    {
+      type: "function",
+      function: {
         name: "spawn_agent",
         description: "Spawn an agent",
         parameters: { type: "object" },
-        strict: false,
       },
-      {
-        type: "function",
+    },
+    {
+      type: "function",
+      function: {
         name: "wait_agent",
         parameters: { type: "object" },
       },
-    ]),
-  },
+    },
+  ],
 };
 
 function req(tools: CanonicalTool[], extra: Partial<CanonicalRequest> = {}): CanonicalRequest {
@@ -380,19 +378,17 @@ describe("namespace flattening (owner decision A)", () => {
 
   it("flattened name over 64 chars shortens deterministically", () => {
     const long: CanonicalTool = {
-      type: "custom",
+      type: "namespace",
       name: "a_very_long_namespace_name_that_goes_on",
-      format: {
-        type: "grammar",
-        syntax: "namespace",
-        definition: JSON.stringify([
-          {
-            type: "function",
+      tools: [
+        {
+          type: "function",
+          function: {
             name: "an_extremely_long_tool_name_here",
             parameters: { type: "object" },
           },
-        ]),
-      },
+        },
+      ],
     };
 
     const out = lowerCustomTools(req([long]));
@@ -408,15 +404,14 @@ describe("namespace flattening (owner decision A)", () => {
 
   it("a flattened name colliding with a top-level function is renamed with a note", () => {
     const collision: CanonicalTool = {
-      type: "custom",
+      type: "namespace",
       name: "a",
-      format: {
-        type: "grammar",
-        syntax: "namespace",
-        definition: JSON.stringify([
-          { type: "function", name: "b", parameters: { type: "object" } },
-        ]),
-      },
+      tools: [
+        {
+          type: "function",
+          function: { name: "b", parameters: { type: "object" } },
+        },
+      ],
     };
     const topLevel: CanonicalTool = {
       type: "function",
@@ -439,5 +434,79 @@ describe("namespace flattening (owner decision A)", () => {
     expect(
       trace.notes.some((n) => n.code === "tool_name_collision"),
     ).toBe(true);
+  });
+
+  it("a custom leaf flattens and lowers, and its call raises namespaced", () => {
+    // A `{type:"custom"}` tool inside a namespace is real Codex
+    // traffic — recording-responses-lite.jsonl's "functions"
+    // namespace holds the custom `exec` tool.
+    const ns: CanonicalTool = {
+      type: "namespace",
+      name: "functions",
+      tools: [
+        {
+          type: "custom",
+          name: "exec",
+          description: "Run code",
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: "start: exec",
+          },
+        },
+      ],
+    };
+
+    const lowered = lowerCustomTools(req([ns]));
+    expect(lowered.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "functions__exec",
+          description:
+            "Run code\n\nInput format (lark):\n```\nstart: exec\n```\n\nNamespace: functions",
+          parameters: {
+            type: "object",
+            properties: { input: { type: "string" } },
+            required: ["input"],
+          },
+        },
+      },
+    ]);
+
+    const raised = raiseCustomCalls(
+      {
+        id: "r1",
+        model: "m",
+        message: {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "functions__exec",
+                arguments: JSON.stringify({ input: "print(1)" }),
+              },
+            },
+          ],
+        },
+        finishReason: "tool_call",
+      },
+      req([ns]),
+    );
+    expect(raised.message.toolCalls).toEqual([
+      {
+        id: "call_1",
+        type: "function",
+        custom: true,
+        function: {
+          name: "exec",
+          namespace: "functions",
+          arguments: "print(1)",
+        },
+      },
+    ]);
   });
 });

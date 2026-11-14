@@ -89,11 +89,14 @@ export function toCanonicalResponse(
       // `custom_tool_call` output items per
       // https://platform.openai.com/docs/api-reference/responses/object
       // — raw `input` stays the arguments verbatim, `custom: true`
-      // keeps diagnostics/repair off it (v1.4 spec §3.6).
+      // keeps diagnostics/repair off it (v1.4 spec §3.6). `namespace`
+      // rides it the same way it rides function_call
+      // (recording-responses-lite.jsonl).
       const call = item as {
         call_id?: string;
         id?: string;
         name?: string;
+        namespace?: string;
         input?: string;
       };
       (toolCalls as NonNullable<typeof toolCalls>).push({
@@ -103,6 +106,9 @@ export function toCanonicalResponse(
         function: {
           name: call.name ?? "",
           arguments: typeof call.input === "string" ? call.input : "",
+          ...(typeof call.namespace === "string" && {
+            namespace: call.namespace,
+          }),
         },
       });
       continue;
@@ -258,6 +264,9 @@ export function fromCanonicalResponse(
         id: `ctc_${itemSeq++}`,
         call_id: call.id,
         name: call.function.name,
+        ...(call.function.namespace !== undefined && {
+          namespace: call.function.namespace,
+        }),
         input: call.function.arguments,
         status: "completed",
       });

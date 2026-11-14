@@ -135,26 +135,39 @@ const functionSchema = z.object({
   parameters: z.record(z.string(), z.unknown()).optional(),
 });
 
+const functionToolSchema = z.object({
+  type: z.literal("function"),
+  function: functionSchema,
+  cache: cacheHintSchema.optional(),
+});
+
+const customToolSchema = z.object({
+  type: z.literal("custom"),
+  name: z.string(),
+  description: z.string().optional(),
+  format: z
+    .union([
+      z.object({ type: z.literal("text") }),
+      z.object({
+        type: z.literal("grammar"),
+        syntax: z.string(),
+        definition: z.string(),
+      }),
+    ])
+    .optional(),
+  cache: cacheHintSchema.optional(),
+});
+
 export const canonicalToolSchema = z.discriminatedUnion("type", [
+  functionToolSchema,
+  customToolSchema,
   z.object({
-    type: z.literal("function"),
-    function: functionSchema,
-    cache: cacheHintSchema.optional(),
-  }),
-  z.object({
-    type: z.literal("custom"),
+    type: z.literal("namespace"),
     name: z.string(),
     description: z.string().optional(),
-    format: z
-      .union([
-        z.object({ type: z.literal("text") }),
-        z.object({
-          type: z.literal("grammar"),
-          syntax: z.string(),
-          definition: z.string(),
-        }),
-      ])
-      .optional(),
+    tools: z.array(
+      z.discriminatedUnion("type", [functionToolSchema, customToolSchema]),
+    ),
     cache: cacheHintSchema.optional(),
   }),
 ]);

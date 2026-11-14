@@ -149,6 +149,9 @@ export function createStreamEncoder(
         type: "custom_tool_call",
         call_id: call.id,
         name: call.name,
+        // `namespace` rides custom_tool_call too
+        // (recording-responses-lite.jsonl).
+        ...(call.namespace !== undefined && { namespace: call.namespace }),
         input: "",
         status: "in_progress",
       };

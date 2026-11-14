@@ -4420,12 +4420,25 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   `namespace?: string` (and already had `custom?: boolean`). Codex 0.169.0's router
   (`codex-rs/core/src/tools/router.rs`, `ToolName::new`) matches calls on the
   explicit `{name, namespace}` pair — a flat `ns__leaf` name alone never routes —
-  so the raised call must carry `namespace` end-to-end.
-- **Namespace carrier:** a Responses `{type:"namespace", name, description, tools}`
-  decodes to a canonical `type:"custom"` tool whose `format` is
-  `{type:"grammar", syntax:"namespace", definition: <JSON of the nested function
-  tools>}`. `CanonicalTool` needs no new variant (spec §3.2's inventory is
-  `function | custom`), and the carrier round-trips natively on Responses targets.
+  so the raised call must carry `namespace` end-to-end. **Approved canonical
+  change made in this task (owner, conductor session 2026-11-14, PR #95
+  option B):** `CanonicalTool` gains a third variant
+  `{type:"namespace", name, description?, tools, cache?}` whose `tools` are
+  `CanonicalFunctionTool | CanonicalCustomTool` leaves — function tools per
+  `tests/fixtures/codex/recording.jsonl`, and custom tools too: a
+  `{type:"custom"}` leaf inside a namespace is real Codex traffic
+  (`tests/fixtures/codex/recording-responses-lite.jsonl`, namespace
+  "functions" holds the custom `exec` tool). Namespaces do not nest (no
+  evidence in the Codex source).
+- **Namespace tools ride canonical as the variant:** a Responses
+  `{type:"namespace", name, description, tools}` decodes to the
+  `type:"namespace"` variant and re-encodes natively on Responses targets;
+  non-Responses targets get the leaves flattened (below). A custom leaf
+  flattens AND lowers — `ns__leaf` with the one-string `input` parameter —
+  and its call raises back to `{name: leaf, namespace: ns, custom: true}`;
+  `custom_tool_call` therefore also carries `namespace` on decode and
+  encode, matching `function_call` (the lite recording shows the field on
+  real calls).
 - **Flattened naming:** `<namespace>__<leaf>` (separator `__`), sanitized to
   `[a-zA-Z0-9_-]` and capped at 64 chars — valid under every target's rule:
   OpenAI Chat `^[a-zA-Z0-9_-]{1,64}$` (function-calling guide), Anthropic
@@ -4466,11 +4479,9 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   reassembly), `src/services/stream-attempt.ts` + `canonical-stream.service.ts`
   (the custom transform is wired before repair; `observedDecoder` takes the
   canonical request).
-- **Pending owner action — contract snapshot:** `codex → canonical matches
-  snapshot 1` in `tests/contracts/__snapshots__/fixtures.test.ts.snap` must gain
-  the `multi_agent_v1` namespace carrier (additive only — `exec_command` and the
-  `web_search` drop are unchanged). The committed codex fixture carries a real
-  `namespace` tool (E13), and Task 3 recorded it dropped; decode must now carry it
-  for both lowering and the native Responses round-trip, so the golden cannot stay
-  unchanged under any spec-faithful implementation. Held for owner approval per
-  "any other fixture/snapshot change → STOP and escalate" (Global Constraints).
+- **Contract snapshot (owner-approved, fix round 1):** `codex → canonical
+  matches snapshot 1` in `tests/contracts/__snapshots__/fixtures.test.ts.snap`
+  gained the `multi_agent_v1` namespace variant — additive only, hand-edited;
+  `exec_command` and the `web_search` drop are unchanged. The committed codex
+  fixture carries a real `namespace` tool (E13); Task 3 recorded it dropped,
+  decode now carries it.

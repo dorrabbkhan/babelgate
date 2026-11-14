@@ -6,13 +6,15 @@
  * - A `type: "custom"` tool lowers to a one-string function tool
  *   (`input` parameter; the grammar rides the description) and its
  *   calls unwrap `{input: <raw>}` back to a `custom: true` call.
- * - A `{type:"namespace"}` Responses tool rides canonical as a
- *   `type: "custom"` carrier (`format.syntax === "namespace"`, the
- *   nested function tools JSON in `format.definition`). Its leaves
- *   flatten to `ns__leaf` function tools — a separator/charset every
- *   provider's name rule accepts (OpenAI `^[a-zA-Z0-9_-]{1,64}$`,
- *   Gemini the same, Anthropic `^[a-zA-Z0-9_-]{1,128}$`, Ollama
- *   unrestricted) — and calls flatten back the same way. On the way
+ * - A `type: "namespace"` tool's leaves flatten to `ns__leaf`
+ *   function tools — a separator/charset every provider's name rule
+ *   accepts (OpenAI `^[a-zA-Z0-9_-]{1,64}$`, Gemini the same,
+ *   Anthropic `^[a-zA-Z0-9_-]{1,128}$`, Ollama unrestricted) — and
+ *   calls flatten back the same way. A function leaf flattens
+ *   directly; a custom leaf (real Codex traffic —
+ *   recording-responses-lite.jsonl's "functions" namespace holds a
+ *   custom `exec` tool) flattens AND lowers, and its call raises
+ *   back to `{name: leaf, namespace: ns, custom: true}`. On the way
  *   out, only names THIS request's lowering produced are raised back
  *   to `{name: leaf, namespace: ns}` — never guessed from a name
  *   string (owner decision).
@@ -29,6 +31,7 @@
  * (tests/fixtures/codex/recording.jsonl).
  */
 import type {
+  CanonicalFunctionTool,
   CanonicalRequest,
   CanonicalResponse,
   CanonicalStreamEvent,
@@ -44,62 +47,10 @@ const MAX_TOOL_NAME = 64;
 const TOOL_NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
 export type CustomTool = Extract<CanonicalTool, { type: "custom" }>;
+export type NamespaceTool = Extract<CanonicalTool, { type: "namespace" }>;
 
 function note(code: string, adapter: Provider, path: string, message: string): void {
   recordNote({ stage: "encode", adapter, code, path }, message);
-}
-
-export function isNamespaceCarrier(
-  tool: CanonicalTool,
-): tool is CustomTool & {
-  format: { type: "grammar"; syntax: "namespace"; definition: string };
-} {
-  return (
-    tool.type === "custom" &&
-    tool.format?.type === "grammar" &&
-    tool.format.syntax === "namespace" &&
-    typeof tool.format.definition === "string"
-  );
-}
-
-interface NamespaceLeaf {
-  name: string;
-  description?: string;
-  parameters?: Record<string, unknown>;
-}
-
-/** The nested function tools a namespace carrier's definition holds
- *  (exported for tool-call diagnostics' name/schema lookup). */
-export function namespaceLeafTools(
-  tool: CustomTool,
-): NamespaceLeaf[] | undefined {
-  if (tool.format?.type !== "grammar") return undefined;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(tool.format.definition);
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(parsed)) return undefined;
-  const leaves: NamespaceLeaf[] = [];
-  for (const leaf of parsed) {
-    const l = leaf as { name?: unknown };
-    if (typeof l?.name !== "string") return undefined;
-    leaves.push({
-      name: l.name,
-      ...(typeof (leaf as { description?: unknown }).description ===
-        "string" && {
-        description: (leaf as { description: string }).description,
-      }),
-      ...((leaf as { parameters?: unknown }).parameters !==
-        undefined &&
-        (leaf as { parameters?: unknown }).parameters !== null && {
-          parameters: (leaf as { parameters: Record<string, unknown> })
-            .parameters,
-        }),
-    });
-  }
-  return leaves;
 }
 
 /** 8-hex-char FNV-1a — deterministic, stable across runs. */
@@ -126,8 +77,12 @@ export function flatToolName(ns: string, leaf: string): string {
   return `${safe.slice(0, MAX_TOOL_NAME - hash.length - 1)}-${hash}`;
 }
 
-/** Produced flat name → the (ns, leaf) pair lowering made it from. */
-export type FlatMap = Map<string, { ns: string; leaf: string }>;
+/** Produced flat name → the (ns, leaf) pair lowering made it from;
+ *  `custom` marks a leaf that was a custom tool. */
+export type FlatMap = Map<
+  string,
+  { ns: string; leaf: string; custom?: boolean }
+>;
 /** (ns, leaf) → produced flat name — for lowering call history. */
 export type ForwardMap = Map<string, string>;
 
@@ -136,38 +91,50 @@ const forwardKey = (ns: string, leaf: string): string => `${ns}${leaf}`;
 /**
  * The names every lowered tool will take on output: all top-level
  * function names and every custom tool's name (custom tools lower to
- * same-named functions). Namespace flats are chosen against this set,
- * so replaying the flatten in the same order reproduces the names.
+ * same-named functions). A namespace's own name never appears
+ * upstream — only its `ns__leaf` flats do, and flattening adds them
+ * to this set as it goes, so replaying the flatten in the same order
+ * reproduces the names.
  */
 function reservedNames(tools: CanonicalTool[] | undefined): Set<string> {
   const reserved = new Set<string>();
   for (const t of tools ?? []) {
-    reserved.add(t.type === "function" ? t.function.name : t.name);
+    if (t.type === "function") reserved.add(t.function.name);
+    else if (t.type === "custom") reserved.add(t.name);
   }
   return reserved;
 }
 
 /**
- * One namespace carrier → its flattened function tools and the
- * flat-name map. `reserved` is the running set of taken output names;
- * collisions get a `__N` suffix (recorded by the caller via `notes`).
+ * One namespace tool → its flattened function tools and the
+ * flat-name map. `reserved` is the running set of taken output
+ * names; collisions get a `__N` suffix (recorded by the caller via
+ * `notes`). A custom leaf flattens and lowers in one step: the flat
+ * `ns__leaf` function takes the one-string `input` parameter and is
+ * marked `custom` in the map so its call raises back namespaced.
  */
-function flattenCarrier(
-  carrier: CustomTool,
+function flattenNamespace(
+  ns: NamespaceTool,
   reserved: Set<string>,
   adapter: Provider,
   path: string,
   silent = false,
-): { tools: CanonicalTool[]; entries: [string, { ns: string; leaf: string }][] } {
-  const leaves = namespaceLeafTools(carrier);
-  if (leaves === undefined) return { tools: [], entries: [] };
-  const suffix = `Namespace: ${carrier.name}${
-    carrier.description !== undefined ? ` — ${carrier.description}` : ""
+): {
+  tools: CanonicalTool[];
+  entries: [string, { ns: string; leaf: string; custom?: boolean }][];
+} {
+  const suffix = `Namespace: ${ns.name}${
+    ns.description !== undefined ? ` — ${ns.description}` : ""
   }`;
   const tools: CanonicalTool[] = [];
-  const entries: [string, { ns: string; leaf: string }][] = [];
-  for (const leaf of leaves) {
-    let flat = flatToolName(carrier.name, leaf.name);
+  const entries: [
+    string,
+    { ns: string; leaf: string; custom?: boolean },
+  ][] = [];
+  for (const leaf of ns.tools) {
+    const leafName =
+      leaf.type === "function" ? leaf.function.name : leaf.name;
+    let flat = flatToolName(ns.name, leafName);
     if (reserved.has(flat)) {
       const base = flat;
       for (let n = 1; reserved.has(flat); n++) {
@@ -186,20 +153,38 @@ function flattenCarrier(
       }
     }
     reserved.add(flat);
-    entries.push([flat, { ns: carrier.name, leaf: leaf.name }]);
-    tools.push({
-      type: "function",
-      function: {
-        name: flat,
-        description:
-          leaf.description !== undefined
-            ? `${leaf.description}\n\n${suffix}`
-            : suffix,
-        ...(leaf.parameters !== undefined && {
-          parameters: leaf.parameters,
-        }),
-      },
-    });
+    entries.push([
+      flat,
+      { ns: ns.name, leaf: leafName, ...(leaf.type === "custom" && { custom: true }) },
+    ]);
+    if (leaf.type === "function") {
+      tools.push({
+        type: "function",
+        function: {
+          name: flat,
+          description:
+            leaf.function.description !== undefined
+              ? `${leaf.function.description}\n\n${suffix}`
+              : suffix,
+          ...(leaf.function.parameters !== undefined && {
+            parameters: leaf.function.parameters,
+          }),
+        },
+      });
+    } else {
+      const lowered = lowerCustomTool(leaf);
+      tools.push({
+        ...lowered,
+        function: {
+          ...lowered.function,
+          name: flat,
+          description:
+            lowered.function.description !== undefined
+              ? `${lowered.function.description}\n\n${suffix}`
+              : suffix,
+        },
+      });
+    }
   }
   return { tools, entries };
 }
@@ -215,14 +200,14 @@ function buildMaps(tools: CanonicalTool[] | undefined): {
   const forwardMap: ForwardMap = new Map();
   const reserved = reservedNames(tools);
   for (const t of tools ?? []) {
-    if (t.type !== "custom") continue;
-    if (!isNamespaceCarrier(t)) {
+    if (t.type === "custom") {
       customNames.add(t.name);
       continue;
     }
+    if (t.type !== "namespace") continue;
     // Replay flattening silently — the notes were emitted by
     // lowerCustomTools; names are deterministic, so the maps match.
-    for (const [flat, pair] of flattenCarrier(t, reserved, "responses", "tools", true).entries) {
+    for (const [flat, pair] of flattenNamespace(t, reserved, "responses", "tools", true).entries) {
       flatMap.set(flat, pair);
       forwardMap.set(forwardKey(pair.ns, pair.leaf), flat);
     }
@@ -230,8 +215,8 @@ function buildMaps(tools: CanonicalTool[] | undefined): {
   return { customNames, flatMap, forwardMap };
 }
 
-/** `type: "custom"` (non-namespace) → one-string-parameter function. */
-function lowerCustomTool(tool: CustomTool): CanonicalTool {
+/** `type: "custom"` → one-string-parameter function. */
+function lowerCustomTool(tool: CustomTool): CanonicalFunctionTool {
   const grammar =
     tool.format?.type === "grammar"
       ? `Input format (${tool.format.syntax}):\n\`\`\`\n${tool.format.definition}\n\`\`\``
@@ -260,7 +245,7 @@ function lowerCustomTool(tool: CustomTool): CanonicalTool {
 /**
  * §3.6 lowering for non-Responses targets (called by
  * canonicalForTarget on a copy — the decoded request is never
- * mutated): custom tools → one-string functions, namespace carriers
+ * mutated): custom tools → one-string functions, namespace tools
  * → `ns__leaf` functions, custom-call history → `{input}` arguments,
  * namespaced call history → the produced flat name.
  */
@@ -270,7 +255,7 @@ export function lowerCustomTools(
 ): CanonicalRequest {
   const tools = request.tools ?? [];
   const hasWork =
-    tools.some((t) => t.type === "custom") ||
+    tools.some((t) => t.type === "custom" || t.type === "namespace") ||
     request.messages.some((m) =>
       m.toolCalls?.some((c) => c.custom === true || c.function.namespace !== undefined),
     );
@@ -280,21 +265,15 @@ export function lowerCustomTools(
   const forwardMap: ForwardMap = new Map();
   const loweredTools: CanonicalTool[] = [];
   for (const [i, t] of tools.entries()) {
-    if (t.type !== "custom") {
+    if (t.type === "function") {
       loweredTools.push(t);
       continue;
     }
-    if (!isNamespaceCarrier(t)) {
+    if (t.type === "custom") {
       loweredTools.push(lowerCustomTool(t));
       continue;
     }
-    const flat = flattenCarrier(t, reserved, adapter, `tools[${i}]`);
-    if (flat.tools.length === 0) {
-      // A carrier with an unparsable definition lowers like an
-      // ordinary custom tool — still callable, never silently lost.
-      loweredTools.push(lowerCustomTool(t));
-      continue;
-    }
+    const flat = flattenNamespace(t, reserved, adapter, `tools[${i}]`);
     for (const [name, pair] of flat.entries) {
       forwardMap.set(forwardKey(pair.ns, pair.leaf), name);
     }
@@ -319,10 +298,16 @@ const lowerCallHistory =
   (call: CanonicalToolCall): CanonicalToolCall => {
     if (call.custom === true) {
       const { custom: _custom, ...rest } = call;
+      const name =
+        call.function.namespace !== undefined
+          ? (forwardMap.get(
+              forwardKey(call.function.namespace, call.function.name),
+            ) ?? flatToolName(call.function.namespace, call.function.name))
+          : call.function.name;
       return {
         ...rest,
         function: {
-          name: call.function.name,
+          name,
           arguments: JSON.stringify({ input: call.function.arguments }),
         },
       };
@@ -343,37 +328,14 @@ const lowerCallHistory =
     return call;
   };
 
-/**
- * Raise one lowered call back to the client-facing form, using only
- * the maps THIS request's tools produce: `ns__leaf` →
- * `{name: leaf, namespace: ns}`; a custom tool's name →
- * `custom: true` with `arguments` unwrapped from `{input}` (kept raw
- * with a `custom_input_unparsed` note when it isn't that shape — raw
- * input is never mangled).
- */
-export function raiseCall(
+/** `{input: <raw>}` → the raw input; anything else passes through
+ *  verbatim with a `custom_input_unparsed` note — raw input is never
+ *  mangled. */
+function unwrapCustomInput(
   call: CanonicalToolCall,
-  customNames: Set<string>,
-  flatMap: FlatMap,
   adapter: Provider,
   path: string,
-): CanonicalToolCall {
-  if (call.custom === true || call.function.namespace !== undefined) {
-    return call;
-  }
-  const pair = flatMap.get(call.function.name);
-  if (pair !== undefined) {
-    return {
-      ...call,
-      function: {
-        name: pair.leaf,
-        namespace: pair.ns,
-        arguments: call.function.arguments,
-      },
-    };
-  }
-  if (!customNames.has(call.function.name)) return call;
-
+): string {
   let input: string | undefined;
   try {
     const parsed: unknown = JSON.parse(call.function.arguments);
@@ -395,12 +357,56 @@ export function raiseCall(
       `Custom call "${call.function.name}" returned arguments that were not a {"input": string} object; passing them through raw`,
     );
   }
+  return input ?? call.function.arguments;
+}
+
+/**
+ * Raise one lowered call back to the client-facing form, using only
+ * the maps THIS request's tools produce: `ns__leaf` →
+ * `{name: leaf, namespace: ns}` (`custom: true` with `{input}`
+ * unwrapped when the leaf was a custom tool); a custom tool's name →
+ * `custom: true` with `arguments` unwrapped the same way.
+ */
+export function raiseCall(
+  call: CanonicalToolCall,
+  customNames: Set<string>,
+  flatMap: FlatMap,
+  adapter: Provider,
+  path: string,
+): CanonicalToolCall {
+  if (call.custom === true || call.function.namespace !== undefined) {
+    return call;
+  }
+  const pair = flatMap.get(call.function.name);
+  if (pair !== undefined) {
+    if (pair.custom === true) {
+      return {
+        ...call,
+        custom: true,
+        function: {
+          name: pair.leaf,
+          namespace: pair.ns,
+          arguments: unwrapCustomInput(call, adapter, path),
+        },
+      };
+    }
+    return {
+      ...call,
+      function: {
+        name: pair.leaf,
+        namespace: pair.ns,
+        arguments: call.function.arguments,
+      },
+    };
+  }
+  if (!customNames.has(call.function.name)) return call;
+
   return {
     ...call,
     custom: true,
     function: {
       name: call.function.name,
-      arguments: input ?? call.function.arguments,
+      arguments: unwrapCustomInput(call, adapter, path),
     },
   };
 }
@@ -467,8 +473,16 @@ export function createCustomCallTransform(
       case "tool_call_start": {
         const pair = flatMap.get(event.name);
         if (pair !== undefined) {
+          // A namespaced custom leaf's `{input}` wrapper is buffered
+          // and unwrapped at tool_call_end like a top-level custom's.
+          if (pair.custom === true) held.set(event.index, []);
           return [
-            { ...event, name: pair.leaf, namespace: pair.ns },
+            {
+              ...event,
+              name: pair.leaf,
+              namespace: pair.ns,
+              ...(pair.custom === true && { custom: true }),
+            },
           ];
         }
         if (customNames.has(event.name)) {

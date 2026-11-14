@@ -2,11 +2,7 @@ import type {
   CanonicalTool,
   CanonicalToolCall,
 } from "../types/canonical.types";
-import {
-  flatToolName,
-  isNamespaceCarrier,
-  namespaceLeafTools,
-} from "../transformers/custom-tools";
+import { flatToolName } from "../transformers/custom-tools";
 import type { ToolCallDiagnostic, ToolCallRepair } from "./trace";
 
 /**
@@ -155,18 +151,16 @@ export function diagnoseToolCalls(
   const byNamespaced = new Map<string, CanonicalTool>();
   for (const t of tools ?? []) {
     byName.set(t.type === "function" ? t.function.name : t.name, t);
-    if (t.type === "custom" && isNamespaceCarrier(t)) {
-      for (const leaf of namespaceLeafTools(t) ?? []) {
+    if (t.type === "namespace") {
+      for (const leaf of t.tools) {
+        // A custom leaf's input is raw — never schema-checked.
+        if (leaf.type !== "function") continue;
         // Both spellings a namespaced call can carry: the flattened
         // `ns__leaf` (pre-raise) and the leaf alone under
         // `function.namespace` (post-raise). Leaf schemas come from
-        // the carrier's own definition.
-        const fn: CanonicalTool = {
-          type: "function",
-          function: { name: leaf.name, parameters: leaf.parameters },
-        };
-        byName.set(flatToolName(t.name, leaf.name), fn);
-        byNamespaced.set(`${t.name}${leaf.name}`, fn);
+        // the namespace's own tools.
+        byName.set(flatToolName(t.name, leaf.function.name), leaf);
+        byNamespaced.set(`${t.name}${leaf.function.name}`, leaf);
       }
     }
   }
