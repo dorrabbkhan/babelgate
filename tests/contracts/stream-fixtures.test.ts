@@ -127,7 +127,10 @@ describe("stream fixture corpus", () => {
       );
     }
 
-    if (name === "error") {
+    if (name === "error" || fixture.expectedEvents.at(-1)?.type === "error") {
+      // A fixture whose stream ends in a canonical error (named
+      // "error", or responses' "failed": upstream dies mid-stream)
+      // cannot reassemble — that's the assertion, not a failure.
       expect(fixture.expectedEvents.at(-1)?.type).toBe("error");
       expect(() => reassembleStream(fixture.expectedEvents)).toThrow();
       return;

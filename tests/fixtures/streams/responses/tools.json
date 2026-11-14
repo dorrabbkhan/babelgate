@@ -1,0 +1,45 @@
+{
+  "source": "Hand-written from https://platform.openai.com/docs/api-reference/responses-streaming (function_call_arguments event shapes) and codex-rs/codex-api/src/sse/responses.rs at Codex 0.169.0; event order and counts match tests/fixtures/codex/recording.jsonl sseEvents",
+  "date": "2026-11-13",
+  "model": "qwen/qwen3-coder",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "resp_tool1",
+      "model": "qwen/qwen3-coder"
+    },
+    {
+      "type": "tool_call_start",
+      "index": 0,
+      "id": "call_1",
+      "name": "get_weather"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "{\"location\":"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "\"Paris\"}"
+    },
+    {
+      "type": "tool_call_end",
+      "index": 0
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "inputTokens": 42,
+        "outputTokens": 9,
+        "totalTokens": 51
+      }
+    },
+    {
+      "type": "message_end",
+      "finishReason": "tool_call"
+    }
+  ],
+  "nonStreaming": null
+}

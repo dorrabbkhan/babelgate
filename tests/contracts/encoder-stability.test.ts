@@ -36,7 +36,13 @@ import type {
 
 const SEED = 0xec0d;
 const CASES_PER_PROVIDER = 100;
-const PROVIDERS: Provider[] = ["openai", "anthropic", "gemini", "ollama"];
+const PROVIDERS: Provider[] = [
+  "openai",
+  "anthropic",
+  "gemini",
+  "ollama",
+  "responses",
+];
 
 const MESSAGE_FIELD: Record<Provider, "messages" | "contents" | "input"> = {
   openai: "messages",

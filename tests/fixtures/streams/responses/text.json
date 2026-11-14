@@ -1,0 +1,33 @@
+{
+  "source": "Hand-written from https://platform.openai.com/docs/api-reference/responses-streaming (event set + per-event fields) and codex-rs/codex-api/src/sse/responses.rs at Codex 0.169.0; event order and counts match tests/fixtures/codex/recording.jsonl sseEvents (OpenRouter native Responses stream)",
+  "date": "2026-11-13",
+  "model": "qwen/qwen3-coder",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "resp_abc123",
+      "model": "qwen/qwen3-coder"
+    },
+    {
+      "type": "text_delta",
+      "text": "Hello"
+    },
+    {
+      "type": "text_delta",
+      "text": " there"
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "inputTokens": 12,
+        "outputTokens": 2,
+        "totalTokens": 14
+      }
+    },
+    {
+      "type": "message_end",
+      "finishReason": "stop"
+    }
+  ],
+  "nonStreaming": null
+}

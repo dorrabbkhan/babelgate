@@ -1,0 +1,60 @@
+{
+  "source": "Hand-written from https://platform.openai.com/docs/api-reference/responses-streaming (two function_call output items serialised per output_index) and codex-rs/codex-api/src/sse/responses.rs at Codex 0.169.0",
+  "date": "2026-11-13",
+  "model": "qwen/qwen3-coder",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "resp_par1",
+      "model": "qwen/qwen3-coder"
+    },
+    {
+      "type": "tool_call_start",
+      "index": 0,
+      "id": "call_1",
+      "name": "get_weather"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "{\"location\":\"Paris\"}"
+    },
+    {
+      "type": "tool_call_end",
+      "index": 0
+    },
+    {
+      "type": "tool_call_start",
+      "index": 1,
+      "id": "call_2",
+      "name": "get_time"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 1,
+      "argumentsDelta": "{\"tz\":"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 1,
+      "argumentsDelta": "\"UTC\"}"
+    },
+    {
+      "type": "tool_call_end",
+      "index": 1
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "inputTokens": 58,
+        "outputTokens": 21,
+        "totalTokens": 79
+      }
+    },
+    {
+      "type": "message_end",
+      "finishReason": "tool_call"
+    }
+  ],
+  "nonStreaming": null
+}

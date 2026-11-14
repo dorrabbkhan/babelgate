@@ -528,10 +528,6 @@ describe("request trace (spec §3.1)", () => {
                   stream: true,
                 },
               ]
-        ).filter(
-          // Responses streaming is a 501 stub until Task 4 — only the
-          // non-streaming chat case is expected to open a trace.
-          ({ stream }) => !(sourceApi === "responses" && stream),
         );
 
         for (const { path, body, stream } of cases) {
