@@ -19,9 +19,15 @@ import type {
   StreamEncoder,
   StreamEncoderContext,
 } from "../../types/canonical.types";
-import type { ResponsesRequest } from "../../types/responses.types";
+import type {
+  ResponsesRequest,
+  ResponsesResponse,
+} from "../../types/responses.types";
 import { formatSse } from "../../utils/sse";
-import { toResponsesUsage } from "./responses.response";
+import {
+  toResponsesResponseObject,
+  toResponsesUsage,
+} from "./responses.response";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Obj = Record<string, any>;
@@ -75,18 +81,24 @@ export function createStreamEncoder(
       type,
     );
 
-  const responseSkeleton = (): Obj => ({
-    // Response object fields per /docs/api-reference/responses/object.
-    id: responseId,
-    object: "response",
-    created_at: createdAt,
-    status: "in_progress",
-    model: ctx.requestedModel,
-    output: [],
-    error: null,
-    incomplete_details: null,
-    store: false,
-  });
+  // The Response object inside every `response.*` frame carries the
+  // unary path's field set via toResponsesResponseObject — the
+  // skeleton just has `output: []`, `status: in_progress` and
+  // `usage: null` (the object reference makes usage nullable;
+  // Codex's `Response.usage` is `Option` — codex-rs/codex-api/src/
+  // sse/responses.rs at Codex 0.169.0).
+  const responseSkeleton = (): ResponsesResponse =>
+    toResponsesResponseObject({
+      id: responseId,
+      createdAt,
+      status: "in_progress",
+      model: ctx.requestedModel,
+      output: [],
+      outputText: "",
+      error: null,
+      incompleteDetails: null,
+      usage: null,
+    });
 
   function closeText(itemStatus = "completed"): string {
     if (openText === undefined) return "";
@@ -174,24 +186,32 @@ export function createStreamEncoder(
 
   function terminalResponse(
     status: "completed" | "incomplete" | "failed",
-    extra?: { error?: Obj; incompleteReason?: string },
-  ): Obj {
-    return {
+    extra?: {
+      error?: { code: string; message: string };
+      incompleteReason?: string;
+    },
+  ): ResponsesResponse {
+    return toResponsesResponseObject({
       id: responseId,
-      object: "response",
-      created_at: createdAt,
+      createdAt,
       status,
-      incomplete_details:
+      incompleteDetails:
         status === "incomplete"
           ? { reason: extra?.incompleteReason ?? "max_output_tokens" }
           : null,
       model: ctx.requestedModel,
       output: emittedItems,
-      output_text: outputText,
+      outputText,
       error: extra?.error ?? null,
-      store: false,
-      ...(usage !== undefined && { usage: toResponsesUsage(usage) }),
-    };
+      // `usage` is always present on a terminal response — the usage
+      // object when canonical usage arrived, `null` otherwise; the
+      // object reference makes the field nullable
+      // (https://platform.openai.com/docs/api-reference/responses/object)
+      // and Codex's `Response.usage` is `Option<ResponseUsage>`
+      // (codex-rs/codex-api/src/sse/responses.rs at Codex 0.169.0).
+      // A `failed` response keeps usage that already arrived.
+      usage: usage === undefined ? null : toResponsesUsage(usage),
+    });
   }
 
   return {
