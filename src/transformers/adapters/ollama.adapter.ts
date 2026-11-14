@@ -6,6 +6,7 @@ import type {
   CanonicalContentPart,
   CanonicalError,
   CanonicalModelList,
+  CanonicalResponseFormat,
   IdGenerator,
   ProviderAdapter,
 } from "../../types/canonical.types";
@@ -16,6 +17,11 @@ import {
 import { ValidationError } from "../../utils/errors";
 import { createIdGenerator, sequentialIds } from "../../utils/ids";
 import { recordNote } from "../../observe/context";
+import {
+  DEFAULT_RESPONSE_FORMAT_NAME,
+  isSchemaObject,
+  noteDroppedFormatExtras,
+} from "../response-format";
 import { systemText } from "../system-text";
 import type {
   OllamaChatRequest,
@@ -120,6 +126,36 @@ export function toCanonicalRequest(
 
   if (request.tools && request.tools.length > 0) {
     result.tools = toCanonicalTools(request.tools);
+  }
+
+  // v1.4 spec §3.5: `format` is the wire schema object for
+  // structured output
+  // (https://docs.ollama.com/capabilities/structured-outputs,
+  // https://docs.ollama.com/api/chat); the string "json" is
+  // schemaless JSON mode → `json_object`. The wire carries no name,
+  // so the canonical side gets the fixed default name. The schema
+  // passes through by reference — never cloned or rewritten.
+  const format = request.format;
+  if (format !== undefined && format !== null) {
+    if (format === "json") {
+      result.responseFormat = { type: "json_object" };
+    } else if (isSchemaObject(format)) {
+      result.responseFormat = {
+        type: "json_schema",
+        name: DEFAULT_RESPONSE_FORMAT_NAME,
+        schema: format,
+      };
+    } else {
+      recordNote(
+        {
+          stage: "decode",
+          adapter: "ollama",
+          code: "field_dropped",
+          path: "format",
+        },
+        "Dropping an unsupported format value",
+      );
+    }
   }
 
   return result;
@@ -287,6 +323,16 @@ export function fromCanonicalRequest(
         );
       }
     }
+  }
+
+  // v1.4 spec §3.5: canonical `json_schema` → `format` carries the
+  // schema object itself, by reference (never a name — the wire has
+  // no slot); `json_object` → `format: "json"`.
+  // https://docs.ollama.com/capabilities/structured-outputs
+  const rf: CanonicalResponseFormat | undefined = request.responseFormat;
+  if (rf !== undefined) {
+    noteDroppedFormatExtras("ollama", rf);
+    result.format = rf.type === "json_object" ? "json" : rf.schema;
   }
 
   // Ollama streams NDJSON by default; send stream:false unless the

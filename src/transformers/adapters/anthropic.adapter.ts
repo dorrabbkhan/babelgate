@@ -7,6 +7,7 @@ import type {
   CanonicalErrorKind,
   CanonicalFinishReason,
   CanonicalModelList,
+  CanonicalResponseFormat,
   CanonicalToolCall,
   ProviderAdapter,
 } from "../../types/canonical.types";
@@ -15,7 +16,13 @@ import {
   makeCanonicalError,
 } from "../../utils/canonical-error";
 import { recordNote } from "../../observe/context";
+import { UnsupportedResponseFormatError } from "../../utils/errors";
 import { budgetFor } from "../reasoning-effort";
+import {
+  DEFAULT_RESPONSE_FORMAT_NAME,
+  isSchemaObject,
+  noteDroppedFormatExtras,
+} from "../response-format";
 import type {
   MessageCreateParams,
   Message,
@@ -127,6 +134,36 @@ export function toCanonicalRequest(
     });
   }
 
+  // v1.4 spec §3.5: `output_config.format {type:"json_schema",
+  // schema}` is the GA structured-output field per
+  // https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+  // (the beta `output_format` + `structured-outputs-2025-11-13`
+  // header is superseded — GA needs no header). It carries no name,
+  // so the canonical side gets the fixed default name; other
+  // `output_config` keys (`effort`) are ignored as before.
+  const format = request.output_config?.format;
+  let responseFormat: CanonicalResponseFormat | undefined;
+  if (format !== undefined && format !== null) {
+    const f = format as unknown as Record<string, unknown>;
+    if (f.type === "json_schema" && isSchemaObject(f.schema)) {
+      responseFormat = {
+        type: "json_schema",
+        name: DEFAULT_RESPONSE_FORMAT_NAME,
+        schema: f.schema,
+      };
+    } else {
+      recordNote(
+        {
+          stage: "decode",
+          adapter: "anthropic",
+          code: "field_dropped",
+          path: "output_config.format",
+        },
+        "Dropping an unsupported output_config.format value",
+      );
+    }
+  }
+
   const result: CanonicalRequest = {
     model: request.model,
     messages,
@@ -137,6 +174,7 @@ export function toCanonicalRequest(
     ...(request.tool_choice && {
       toolChoice: toCanonicalToolChoice(request.tool_choice),
     }),
+    ...(responseFormat !== undefined && { responseFormat }),
     ...(systemPrompt !== undefined && { systemPrompt }),
     config: {
       maxTokens: request.max_tokens,
@@ -464,8 +502,40 @@ export function fromCanonicalRequest(
   }
 
   applyReasoning(result, request);
+  applyResponseFormat(result, request);
 
   return result;
+}
+
+/**
+ * Canonical `responseFormat` → `output_config.format` (v1.4 spec
+ * §3.5): `{type:"json_schema", schema}` per the GA structured-outputs
+ * doc
+ * (https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+ * — the beta `output_format` + `structured-outputs-2025-11-13` header
+ * is superseded; GA needs no header). `output_config` is shared with
+ * reasoning effort (Task 6): `format` merges into the object, never
+ * overwrites it. `json_object` is a 400 `unsupported_response_format`
+ * — Anthropic has no schemaless JSON mode. `name` is never sent;
+ * `strict`/`description` have no slot (schema conformance is inherent
+ * to the grammar-constrained decode) and are noted.
+ */
+function applyResponseFormat(
+  result: MessageCreateParams,
+  request: CanonicalRequest,
+): void {
+  const rf = request.responseFormat;
+  if (rf === undefined) return;
+  if (rf.type === "json_object") {
+    throw new UnsupportedResponseFormatError(
+      'Anthropic does not support response format "json_object" (no schemaless JSON mode)',
+    );
+  }
+  noteDroppedFormatExtras("anthropic", rf);
+  result.output_config = {
+    ...result.output_config,
+    format: { type: "json_schema", schema: rf.schema },
+  };
 }
 
 // ============ RESPONSE: Anthropic → Canonical ============

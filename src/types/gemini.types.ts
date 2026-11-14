@@ -49,6 +49,17 @@ export type GeminiTool = GeminiToolType;
 export type GeminiRole = 'user' | 'model';
 
 /**
+ * REST GenerationConfig fields the SDK omits: `responseJsonSchema`
+ * (a JSON Schema alternative to the OpenAPI-subset `responseSchema`)
+ * per https://ai.google.dev/api/generate-content#GenerationConfig —
+ * when set, `responseMimeType` must be `application/json` and
+ * `responseSchema` is omitted (v1.4 spec §3.5).
+ */
+export type GeminiGenerationConfig = GenerationConfig & {
+  responseJsonSchema?: Record<string, unknown>;
+};
+
+/**
  * REST wire shapes the SDK types don't cover: `functionCall.id` and
  * `functionResponse.id` are optional in the API
  * (https://ai.google.dev/api/generate-content#FunctionCall) but absent

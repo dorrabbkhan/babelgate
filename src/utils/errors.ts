@@ -82,6 +82,23 @@ export class UnsupportedParameterError extends ValidationError {
   }
 }
 
+/**
+ * 400 for a canonical response format the target dialect cannot
+ * express (v1.4 spec §3.5: `json_object` on Anthropic, which has no
+ * schemaless JSON mode). Canonical kind `invalid_request` with
+ * `code: "unsupported_response_format"` for the envelopes that carry
+ * a code. Thrown from encode — the error names a shape, never
+ * content.
+ */
+export class UnsupportedResponseFormatError extends ValidationError {
+  toCanonical(): CanonicalError {
+    return {
+      ...super.toCanonical(),
+      code: "unsupported_response_format",
+    };
+  }
+}
+
 export class TransformError extends ProxyError {
   constructor(message: string, context?: Record<string, unknown>) {
     super(message, 500, "TRANSFORM_ERROR", context);

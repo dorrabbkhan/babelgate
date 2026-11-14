@@ -32,6 +32,7 @@ import type {
   CanonicalErrorKind,
   CanonicalMessage,
   CanonicalModelList,
+  CanonicalResponseFormat,
   CanonicalTool,
   ProviderAdapter,
 } from "../../types/canonical.types";
@@ -57,6 +58,7 @@ import {
   toResponsesTool,
   toResponsesToolChoice,
 } from "./responses.tools";
+import { isSchemaObject } from "../response-format";
 import {
   toCanonicalResponse,
   fromCanonicalResponse,
@@ -103,11 +105,13 @@ function note(
  * §2.2). The stateful set (`previous_response_id`, `conversation`,
  * `store: true`) is refused earlier — in proxy.service before
  * routing — so this list is the tolerated remainder: caching hints,
- * tiering, tracing metadata, `text`, and the fields later tasks own
- * (`include` reasoning items → Task 8, `text.format` → Task 9).
+ * tiering, tracing metadata, and the fields later tasks own
+ * (`include` reasoning items → Task 8).
  * `reasoning` and `include` are decoded (Task 6): `reasoning` maps to
  * `config.reasoning`, and `include: ["reasoning.encrypted_content"]`
- * marks the client as reasoning-capable.
+ * marks the client as reasoning-capable. `text.format` is decoded
+ * (Task 9); `text`'s other keys (`verbosity` et al.) keep the
+ * `field_dropped` note on `text`.
  * Names per the create reference and SDK `ResponseCreateParamsBase`
  * (openai 7.30.1); `client_metadata` is evidenced only by codex-rs +
  * the recording — see the file header.
@@ -121,7 +125,6 @@ const DROPPED_REQUEST_FIELDS = [
   "client_metadata",
   "safety_identifier",
   "user",
-  "text",
   "truncation",
   "background",
   "prompt",
@@ -180,6 +183,7 @@ export function toCanonicalRequest(
     .filter((t): t is CanonicalTool => t !== undefined);
 
   const reasoning = toCanonicalReasoning(request);
+  const responseFormat = toCanonicalResponseFormat(request.text);
 
   return {
     model: request.model as string,
@@ -187,6 +191,7 @@ export function toCanonicalRequest(
     ...(systemTexts.length > 0 && {
       systemPrompt: systemTexts.join("\n\n"),
     }),
+    ...(responseFormat !== undefined && { responseFormat }),
     config: {
       ...(typeof request.temperature === "number" && {
         temperature: request.temperature,
@@ -209,6 +214,79 @@ export function toCanonicalRequest(
   };
 }
 
+
+/**
+ * `text.format` → canonical `responseFormat` (v1.4 spec §3.5). Wire
+ * fields per the create reference
+ * (https://platform.openai.com/docs/api-reference/responses/create)
+ * and SDK `ResponseTextConfig`/`ResponseFormatTextConfig` (openai
+ * 7.30.1): `{type:"json_schema", name, schema, strict?, description?}`
+ * and `{type:"json_object"}`; `{type:"text"}` is the documented
+ * default — no constraint, decoded silently. `text`'s other keys
+ * (`verbosity` — which Codex sends — et al.) keep the `field_dropped`
+ * note on `text`; a non-object `text` keeps its note too. The schema
+ * object passes through by reference — never cloned or rewritten
+ * (§3.5: schemas are never weakened).
+ */
+function toCanonicalResponseFormat(
+  text: ResponsesRequest["text"],
+): CanonicalResponseFormat | undefined {
+  if (text === undefined) return undefined;
+  if (text === null || typeof text !== "object" || Array.isArray(text)) {
+    note(
+      "field_dropped",
+      "text",
+      'Dropping request field "text" (not an object)',
+    );
+    return undefined;
+  }
+  const t = text as { format?: unknown };
+  if (Object.keys(t).some((key) => key !== "format")) {
+    note(
+      "field_dropped",
+      "text",
+      'Dropping request field "text" keys with no canonical equivalent',
+    );
+  }
+  const format = t.format;
+  if (format === undefined || format === null) return undefined;
+  if (
+    typeof format !== "object" ||
+    Array.isArray(format)
+  ) {
+    note(
+      "field_dropped",
+      "text.format",
+      'Dropping request field "text.format" (not an object)',
+    );
+    return undefined;
+  }
+  const f = format as Record<string, unknown>;
+  if (f.type === "text") return undefined;
+  if (f.type === "json_object") return { type: "json_object" };
+  if (
+    f.type === "json_schema" &&
+    typeof f.name === "string" &&
+    f.name !== "" &&
+    isSchemaObject(f.schema)
+  ) {
+    return {
+      type: "json_schema",
+      name: f.name,
+      schema: f.schema,
+      ...(typeof f.strict === "boolean" && { strict: f.strict }),
+      ...(typeof f.description === "string" && {
+        description: f.description,
+      }),
+    };
+  }
+  note(
+    "field_dropped",
+    "text.format",
+    "Dropping an unsupported text.format value",
+  );
+  return undefined;
+}
 
 /**
  * `reasoning` + `include` → `config.reasoning` (v1.4 spec §3.3, the
@@ -373,6 +451,11 @@ export function fromCanonicalRequest(
         request.tools,
       ),
     }),
+    // v1.4 spec §3.5: `text.format` per the create reference + SDK
+    // ResponseFormatTextConfig — `text`'s other keys are untouched.
+    ...(request.responseFormat !== undefined && {
+      text: { format: toWireFormat(request.responseFormat) },
+    }),
   };
 
   const reasoning = request.config?.reasoning;
@@ -404,6 +487,27 @@ export function fromCanonicalRequest(
     }
   }
   return result as unknown as ResponsesRequest;
+}
+
+/**
+ * Canonical `responseFormat` → `text.format` value (v1.4 spec §3.5):
+ * `json_schema` → `{type:"json_schema", name, schema, strict?,
+ * description?}`, `json_object` → `{type:"json_object"}`. The schema
+ * passes through by reference — never cloned or rewritten.
+ */
+function toWireFormat(
+  format: CanonicalResponseFormat,
+): Record<string, unknown> {
+  if (format.type === "json_object") return { type: "json_object" };
+  return {
+    type: "json_schema",
+    name: format.name,
+    schema: format.schema,
+    ...(format.strict !== undefined && { strict: format.strict }),
+    ...(format.description !== undefined && {
+      description: format.description,
+    }),
+  };
 }
 
 

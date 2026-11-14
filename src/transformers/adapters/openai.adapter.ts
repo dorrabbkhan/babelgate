@@ -9,6 +9,7 @@ import type {
   CanonicalErrorKind,
   CanonicalImage,
   CanonicalModelList,
+  CanonicalResponseFormat,
   CanonicalToolChoice,
   CanonicalUsage,
   ProviderAdapter,
@@ -26,6 +27,7 @@ import type {
   ChatCompletionMessageParam,
   OpenAICompatibleUsage,
 } from "../../types/openai.types";
+import { isSchemaObject } from "../response-format";
 import {
   createStreamDecoder,
   createStreamEncoder,
@@ -77,9 +79,14 @@ export function toCanonicalRequest(
     );
   }
 
+  const responseFormat = toCanonicalResponseFormat(
+    request.response_format,
+  );
+
   return {
     model: request.model,
     messages,
+    ...(responseFormat !== undefined && { responseFormat }),
     ...(systemPrompt && { systemPrompt }),
     config: {
       ...(request.temperature !== undefined &&
@@ -113,6 +120,52 @@ export function toCanonicalRequest(
       toolChoice: toCanonicalToolChoice(request.tool_choice),
     }),
   };
+}
+
+/**
+ * `response_format` → canonical `responseFormat` (v1.4 spec §3.5).
+ * Wire fields per the Chat Completions reference
+ * (https://platform.openai.com/docs/api-reference/chat/create):
+ * `{type:"json_schema", json_schema:{name, schema, strict?,
+ * description?}}`, `{type:"json_object"}`; `{type:"text"}` is the
+ * documented default — no constraint, decoded silently. The schema
+ * object passes through by reference — never cloned or rewritten.
+ */
+function toCanonicalResponseFormat(
+  format: ChatCompletionRequest["response_format"],
+): CanonicalResponseFormat | undefined {
+  if (format === undefined || format === null) return undefined;
+  const f = format as unknown as Record<string, unknown>;
+  if (f.type === "text") return undefined;
+  if (f.type === "json_object") return { type: "json_object" };
+  if (f.type === "json_schema" && isSchemaObject(f.json_schema)) {
+    const js = f.json_schema;
+    if (
+      typeof js.name === "string" &&
+      js.name !== "" &&
+      isSchemaObject(js.schema)
+    ) {
+      return {
+        type: "json_schema",
+        name: js.name,
+        schema: js.schema,
+        ...(typeof js.strict === "boolean" && { strict: js.strict }),
+        ...(typeof js.description === "string" && {
+          description: js.description,
+        }),
+      };
+    }
+  }
+  recordNote(
+    {
+      stage: "decode",
+      adapter: "openai",
+      code: "field_dropped",
+      path: "response_format",
+    },
+    "Dropping an unsupported response_format value",
+  );
+  return undefined;
 }
 
 function toCanonicalTools(
@@ -380,6 +433,28 @@ export function fromCanonicalRequest(
   if (request.parallelToolCalls !== undefined) {
     (result as { parallel_tool_calls?: boolean }).parallel_tool_calls =
       request.parallelToolCalls;
+  }
+
+  // v1.4 spec §3.5: `response_format` per the Chat Completions
+  // reference — json_schema nests under `json_schema` and keeps
+  // name/strict/description; json_object is bare. The schema passes
+  // through by reference — never cloned or rewritten.
+  if (request.responseFormat !== undefined) {
+    const rf = request.responseFormat;
+    (result as { response_format?: unknown }).response_format =
+      rf.type === "json_object"
+        ? { type: "json_object" }
+        : {
+            type: "json_schema",
+            json_schema: {
+              name: rf.name,
+              schema: rf.schema,
+              ...(rf.strict !== undefined && { strict: rf.strict }),
+              ...(rf.description !== undefined && {
+                description: rf.description,
+              }),
+            },
+          };
   }
 
   if (request.stream !== undefined) {
