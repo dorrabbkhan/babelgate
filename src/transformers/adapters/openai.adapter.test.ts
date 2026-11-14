@@ -950,4 +950,103 @@ describe('OpenAI Adapter', () => {
       });
     });
   });
+
+  describe('response format (v1.4 spec §3.5)', () => {
+    const SCHEMA = {
+      type: 'object',
+      $defs: { cents: { type: 'number', minimum: 0 } },
+      properties: {
+        name: { type: 'string' },
+        price: { $ref: '#/$defs/cents' },
+        opts: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    } as const;
+
+    function deepFreeze<T>(value: T): T {
+      if (typeof value === 'object' && value !== null) {
+        for (const v of Object.values(value)) deepFreeze(v);
+        Object.freeze(value);
+      }
+      return value;
+    }
+
+    it('json_schema round-trips unchanged', () => {
+      const schema = deepFreeze({ ...SCHEMA });
+      const wire = {
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'answer',
+            schema,
+            strict: true,
+            description: 'the answer',
+          },
+        },
+      } as unknown as ChatCompletionRequest;
+
+      const canonical = toCanonicalRequest(wire);
+      expect(canonical.responseFormat).toEqual({
+        type: 'json_schema',
+        name: 'answer',
+        schema,
+        strict: true,
+        description: 'the answer',
+      });
+      // The schema object is passed through, never cloned-and-edited.
+      expect(
+        canonical.responseFormat?.type === 'json_schema' &&
+          canonical.responseFormat.schema,
+      ).toBe(schema);
+
+      const out = fromCanonicalRequest(canonical) as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(out.response_format).toEqual({
+        type: 'json_schema',
+        json_schema: {
+          name: 'answer',
+          schema,
+          strict: true,
+          description: 'the answer',
+        },
+      });
+    });
+
+    it('json_object mapping', () => {
+      const canonical = toCanonicalRequest({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        response_format: { type: 'json_object' },
+      } as unknown as ChatCompletionRequest);
+      expect(canonical.responseFormat).toEqual({ type: 'json_object' });
+
+      const out = fromCanonicalRequest(canonical) as unknown as Record<
+        string,
+        unknown
+      >;
+      expect(out.response_format).toEqual({ type: 'json_object' });
+    });
+
+    it('an unknown response_format type is dropped with a note', () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: 'm',
+          messages: [{ role: 'user', content: 'hi' }],
+          response_format: { type: 'xml_schema' },
+        } as unknown as ChatCompletionRequest),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'openai',
+        code: 'field_dropped',
+        path: 'response_format',
+      });
+    });
+  });
 });

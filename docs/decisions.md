@@ -4492,3 +4492,85 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   `exec_command` and the `web_search` drop are unchanged. The committed codex
   fixture carries a real `namespace` tool (E13); Task 3 recorded it dropped,
   decode now carries it.
+
+## v1.4 Task 9: Structured output, all five adapters (spec §3.5, Review Focus 5)
+
+- **No canonical changes.** `CanonicalResponseFormat` and the
+  `responseFormat` request field already exist (Task 2) with `name`
+  required on `json_schema` (`tests/contracts/canonical.schema.test.ts`);
+  nothing in `canonical.types.ts` or `canonical.schema.ts` moved.
+- **Fixed default name for nameless wire formats.** Anthropic
+  `output_config.format`, Gemini `responseJsonSchema`/`responseSchema`
+  and Ollama `format` carry a schema but no name, so their decoders
+  supply the constant `"response"`
+  (`DEFAULT_RESPONSE_FORMAT_NAME` in `src/transformers/response-format.ts`)
+  — fixed, never derived from schema/request/model content. The
+  encoders on those dialects never send `name`; the OpenAI Chat and
+  Responses encoders send the canonical `name` they decoded.
+- **Wire fields, per-field doc evidence** (each cited in a code comment
+  at the encode/decode site too):
+  - OpenAI Chat `response_format` — `{type:"json_schema",
+    json_schema:{name,schema,strict?,description?}}`,
+    `{type:"json_object"}`, `{type:"text"}` (default, decoded silently):
+    https://platform.openai.com/docs/api-reference/chat/create
+  - Responses `text.format` — same shape set, `{type:"text"}` default:
+    https://platform.openai.com/docs/api-reference/responses/create
+    (+ openai 7.30.1 SDK `ResponseTextConfig`/`ResponseFormatTextConfig`).
+    `text`'s other keys (`verbosity` — Codex sends it) are untouched and
+    keep the existing `field_dropped` note on `text`.
+  - Anthropic `output_config.format` — `{type:"json_schema", schema}`:
+    https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+    (+ SDK `OutputConfig.format`). The GA field name is `output_config.format`;
+    the older beta `output_format` + `structured-outputs-2025-11-13`
+    header is superseded and GA needs **no beta header**. `format` merges
+    into the `output_config` object Task 6's `effort` writes — never
+    overwrites it. `json_object` throws `UnsupportedResponseFormatError`
+    → canonical `unsupported_response_format` → 400, because Anthropic
+    has no schemaless JSON mode. `strict`/`description` have no wire
+    slot (schema conformance is inherent to the grammar-constrained
+    decode) → `field_dropped` notes.
+  - Gemini `generationConfig` — `responseJsonSchema` (JSON Schema),
+    `responseSchema` (OpenAPI-subset), `responseMimeType`:
+    https://ai.google.dev/api/generate-content#GenerationConfig and
+    https://ai.google.dev/gemini-api/docs/structured-output .
+    `responseJsonSchema` is the preferred decode source; a lone
+    `responseSchema` decodes the same way. Encode emits
+    `responseJsonSchema` + `responseMimeType:"application/json"`
+    (`json_object` → the MIME type alone). `responseMimeType:"text/plain"`
+    is the documented default → no format; other values note-drop.
+    The v1.2 tool-parameter sanitiser `toGeminiSchema` is never applied
+    to response schemas — the schema passes through by reference.
+  - Ollama `format` — a schema object for structured output or the
+    string `"json"` for schemaless JSON:
+    https://docs.ollama.com/capabilities/structured-outputs and
+    https://docs.ollama.com/api/chat . Encode emits the schema object
+    verbatim in `format` (`json_object` → `"json"`); any other `format`
+    value note-drops on decode.
+- **Schema identity.** The encoded upstream body holds the same schema
+  object reference as the canonical request — never cloned, normalized
+  or rewritten anywhere (deep-frozen `$ref`/`$defs`/`anyOf`/`minimum`/
+  `additionalProperties:false` schemas pass through on all five
+  dialects, pinned by the per-adapter tests).
+- **Review Focus 5 (400 before first byte while streaming).** A
+  streaming Responses request whose Gemini upstream answers 400 before
+  the first byte surfaces as an HTTP 400 JSON body in the Responses
+  error envelope — never `text/event-stream` — with trace status
+  `error`, exactly one hop (`x-babelgate-attempts: 1`), and no fallback
+  (400 ∉ `FALLBACK_STATUSES`). Existing services already do this; the
+  new integration test pins it.
+- **Schemas are content.** Notes and telemetry carry paths/types only;
+  no schema text is logged anywhere (privacy rule unchanged).
+- **Files outside the Files block:**
+  - `src/transformers/response-format.ts` (new) — shared helpers
+    (`isSchemaObject`, `DEFAULT_RESPONSE_FORMAT_NAME`,
+    `noteDroppedFormatExtras`) so five adapters don't each re-implement
+    schema-object narrowing and the dropped-extras note. Like
+    `system-text.ts`/`reasoning-effort.ts`, it holds no provider
+    knowledge — every helper takes the adapter name.
+  - `src/utils/errors.ts` — `UnsupportedResponseFormatError extends
+    ValidationError` with canonical code `unsupported_response_format`,
+    needed for the Anthropic `json_object` 400 (no other file exposes a
+    400 carrying a custom canonical code).
+  - `src/types/gemini.types.ts` is inside "matching src/types/*.types.ts"
+    — it gained `GeminiGenerationConfig` (SDK `GenerationConfig` +
+    `responseJsonSchema`, a REST field the SDK omits).

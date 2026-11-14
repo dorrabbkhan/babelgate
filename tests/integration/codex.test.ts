@@ -1082,3 +1082,98 @@ describe("non-Responses sources are byte-identical to 1.3", () => {
     },
   );
 });
+
+// ===== v1.4 Task 9: structured output (spec §3.5) =====
+
+describe("structured output (v1.4 spec §3.5)", () => {
+  const SCHEMA = {
+    type: "object",
+    properties: { name: { type: "string" } },
+    required: ["name"],
+    additionalProperties: false,
+  };
+
+  it("schema rejected upstream surfaces as a responses error (Review Focus 5)", async () => {
+    // A streaming Responses request whose Gemini upstream answers 400
+    // before the first byte: the client gets an HTTP 400 JSON body in
+    // the Responses error envelope (never a half-open SSE), the trace
+    // records the error, and the 400 is non-retryable — the openai
+    // fallback is never tried.
+    const yaml = `default: main
+providers:
+  main:
+    type: gemini
+    base_url: ${MOCK_BASE_URLS.gemini}
+    api_key_env: GEMINI_API_KEY
+  good:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+routes:
+  - match: "*"
+    to: main/m
+    fallback: [good/m]
+`;
+    useTarget("gemini", yaml);
+    // Gemini error envelope: https://ai.google.dev/api/rest#body.Error
+    responseOverrides.gemini = {
+      status: 400,
+      body: {
+        error: {
+          code: 400,
+          message: "Invalid JSON payload received. Schema unsupported.",
+          status: "INVALID_ARGUMENT",
+        },
+      },
+    };
+
+    const before = traces.length;
+    const res = await postResponsesStream({
+      model: "gpt-5-codex",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "extract a name" }],
+        },
+      ],
+      store: false,
+      stream: true,
+      text: {
+        format: { type: "json_schema", name: "extract", schema: SCHEMA },
+      },
+    });
+
+    // JSON error envelope, not an SSE stream.
+    expect(res.status).toBe(400);
+    expect(res.headers["content-type"]).toContain("application/json");
+    const body =
+      typeof res.body === "string" ? JSON.parse(res.body) : res.body;
+    expect(body.error).toMatchObject({
+      type: "invalid_request_error",
+      message: "Invalid JSON payload received. Schema unsupported.",
+    });
+    expect(res.headers["x-babelgate-attempts"]).toBe("1");
+
+    // One upstream hop; the schema reached Gemini unchanged.
+    expect(capturedRequests.gemini).toHaveLength(1);
+    expect(
+      (capturedRequests.gemini[0] as Record<string, unknown>)
+        .generationConfig,
+    ).toMatchObject({
+      responseJsonSchema: SCHEMA,
+      responseMimeType: "application/json",
+    });
+    // A 400 is not fallback-eligible: the openai fallback is untouched.
+    expect(capturedRequests.openai).toHaveLength(0);
+
+    const trace = traces[before];
+    expect(trace?.status).toBe("error");
+    expect(trace?.hops).toHaveLength(1);
+    expect(trace?.hops[0]).toMatchObject({
+      provider: "main",
+      outcome: "http_error",
+      status: 400,
+    });
+  });
+});

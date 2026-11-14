@@ -1208,4 +1208,128 @@ describe('cache hints on tool results (Task 17a)', () => {
       });
     });
   });
+
+  describe('response format (v1.4 spec §3.5)', () => {
+    const SCHEMA = {
+      type: 'object',
+      $defs: { cents: { type: 'number', minimum: 0 } },
+      properties: {
+        name: { type: 'string' },
+        price: { $ref: '#/$defs/cents' },
+        opts: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    } as const;
+
+    function deepFreeze<T>(value: T): T {
+      if (typeof value === 'object' && value !== null) {
+        for (const v of Object.values(value)) deepFreeze(v);
+        Object.freeze(value);
+      }
+      return value;
+    }
+
+    it('json_schema round-trips unchanged', () => {
+      const schema = deepFreeze({ ...SCHEMA });
+      const wire = {
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseJsonSchema: schema,
+        },
+      } as unknown as GenerateContentRequest;
+
+      const canonical = toCanonicalRequest(wire);
+      // responseJsonSchema carries no name — the canonical side gets
+      // the fixed default name.
+      expect(canonical.responseFormat).toEqual({
+        type: 'json_schema',
+        name: 'response',
+        schema,
+      });
+      // The schema object is passed through, never cloned-and-edited.
+      expect(
+        canonical.responseFormat?.type === 'json_schema' &&
+          canonical.responseFormat.schema,
+      ).toBe(schema);
+
+      const out = fromCanonicalRequest(canonical) as GenerateContentRequest;
+      // The v1.2 tool-parameter sanitiser never touches
+      // responseJsonSchema: $defs/$ref/anyOf/minimum/
+      // additionalProperties all survive.
+      const gc = out.generationConfig as
+        | Record<string, unknown>
+        | undefined;
+      expect(gc?.responseJsonSchema).toEqual(schema);
+      expect(gc?.responseMimeType).toBe('application/json');
+      // The encoder never sends the canonical name.
+      expect(out.generationConfig).not.toHaveProperty(
+        'responseSchema',
+      );
+    });
+
+    it('responseSchema decodes to the same canonical schema', () => {
+      const schema = { ...SCHEMA };
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          responseMimeType: 'application/json',
+          responseSchema: schema,
+        },
+      } as unknown as GenerateContentRequest);
+
+      expect(canonical.responseFormat).toEqual({
+        type: 'json_schema',
+        name: 'response',
+        schema,
+      });
+      expect(
+        canonical.responseFormat?.type === 'json_schema' &&
+          canonical.responseFormat.schema,
+      ).toBe(schema);
+    });
+
+    it('responseMimeType application/json alone is json_object', () => {
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: { responseMimeType: 'application/json' },
+      } as GenerateContentRequest);
+
+      expect(canonical.responseFormat).toEqual({ type: 'json_object' });
+    });
+
+    it('json_object mapping', () => {
+      const out = fromCanonicalRequest({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        responseFormat: { type: 'json_object' },
+      }) as GenerateContentRequest;
+
+      expect(out.generationConfig).toEqual({
+        responseMimeType: 'application/json',
+      });
+    });
+
+    it('an unknown responseMimeType is dropped with a note', () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+          generationConfig: { responseMimeType: 'text/x.enum' },
+        } as GenerateContentRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: { responseMimeType: 'text/x.enum' },
+      } as GenerateContentRequest);
+      expect(canonical.responseFormat).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'gemini',
+        code: 'field_dropped',
+        path: 'generationConfig.responseMimeType',
+      });
+    });
+  });
 });

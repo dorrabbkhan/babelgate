@@ -977,4 +977,88 @@ describe("cache hints on tool results (Task 17a)", () => {
       });
     });
   });
+
+  describe("response format (v1.4 spec §3.5)", () => {
+    const SCHEMA = {
+      type: "object",
+      $defs: { cents: { type: "number", minimum: 0 } },
+      properties: {
+        name: { type: "string" },
+        price: { $ref: "#/$defs/cents" },
+        opts: { anyOf: [{ type: "string" }, { type: "integer" }] },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    } as const;
+
+    function deepFreeze<T>(value: T): T {
+      if (typeof value === "object" && value !== null) {
+        for (const v of Object.values(value)) deepFreeze(v);
+        Object.freeze(value);
+      }
+      return value;
+    }
+
+    it("json_schema round-trips unchanged", () => {
+      const schema = deepFreeze({ ...SCHEMA });
+      const wire = {
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        format: schema,
+      } as unknown as OllamaChatRequest;
+
+      const canonical = toCanonicalRequest(wire);
+      // `format` carries no name — the canonical side gets the fixed
+      // default name.
+      expect(canonical.responseFormat).toEqual({
+        type: "json_schema",
+        name: "response",
+        schema,
+      });
+      // The schema object is passed through, never cloned-and-edited.
+      expect(
+        canonical.responseFormat?.type === "json_schema" &&
+          canonical.responseFormat.schema,
+      ).toBe(schema);
+
+      const out = fromCanonicalRequest(canonical) as OllamaChatRequest;
+      // The encoder never sends the canonical name.
+      expect(out.format).toEqual(schema);
+    });
+
+    it("json_object mapping", () => {
+      const canonical = toCanonicalRequest({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        format: "json",
+      } as unknown as OllamaChatRequest);
+      expect(canonical.responseFormat).toEqual({ type: "json_object" });
+
+      const out = fromCanonicalRequest(canonical) as OllamaChatRequest;
+      expect(out.format).toBe("json");
+    });
+
+    it("an unknown format value is dropped with a note", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          messages: [{ role: "user", content: "hi" }],
+          format: 42,
+        } as unknown as OllamaChatRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        format: 42,
+      } as unknown as OllamaChatRequest);
+      expect(canonical.responseFormat).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "ollama",
+        code: "field_dropped",
+        path: "format",
+      });
+    });
+  });
 });

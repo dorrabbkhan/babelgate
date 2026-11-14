@@ -10,6 +10,7 @@ import type {
   CanonicalFinishReason,
   ProviderAdapter,
   CanonicalModelList,
+  CanonicalResponseFormat,
   CanonicalUsage,
   IdGenerator,
 } from "../../types/canonical.types";
@@ -25,11 +26,17 @@ import {
   nearestSupported,
   type Effort,
 } from "../reasoning-effort";
+import {
+  DEFAULT_RESPONSE_FORMAT_NAME,
+  isSchemaObject,
+  noteDroppedFormatExtras,
+} from "../response-format";
 import { systemText } from "../system-text";
 import type {
   Content,
   GenerateContentRequest,
   GenerateContentResponse,
+  GeminiGenerationConfig,
   Part,
   GeminiRole,
   GeminiToolConfig,
@@ -186,7 +193,85 @@ export function toCanonicalRequest(
     };
   }
 
+  // v1.4 spec §3.5: `generationConfig.responseJsonSchema` (JSON
+  // Schema) and the OpenAPI-subset `responseSchema` both decode to
+  // the same canonical schema, unchanged;
+  // `responseMimeType: "application/json"` alone is `json_object`.
+  // Field names per
+  // https://ai.google.dev/api/generate-content#GenerationConfig.
+  // Neither wire field carries a name → the canonical side gets the
+  // fixed default name. The schema passes through by reference.
+  const wireGc = request.generationConfig as
+    | GeminiGenerationConfig
+    | undefined;
+  const responseFormat = toCanonicalResponseFormat(wireGc);
+  if (responseFormat !== undefined) {
+    result.responseFormat = responseFormat;
+  }
+
   return result;
+}
+
+function toCanonicalResponseFormat(
+  gc: GeminiGenerationConfig | undefined,
+): CanonicalResponseFormat | undefined {
+  if (gc === undefined || gc === null) return undefined;
+
+  let format: CanonicalResponseFormat | undefined;
+  const note = (path: string, message: string): void =>
+    recordNote(
+      { stage: "decode", adapter: "gemini", code: "field_dropped", path },
+      message,
+    );
+
+  const jsonSchema = gc.responseJsonSchema;
+  if (jsonSchema !== undefined) {
+    if (isSchemaObject(jsonSchema)) {
+      format = {
+        type: "json_schema",
+        name: DEFAULT_RESPONSE_FORMAT_NAME,
+        schema: jsonSchema,
+      };
+      if (gc.responseSchema !== undefined) {
+        note(
+          "generationConfig.responseSchema",
+          'Dropping "responseSchema" (superseded by responseJsonSchema)',
+        );
+      }
+    } else {
+      note(
+        "generationConfig.responseJsonSchema",
+        'Dropping "responseJsonSchema" (not a schema object)',
+      );
+    }
+  } else if (gc.responseSchema !== undefined) {
+    if (isSchemaObject(gc.responseSchema)) {
+      format = {
+        type: "json_schema",
+        name: DEFAULT_RESPONSE_FORMAT_NAME,
+        schema: gc.responseSchema as Record<string, unknown>,
+      };
+    } else {
+      note(
+        "generationConfig.responseSchema",
+        'Dropping "responseSchema" (not a schema object)',
+      );
+    }
+  }
+
+  const mime = gc.responseMimeType;
+  if (mime === "application/json") {
+    // A schema wins; mime alone is the schemaless JSON mode.
+    format ??= { type: "json_object" };
+  } else if (mime !== undefined && mime !== "text/plain") {
+    // "text/plain" is the documented default — absent meaning.
+    note(
+      "generationConfig.responseMimeType",
+      'Dropping an unsupported "responseMimeType" value',
+    );
+  }
+
+  return format;
 }
 
 function extractTextFromInstruction(
@@ -566,20 +651,38 @@ export function fromCanonicalRequest(
   }
 
   // Add generation config
-  if (request.config) {
+  const rf = request.responseFormat;
+  if (request.config || rf !== undefined) {
     const c = request.config;
     const thinkingConfig = toThinkingConfig(request);
-    result.generationConfig = {
-      ...(c.temperature !== undefined && { temperature: c.temperature }),
-      ...(c.maxTokens !== undefined && { maxOutputTokens: c.maxTokens }),
-      ...(c.topP !== undefined && { topP: c.topP }),
-      ...(c.topK !== undefined && { topK: c.topK }),
-      ...(c.stopSequences && { stopSequences: c.stopSequences }),
-      ...(c.candidateCount !== undefined && {
+    const gc: Record<string, unknown> = {
+      ...(c?.temperature !== undefined && { temperature: c.temperature }),
+      ...(c?.maxTokens !== undefined && { maxOutputTokens: c.maxTokens }),
+      ...(c?.topP !== undefined && { topP: c.topP }),
+      ...(c?.topK !== undefined && { topK: c.topK }),
+      ...(c?.stopSequences && { stopSequences: c.stopSequences }),
+      ...(c?.candidateCount !== undefined && {
         candidateCount: c.candidateCount,
       }),
       ...(thinkingConfig !== undefined && { thinkingConfig }),
     };
+    if (rf !== undefined) {
+      // v1.4 spec §3.5: `responseJsonSchema` is the JSON-Schema field
+      // (never the v1.2 tool-parameter sanitiser `toGeminiSchema` —
+      // the schema passes through by reference, unchanged);
+      // `responseMimeType: "application/json"` is required alongside
+      // it and alone encodes `json_object`. Field names per
+      // https://ai.google.dev/api/generate-content#GenerationConfig.
+      // `name`/`strict`/`description` have no wire slot — extras are
+      // noted, `name` never sent.
+      noteDroppedFormatExtras("gemini", rf);
+      gc.responseMimeType = "application/json";
+      if (rf.type === "json_schema") {
+        gc.responseJsonSchema = rf.schema;
+      }
+    }
+    result.generationConfig =
+      gc as GenerateContentRequest["generationConfig"];
   }
 
   return result;

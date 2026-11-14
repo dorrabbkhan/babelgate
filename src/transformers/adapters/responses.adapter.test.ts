@@ -1645,4 +1645,132 @@ describe("Responses adapter", () => {
       expect(events.at(-1)?.type).toBe("message_end");
     });
   });
+
+  describe("response format (v1.4 spec §3.5)", () => {
+    const SCHEMA = {
+      type: "object",
+      $defs: { cents: { type: "number", minimum: 0 } },
+      properties: {
+        name: { type: "string" },
+        price: { $ref: "#/$defs/cents" },
+        opts: { anyOf: [{ type: "string" }, { type: "integer" }] },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    } as const;
+
+    function deepFreeze<T>(value: T): T {
+      if (typeof value === "object" && value !== null) {
+        for (const v of Object.values(value)) deepFreeze(v);
+        Object.freeze(value);
+      }
+      return value;
+    }
+
+    const request = (text: unknown): ResponsesRequest =>
+      ({ model: "m", input: "hi", text }) as unknown as ResponsesRequest;
+
+    it("json_schema round-trips unchanged", () => {
+      const schema = deepFreeze({ ...SCHEMA });
+      const format = {
+        type: "json_schema",
+        name: "answer",
+        schema,
+        strict: true,
+        description: "the answer",
+      };
+
+      const canonical = toCanonicalRequest(request({ format }));
+      expect(canonical.responseFormat).toEqual({
+        type: "json_schema",
+        name: "answer",
+        schema,
+        strict: true,
+        description: "the answer",
+      });
+      // The schema object is passed through, never cloned-and-edited.
+      expect(
+        canonical.responseFormat?.type === "json_schema" &&
+          canonical.responseFormat.schema,
+      ).toBe(schema);
+
+      const wire = fromCanonicalRequest(canonical) as Record<
+        string,
+        unknown
+      >;
+      expect(wire.text).toEqual({
+        format: {
+          type: "json_schema",
+          name: "answer",
+          schema,
+          strict: true,
+          description: "the answer",
+        },
+      });
+    });
+
+    it("json_object mapping", () => {
+      const canonical = toCanonicalRequest(
+        request({ format: { type: "json_object" } }),
+      );
+      expect(canonical.responseFormat).toEqual({ type: "json_object" });
+
+      const wire = fromCanonicalRequest(canonical) as Record<
+        string,
+        unknown
+      >;
+      expect(wire.text).toEqual({ format: { type: "json_object" } });
+    });
+
+    it("text verbosity stays dropped alongside a decoded format", () => {
+      const trace = traced(() =>
+        toCanonicalRequest(
+          request({
+            verbosity: "low",
+            format: { type: "json_object" },
+          }),
+        ),
+      );
+
+      const canonical = toCanonicalRequest(
+        request({ verbosity: "low", format: { type: "json_object" } }),
+      );
+      expect(canonical.responseFormat).toEqual({ type: "json_object" });
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "responses",
+        code: "field_dropped",
+        path: "text",
+      });
+    });
+
+    it("text format type text decodes as no constraint", () => {
+      const trace = traced(() =>
+        toCanonicalRequest(request({ format: { type: "text" } })),
+      );
+
+      const canonical = toCanonicalRequest(
+        request({ format: { type: "text" } }),
+      );
+      expect(canonical.responseFormat).toBeUndefined();
+      expect(
+        trace.notes.filter((n) => n.code === "field_dropped"),
+      ).toEqual([]);
+    });
+
+    it("an unknown format type is dropped with a note", () => {
+      const trace = traced(() =>
+        toCanonicalRequest(
+          request({ format: { type: "xml_schema", schema: {} } }),
+        ),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "responses",
+        code: "field_dropped",
+        path: "text.format",
+      });
+    });
+  });
 });

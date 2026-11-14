@@ -2038,4 +2038,105 @@ describe('Anthropic Adapter', () => {
       });
     });
   });
+
+  describe('response format (v1.4 spec §3.5)', () => {
+    const SCHEMA = {
+      type: 'object',
+      $defs: { cents: { type: 'number', minimum: 0 } },
+      properties: {
+        name: { type: 'string' },
+        price: { $ref: '#/$defs/cents' },
+        opts: { anyOf: [{ type: 'string' }, { type: 'integer' }] },
+      },
+      required: ['name'],
+      additionalProperties: false,
+    } as const;
+
+    function deepFreeze<T>(value: T): T {
+      if (typeof value === 'object' && value !== null) {
+        for (const v of Object.values(value)) deepFreeze(v);
+        Object.freeze(value);
+      }
+      return value;
+    }
+
+    it('json_schema round-trips unchanged', () => {
+      const schema = deepFreeze({ ...SCHEMA });
+      const wire = {
+        model: 'm',
+        max_tokens: 100,
+        messages: [{ role: 'user', content: 'hi' }],
+        output_config: {
+          format: { type: 'json_schema', schema },
+        },
+      } as unknown as MessageCreateParams;
+
+      const canonical = toCanonicalRequest(wire);
+      // `output_config.format` carries no name — the canonical side
+      // gets the fixed default name.
+      expect(canonical.responseFormat).toEqual({
+        type: 'json_schema',
+        name: 'response',
+        schema,
+      });
+      // The schema object is passed through, never cloned-and-edited.
+      expect(
+        canonical.responseFormat?.type === 'json_schema' &&
+          canonical.responseFormat.schema,
+      ).toBe(schema);
+
+      const out = fromCanonicalRequest(canonical) as MessageCreateParams;
+      // The encoder never sends the canonical name.
+      expect((out as { output_config?: unknown }).output_config).toEqual(
+        { format: { type: 'json_schema', schema } },
+      );
+    });
+
+    it('format merges with output_config.effort', () => {
+      // `output_config` is shared with reasoning effort (Task 6):
+      // encoding format must merge, never overwrite.
+      const canonical: CanonicalRequest = {
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'hi' }],
+        responseFormat: {
+          type: 'json_schema',
+          name: 'answer',
+          schema: { ...SCHEMA },
+        },
+        config: { maxTokens: 4096, reasoning: { effort: 'high' } },
+      };
+
+      const out = fromCanonicalRequest(canonical) as MessageCreateParams;
+      expect((out as { output_config?: unknown }).output_config).toEqual(
+        {
+          effort: 'high',
+          format: { type: 'json_schema', schema: SCHEMA },
+        },
+      );
+      expect(out.thinking).toEqual({ type: 'adaptive' });
+    });
+
+    it('json_object is a 400 unsupported_response_format', () => {
+      const canonical: CanonicalRequest = {
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        responseFormat: { type: 'json_object' },
+      };
+
+      let thrown: unknown;
+      try {
+        fromCanonicalRequest(canonical);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(ValidationError);
+      expect(
+        (thrown as ValidationError).toCanonical(),
+      ).toMatchObject({
+        kind: 'invalid_request',
+        status: 400,
+        code: 'unsupported_response_format',
+      });
+    });
+  });
 });
