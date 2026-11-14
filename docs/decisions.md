@@ -4278,3 +4278,34 @@ decided:
   - `src/transformers/adapters/responses.adapter.test.ts` — the adapter's own unit suite gains the streaming block (the Files block's "contract/integration tests" line covers the contract registrations; these are the same-file unit tests every stream codec gets).
   - `tests/integration/observe.test.ts` — the Task 3 exclusion of `responses` + `stream` generated cases (a 501 stub then) was removed now that the codec exists; adds trace coverage.
 - **`tests/fixtures/codex/recording.jsonl`:** inspected (read-only) — it contains summarized `sseEvents` counts, not raw stream bytes, so the conductor's "decode the real recording" test does not apply; the recorded event order/counts were used as fixture-shape evidence instead.
+
+## v1.4 Task 4 follow-up: Responses stream leftovers (PR stacked on Task 4)
+
+Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or expected-value changes.
+
+- **Decoder: full `arguments` after partial deltas** (`responses.stream.decode.ts`): a `.done` event's
+  `arguments` is the call's full arguments, not a repeat of the deltas — when it starts with the
+  streamed text and is longer, the decoder emits one `tool_call_delta` with the remaining suffix, so
+  the joined deltas are the arguments exactly as sent (canonical rule 3); equal emits nothing; a
+  non-prefix mismatch keeps the streamed deltas and logs a debug line naming only the event type and
+  call index (never the arguments — privacy rule). Applies to `response.function_call_arguments.done`
+  and `response.output_item.done` via one `settleArguments` helper. Sources:
+  https://platform.openai.com/docs/api-reference/responses-streaming (`function_call_arguments.done`,
+  `output_item.done` carry the full `arguments`).
+- **Encoder: `usage` on every terminal response** (`responses.stream.encode.ts`): the terminal
+  `response` object (`completed`/`incomplete`/`failed`) always carries a `usage` key — the usage
+  object when canonical usage arrived, `null` otherwise; a `failed` response keeps usage that
+  already arrived. Sources: https://platform.openai.com/docs/api-reference/responses/object
+  (`usage` is a nullable Response field) and `codex-rs/codex-api/src/sse/responses.rs` at
+  Codex 0.169.0 (`Response.usage` is `Option<ResponseUsage>`).
+- **Encoder: one Response-object field set** (`responses.response.ts` → `responses.stream.encode.ts`):
+  `toResponsesResponseObject` (exported) builds the single field set — `id`, `object`, `created_at`,
+  `status`, `incomplete_details`, `model`, `output`, `output_text`, `error`, `instructions`,
+  `metadata`, `access_programs`, `parallel_tool_calls`, `temperature`, `tool_choice`, `tools`,
+  `top_p`, `store`, `usage` — used by `fromCanonicalResponse`, the stream `response.created`/
+  `in_progress` skeleton and the terminal object. Side effect on the unary path: a canonical
+  response with no usage now emits `usage: null` instead of omitting the key (nullable per the
+  object reference above; re-decode is unchanged — `null` yields no canonical usage).
+- **Follow-up noted, not done:** the same suffix rule could apply to `response.completed`/
+  `incomplete` `output[]` items for calls still open (a stream that sends partial deltas and skips
+  both `.done` events keeps the partial arguments today). Out of the named handlers' scope.
