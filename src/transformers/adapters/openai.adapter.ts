@@ -305,6 +305,43 @@ export function fromCanonicalRequest(
     if (c.presencePenalty !== undefined) {
       result.presence_penalty = c.presencePenalty;
     }
+
+    // v1.4 spec §3.3: `reasoning_effort` per the Chat Completions
+    // reference
+    // https://developers.openai.com/api/reference/resources/chat —
+    // the docs state the accepted set is model-dependent and include
+    // none/minimal/low/medium/high/xhigh (+`max`, which has no
+    // canonical slot, so the Responses decoder already lowered it).
+    // The canonical ladder is passed through verbatim.
+    const reasoning = c.reasoning;
+    if (reasoning !== undefined) {
+      if (reasoning.effort !== undefined) {
+        (result as { reasoning_effort?: string }).reasoning_effort =
+          reasoning.effort;
+      }
+      if (reasoning.budgetTokens !== undefined) {
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "openai",
+            code: "reasoning_budget_dropped",
+            path: "reasoning.budget_tokens",
+          },
+          "Dropping reasoning.budget_tokens (no Chat Completions equivalent)",
+        );
+      }
+      if (reasoning.summary === true) {
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "openai",
+            code: "reasoning_summary_dropped",
+            path: "reasoning.summary",
+          },
+          "Dropping reasoning.summary (no Chat Completions equivalent)",
+        );
+      }
+    }
   }
 
   if (request.tools && request.tools.length > 0) {

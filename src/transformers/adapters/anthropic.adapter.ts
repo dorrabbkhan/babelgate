@@ -15,6 +15,7 @@ import {
   makeCanonicalError,
 } from "../../utils/canonical-error";
 import { recordNote } from "../../observe/context";
+import { budgetFor } from "../reasoning-effort";
 import type {
   MessageCreateParams,
   Message,
@@ -153,6 +154,228 @@ export function toCanonicalRequest(
 
 // ============ REQUEST: Canonical → Anthropic ============
 
+/**
+ * Models that accept `thinking: {type: "adaptive"}` — the per-model
+ * thinking table on
+ * https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting
+ * decides adaptive support (extended-only models — the whole 4.5
+ * family — reject `"adaptive"` with a 400). `xhigh: true` marks the
+ * subset whose effort-level table includes `xhigh` on
+ * https://platform.claude.com/docs/en/build-with-claude/effort —
+ * `max` has no canonical slot so it never appears here. Matched by
+ * prefix so dated variants resolve. Models not in the list take
+ * legacy extended thinking instead
+ * (`thinking: {type:"enabled", budget_tokens}` —
+ * https://platform.claude.com/docs/en/build-with-claude/extended-thinking).
+ */
+const ADAPTIVE_MODELS: { prefix: string; xhigh: boolean }[] = [
+  { prefix: "claude-fable-5", xhigh: true },
+  { prefix: "claude-mythos-preview", xhigh: false },
+  { prefix: "claude-mythos-5", xhigh: true },
+  { prefix: "claude-opus-5", xhigh: true },
+  { prefix: "claude-sonnet-5", xhigh: true },
+  { prefix: "claude-haiku-5", xhigh: true },
+  { prefix: "claude-opus-4-8", xhigh: true },
+  { prefix: "claude-opus-4-7", xhigh: true },
+  { prefix: "claude-opus-4-6", xhigh: false },
+  { prefix: "claude-sonnet-4-6", xhigh: false },
+];
+
+/**
+ * Extended-thinking-only models that additionally take
+ * `output_config.effort` alongside `budget_tokens` — the effort doc
+ * calls `claude-opus-4-5` "the only extended-thinking-only model
+ * that supports effort" and pairs it with `budget_tokens`
+ * (https://platform.claude.com/docs/en/build-with-claude/effort);
+ * its level set is low/medium/high, so `xhigh` lowers to `high`.
+ */
+const EXTENDED_EFFORT_MODELS: { prefix: string; xhigh: boolean }[] = [
+  { prefix: "claude-opus-4-5", xhigh: false },
+];
+
+function adaptiveModel(
+  model: string,
+): { prefix: string; xhigh: boolean } | undefined {
+  return ADAPTIVE_MODELS.find((entry) => model.startsWith(entry.prefix));
+}
+
+function extendedEffortModel(
+  model: string,
+): { prefix: string; xhigh: boolean } | undefined {
+  return EXTENDED_EFFORT_MODELS.find((entry) =>
+    model.startsWith(entry.prefix),
+  );
+}
+
+/**
+ * Canonical `config.reasoning` → `thinking`/`output_config` (v1.4
+ * spec §3.3). Adaptive models get `thinking:{type:"adaptive"}` plus
+ * `output_config.effort`; legacy models get
+ * `thinking:{type:"enabled", budget_tokens}` — `claude-opus-4-5`
+ * also gets `output_config.effort` alongside it per the effort doc
+ * (min budget 1024, and
+ * `budget_tokens` must stay below `max_tokens`, so max_tokens is
+ * raised when needed). `budget_tokens` counts toward max_tokens —
+ * https://platform.claude.com/docs/en/build-with-claude/extended-thinking.
+ * Mutates `result.max_tokens` when the budget requires it.
+ */
+function applyReasoning(
+  result: MessageCreateParams,
+  request: CanonicalRequest,
+): void {
+  const reasoning = request.config?.reasoning;
+  if (reasoning === undefined) return;
+
+  if (reasoning.summary === true) {
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "anthropic",
+        code: "reasoning_summary_dropped",
+        path: "reasoning.summary",
+      },
+      "Dropping reasoning.summary (no Anthropic equivalent)",
+    );
+  }
+
+  const adaptive = adaptiveModel(request.model);
+  if (adaptive !== undefined) {
+    if (reasoning.budgetTokens !== undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "anthropic",
+          code: "reasoning_budget_dropped",
+          path: "reasoning.budget_tokens",
+        },
+        "Dropping reasoning.budget_tokens (adaptive thinking takes a level, not a budget)",
+      );
+    }
+    const effort = reasoning.effort;
+    if (effort === undefined || effort === "none") {
+      // No effort → thinking stays off (a dropped budget keeps the
+      // old model-default adaptive mode); none → no thinking at all.
+      if (effort === undefined && reasoning.budgetTokens !== undefined) {
+        (result as { thinking?: unknown }).thinking = {
+          type: "adaptive",
+        };
+      }
+      return;
+    }
+    if (effort === "minimal") {
+      // The wire floor is `low` — canonical `minimal` can't be
+      // expressed, so thinking is left off entirely.
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "anthropic",
+          code: "reasoning_effort_lowered",
+          path: "reasoning.effort",
+        },
+        'Dropping adaptive thinking for effort "minimal" (Anthropic floor is "low")',
+      );
+      return;
+    }
+    let wireEffort: string = effort;
+    if (effort === "xhigh" && !adaptive.xhigh) {
+      wireEffort = "high";
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "anthropic",
+          code: "reasoning_effort_lowered",
+          path: "reasoning.effort",
+        },
+        `Lowering reasoning effort "xhigh" to "high" (${request.model} has no xhigh level)`,
+      );
+    }
+    (result as { thinking?: unknown }).thinking = { type: "adaptive" };
+    (result as { output_config?: unknown }).output_config = {
+      effort: wireEffort,
+    };
+    return;
+  }
+
+  // Legacy extended thinking: budget_tokens per
+  // https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+  // — minimum 1024, and the budget counts toward (must stay below)
+  // max_tokens.
+  if (reasoning.effort === "none") {
+    if (reasoning.budgetTokens !== undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "anthropic",
+          code: "reasoning_budget_dropped",
+          path: "reasoning.budget_tokens",
+        },
+        'Dropping reasoning.budget_tokens (effort "none" leaves thinking off)',
+      );
+    }
+    return;
+  }
+  // No effort and no budget → thinking stays off; an explicit
+  // budget alone still enables it.
+  if (reasoning.effort === undefined && reasoning.budgetTokens === undefined)
+    return;
+
+  const budget = reasoning.budgetTokens ?? budgetFor(reasoning.effort!);
+  (result as { thinking?: unknown }).thinking = {
+    type: "enabled",
+    budget_tokens: budget,
+  };
+  if (result.max_tokens <= budget) {
+    const raised = budget + 1024;
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "anthropic",
+        code: "max_tokens_raised",
+        path: "max_tokens",
+      },
+      `Raising max_tokens from ${result.max_tokens} to ${raised} (thinking budget ${budget} must stay below it)`,
+    );
+    result.max_tokens = raised;
+  }
+
+  // `claude-opus-4-5` is extended-only but still takes
+  // `output_config.effort` alongside `budget_tokens` per
+  // https://platform.claude.com/docs/en/build-with-claude/effort.
+  const extended = extendedEffortModel(request.model);
+  if (extended !== undefined && reasoning.effort !== undefined) {
+    if (reasoning.effort === "minimal") {
+      // Below the wire floor — the 1024-token budget already
+      // carries it; there is no level to send.
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "anthropic",
+          code: "reasoning_effort_lowered",
+          path: "reasoning.effort",
+        },
+        `Dropping reasoning effort "minimal" (${request.model} takes low/medium/high)`,
+      );
+    } else {
+      let wireEffort: string = reasoning.effort;
+      if (wireEffort === "xhigh" && !extended.xhigh) {
+        wireEffort = "high";
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "anthropic",
+            code: "reasoning_effort_lowered",
+            path: "reasoning.effort",
+          },
+          `Lowering reasoning effort "xhigh" to "high" (${request.model} has no xhigh level)`,
+        );
+      }
+      (result as { output_config?: unknown }).output_config = {
+        effort: wireEffort,
+      };
+    }
+  }
+}
+
 export function fromCanonicalRequest(
   request: CanonicalRequest,
 ): MessageCreateParams {
@@ -219,6 +442,8 @@ export function fromCanonicalRequest(
       `Dropping ${dropped} cache_control breakpoint(s): Anthropic allows at most 4`,
     );
   }
+
+  applyReasoning(result, request);
 
   return result;
 }

@@ -7,6 +7,10 @@ import {
   fromCanonicalModelList,
 } from './openai.adapter';
 import { toCanonicalRequest as anthropicToCanonicalRequest } from './anthropic.adapter';
+import { fromCanonicalRequest as anthropicFromCanonical } from './anthropic.adapter';
+import { fromCanonicalRequest as geminiFromCanonical } from './gemini.adapter';
+import { fromCanonicalRequest as ollamaFromCanonical } from './ollama.adapter';
+import { fromCanonicalRequest as responsesFromCanonical } from './responses.adapter';
 import { runWithTrace } from '../../observe/context';
 import { newTrace, type RequestTrace } from '../../observe/trace';
 import { UpstreamError, ValidationError } from '../../utils/errors';
@@ -820,6 +824,107 @@ describe('OpenAI Adapter', () => {
         adapter: 'openai',
         code: 'tool_strict_dropped',
         path: 'tools[1].function.strict',
+      });
+    });
+  });
+
+  describe('reasoning config encode (v1.4 spec §3.3)', () => {
+    const request = (
+      reasoning: NonNullable<CanonicalRequest['config']>['reasoning'],
+    ): CanonicalRequest => ({
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      config: { reasoning },
+    });
+
+    it.each(['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const)(
+      'effort %s passes through as reasoning_effort',
+      (effort) => {
+        const result = fromCanonicalRequest(request({ effort }));
+
+        expect(result.reasoning_effort).toBe(effort);
+      },
+    );
+
+    it('reasoning without effort sends no reasoning_effort', () => {
+      const result = fromCanonicalRequest(request({}));
+
+      expect(result.reasoning_effort).toBeUndefined();
+    });
+
+    it('no effort leaves thinking off', () => {
+      // The Codex case (summary only) emits no reasoning_effort.
+      expect(fromCanonicalRequest(request({ summary: true }))).toEqual({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+    });
+
+    it('budgetTokens is dropped with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(request({ budgetTokens: 4096 })),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'openai',
+        code: 'reasoning_budget_dropped',
+        path: 'reasoning.budget_tokens',
+      });
+    });
+
+    it('summary is dropped with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(request({ summary: true })),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'openai',
+        code: 'reasoning_summary_dropped',
+        path: 'reasoning.summary',
+      });
+    });
+  });
+
+  describe('reasoning fields still dropped (v1.4 spec §3.3)', () => {
+    it('chat reasoning_effort produces no config.reasoning, body unchanged for every target', () => {
+      const canonical = toCanonicalRequest({
+        model: 'm',
+        reasoning_effort: 'high',
+        messages: [{ role: 'user', content: 'hi' }],
+      } as ChatCompletionRequest);
+
+      expect(canonical.config?.reasoning).toBeUndefined();
+
+      expect(fromCanonicalRequest(canonical)).toEqual({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+      });
+      expect(anthropicFromCanonical(canonical)).toEqual({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 4096,
+      });
+      expect(geminiFromCanonical(canonical)).toEqual({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {},
+      });
+      expect(ollamaFromCanonical(canonical)).toEqual({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        stream: false,
+      });
+      expect(responsesFromCanonical(canonical)).toEqual({
+        model: 'm',
+        input: [
+          {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'hi' }],
+          },
+        ],
+        store: false,
       });
     });
   });

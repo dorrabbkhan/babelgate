@@ -15,6 +15,7 @@ import {
 } from "../../utils/canonical-error";
 import { ValidationError } from "../../utils/errors";
 import { createIdGenerator, sequentialIds } from "../../utils/ids";
+import { recordNote } from "../../observe/context";
 import { systemText } from "../system-text";
 import type {
   OllamaChatRequest,
@@ -206,6 +207,71 @@ export function fromCanonicalRequest(
 
     if (Object.keys(options).length > 0) {
       result.options = options;
+    }
+
+    // v1.4 spec §3.3: `think` per
+    // https://docs.ollama.com/capabilities/thinking and
+    // https://docs.ollama.com/api/chat — `true`/`false` toggles
+    // thinking and the documented level strings are
+    // "low"/"medium"/"high" (the per-model supported set lives in
+    // /api/show and can't be known at encode time). Canonical
+    // `xhigh`/`minimal` have no wire level: xhigh lowers to "high",
+    // minimal lowers to `false`; `none` maps straight to `false`.
+    const reasoning = c.reasoning;
+    if (reasoning !== undefined) {
+      if (reasoning.effort === undefined) {
+        // No effort → thinking stays off; a (dropped) budget alone
+        // keeps the old think:true for that case.
+        if (reasoning.budgetTokens !== undefined) result.think = true;
+      } else if (reasoning.effort === "none") {
+        result.think = false;
+      } else if (reasoning.effort === "minimal") {
+        result.think = false;
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "ollama",
+            code: "reasoning_effort_lowered",
+            path: "reasoning.effort",
+          },
+          'Lowering reasoning effort "minimal" to "none" (Ollama floor is "low")',
+        );
+      } else if (reasoning.effort === "xhigh") {
+        result.think = "high";
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "ollama",
+            code: "reasoning_effort_lowered",
+            path: "reasoning.effort",
+          },
+          'Lowering reasoning effort "xhigh" to "high" (Ollama ceiling is "high")',
+        );
+      } else {
+        result.think = reasoning.effort;
+      }
+      if (reasoning.budgetTokens !== undefined) {
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "ollama",
+            code: "reasoning_budget_dropped",
+            path: "reasoning.budget_tokens",
+          },
+          "Dropping reasoning.budget_tokens (no Ollama equivalent)",
+        );
+      }
+      if (reasoning.summary === true) {
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "ollama",
+            code: "reasoning_summary_dropped",
+            path: "reasoning.summary",
+          },
+          "Dropping reasoning.summary (no Ollama equivalent)",
+        );
+      }
     }
   }
 

@@ -6,6 +6,10 @@ import {
   fromCanonicalResponse,
 } from './anthropic.adapter';
 import { createStreamDecoder } from './anthropic.stream';
+import { fromCanonicalRequest as openaiFromCanonical } from './openai.adapter';
+import { fromCanonicalRequest as geminiFromCanonical } from './gemini.adapter';
+import { fromCanonicalRequest as ollamaFromCanonical } from './ollama.adapter';
+import { fromCanonicalRequest as responsesFromCanonical } from './responses.adapter';
 import { runWithTrace } from '../../observe/context';
 import { newTrace, type RequestTrace } from '../../observe/trace';
 import { ValidationError } from '../../utils/errors';
@@ -1632,6 +1636,316 @@ describe('Anthropic Adapter', () => {
         adapter: 'anthropic',
         code: 'stream_block_dropped',
         path: 'thinking',
+      });
+    });
+  });
+
+  describe('reasoning config encode (v1.4 spec §3.3)', () => {
+    const request = (
+      model: string,
+      reasoning: NonNullable<CanonicalRequest['config']>['reasoning'],
+      maxTokens = 4096,
+    ): CanonicalRequest => ({
+      model,
+      messages: [{ role: 'user', content: 'hi' }],
+      config: { maxTokens, reasoning },
+    });
+
+    it('adaptive models get thinking adaptive + output_config.effort', () => {
+      const result = fromCanonicalRequest(
+        request('claude-opus-5-5', { effort: 'high' }),
+      );
+
+      expect(result.thinking).toEqual({ type: 'adaptive' });
+      expect(result.output_config).toEqual({ effort: 'high' });
+    });
+
+    it.each(['low', 'medium', 'high', 'xhigh'] as const)(
+      'effort %s passes through on adaptive models',
+      (effort) => {
+        const result = fromCanonicalRequest(
+          request('claude-haiku-5-5', { effort }),
+        );
+
+        expect(result.output_config).toEqual({ effort });
+      },
+    );
+
+    it('xhigh lowers to high on the 4.6 family with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-sonnet-4-6', { effort: 'xhigh' }),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('claude-sonnet-4-6', { effort: 'xhigh' }),
+      );
+      expect(result.output_config).toEqual({ effort: 'high' });
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_effort_lowered',
+        path: 'reasoning.effort',
+      });
+    });
+
+    it.each([
+      ['minimal', 1024],
+      ['low', 2048],
+      ['medium', 8192],
+      ['high', 24576],
+      ['xhigh', 32000],
+    ] as const)(
+      'extended models map effort %s to budget_tokens %i',
+      (effort, budget) => {
+        const result = fromCanonicalRequest(
+          request('claude-sonnet-4-5', { effort }),
+        );
+
+        expect(result.thinking).toEqual({
+          type: 'enabled',
+          budget_tokens: budget,
+        });
+        expect(result.output_config).toBeUndefined();
+      },
+    );
+
+    it('explicit budgetTokens beats the effort table', () => {
+      const result = fromCanonicalRequest(
+        request('claude-sonnet-4-5', { effort: 'low', budgetTokens: 5000 }),
+      );
+
+      expect(result.thinking).toEqual({
+        type: 'enabled',
+        budget_tokens: 5000,
+      });
+    });
+
+    it('budgetTokens on an adaptive model is dropped with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-opus-5-5', { budgetTokens: 4096 }),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('claude-opus-5-5', { budgetTokens: 4096 }),
+      );
+      expect(result.thinking).toEqual({ type: 'adaptive' });
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_budget_dropped',
+        path: 'reasoning.budget_tokens',
+      });
+    });
+
+    it('max_tokens raised above the budget with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-sonnet-4-5', { effort: 'high' }, 4096),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('claude-sonnet-4-5', { effort: 'high' }, 4096),
+      );
+      expect(result.max_tokens).toBe(24576 + 1024);
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'max_tokens_raised',
+        path: 'max_tokens',
+      });
+    });
+
+    it('effort none sends no thinking field', () => {
+      for (const model of ['claude-opus-5-5', 'claude-sonnet-4-5']) {
+        const result = fromCanonicalRequest(
+          request(model, { effort: 'none' }),
+        );
+
+        expect(result.thinking).toBeUndefined();
+        expect(result.output_config).toBeUndefined();
+      }
+    });
+
+    it('opus 4.5 takes the budget path', () => {
+      // Opus 4.5 is extended-thinking-only — `adaptive` is rejected
+      // with a 400 per the thinking-troubleshooting per-model table —
+      // and the one such model that pairs `output_config.effort` with
+      // `budget_tokens` per the effort doc.
+      for (const model of ['claude-opus-4-5', 'claude-opus-4-5-20251101']) {
+        const result = fromCanonicalRequest(
+          request(model, { effort: 'high' }, 40000),
+        );
+
+        expect(result).toEqual({
+          model,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 40000,
+          thinking: { type: 'enabled', budget_tokens: 24576 },
+          output_config: { effort: 'high' },
+        });
+      }
+    });
+
+    it('xhigh lowers to high on opus 4.5 with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-opus-4-5', { effort: 'xhigh' }, 40000),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('claude-opus-4-5', { effort: 'xhigh' }, 40000),
+      );
+      expect(result.thinking).toEqual({
+        type: 'enabled',
+        budget_tokens: 32000,
+      });
+      expect(result.output_config).toEqual({ effort: 'high' });
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_effort_lowered',
+        path: 'reasoning.effort',
+      });
+    });
+
+    it('effort none with a budget records reasoning_budget_dropped on legacy models', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-sonnet-4-5', {
+            effort: 'none',
+            budgetTokens: 4096,
+          }),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('claude-sonnet-4-5', { effort: 'none', budgetTokens: 4096 }),
+      );
+      expect(result.thinking).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_budget_dropped',
+        path: 'reasoning.budget_tokens',
+      });
+    });
+
+    it('minimal lowers to none on adaptive models (no low-min level)', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-opus-5-5', { effort: 'minimal' }),
+        ),
+      );
+
+      const result = fromCanonicalRequest(
+        request('claude-opus-5-5', { effort: 'minimal' }),
+      );
+      expect(result.thinking).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_effort_lowered',
+        path: 'reasoning.effort',
+      });
+    });
+
+    it('reasoning {} sends no thinking field', () => {
+      for (const model of ['claude-opus-5-5', 'claude-sonnet-4-5']) {
+        const result = fromCanonicalRequest(request(model, {}));
+
+        expect(result.thinking).toBeUndefined();
+        expect(result.output_config).toBeUndefined();
+      }
+    });
+
+    it('no effort leaves thinking off', () => {
+      // Adaptive model — the Codex case (summary only) emits no
+      // thinking and no output_config.
+      expect(
+        fromCanonicalRequest(request('claude-opus-5-5', { summary: true })),
+      ).toEqual({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 4096,
+      });
+    });
+
+    it('no effort leaves thinking off', () => {
+      // Legacy extended-thinking model — no thinking and
+      // max_tokens unchanged.
+      expect(
+        fromCanonicalRequest(request('claude-sonnet-4-5', { summary: true })),
+      ).toEqual({
+        model: 'claude-sonnet-4-5',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 4096,
+      });
+    });
+
+    it('summary on anthropic is dropped with a note', () => {
+      const trace = traced(() =>
+        fromCanonicalRequest(
+          request('claude-opus-5-5', { summary: true }),
+        ),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_summary_dropped',
+        path: 'reasoning.summary',
+      });
+    });
+  });
+
+  describe('reasoning fields still dropped (v1.4 spec §3.3)', () => {
+    it('anthropic thinking produces no config.reasoning, body unchanged for every target', () => {
+      const canonical = toCanonicalRequest({
+        model: 'm',
+        max_tokens: 100,
+        thinking: { type: 'enabled', budget_tokens: 2048 },
+        messages: [{ role: 'user', content: 'hi' }],
+      } as MessageCreateParams);
+
+      expect(canonical.config?.reasoning).toBeUndefined();
+
+      expect(fromCanonicalRequest(canonical)).toEqual({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 100,
+      });
+      expect(openaiFromCanonical(canonical)).toEqual({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 100,
+      });
+      expect(geminiFromCanonical(canonical)).toEqual({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: { maxOutputTokens: 100 },
+      });
+      expect(ollamaFromCanonical(canonical)).toEqual({
+        model: 'm',
+        messages: [{ role: 'user', content: 'hi' }],
+        options: { num_predict: 100 },
+        stream: false,
+      });
+      expect(responsesFromCanonical(canonical)).toEqual({
+        model: 'm',
+        input: [
+          {
+            type: 'message',
+            role: 'user',
+            content: [{ type: 'input_text', text: 'hi' }],
+          },
+        ],
+        store: false,
+        max_output_tokens: 100,
       });
     });
   });

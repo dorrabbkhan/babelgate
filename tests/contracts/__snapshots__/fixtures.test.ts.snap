@@ -656,7 +656,11 @@ exports[`Adapter golden fixtures > responses > request fixtures > basic → cano
 
 exports[`Adapter golden fixtures > responses > request fixtures > codex → canonical matches snapshot 1`] = `
 {
-  "config": {},
+  "config": {
+    "reasoning": {
+      "summary": true,
+    },
+  },
   "messages": [
     {
       "content": [

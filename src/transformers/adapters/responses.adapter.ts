@@ -41,6 +41,11 @@ import {
 } from "../../utils/canonical-error";
 import { ValidationError } from "../../utils/errors";
 import { recordNote } from "../../observe/context";
+import {
+  EFFORT_LADDER,
+  nearestSupported,
+  type Effort,
+} from "../reasoning-effort";
 import { systemText } from "../system-text";
 import {
   decodeInputItem,
@@ -81,8 +86,13 @@ export const responsesAdapter: ProviderAdapter<
 };
 
 
-function note(code: string, path: string, message: string): void {
-  recordNote({ stage: "decode", adapter: "responses", code, path }, message);
+function note(
+  code: string,
+  path: string,
+  message: string,
+  stage: "decode" | "encode" = "decode",
+): void {
+  recordNote({ stage, adapter: "responses", code, path }, message);
 }
 
 
@@ -94,7 +104,10 @@ function note(code: string, path: string, message: string): void {
  * `store: true`) is refused earlier — in proxy.service before
  * routing — so this list is the tolerated remainder: caching hints,
  * tiering, tracing metadata, `text`, and the fields later tasks own
- * (`reasoning` → Task 6, `include` → Task 8, `text.format` → Task 9).
+ * (`include` reasoning items → Task 8, `text.format` → Task 9).
+ * `reasoning` and `include` are decoded (Task 6): `reasoning` maps to
+ * `config.reasoning`, and `include: ["reasoning.encrypted_content"]`
+ * marks the client as reasoning-capable.
  * Names per the create reference and SDK `ResponseCreateParamsBase`
  * (openai 7.30.1); `client_metadata` is evidenced only by codex-rs +
  * the recording — see the file header.
@@ -109,8 +122,6 @@ const DROPPED_REQUEST_FIELDS = [
   "safety_identifier",
   "user",
   "text",
-  "include",
-  "reasoning",
   "truncation",
   "background",
   "prompt",
@@ -168,6 +179,8 @@ export function toCanonicalRequest(
     ?.map((tool, i) => toCanonicalTool(tool, i))
     .filter((t): t is CanonicalTool => t !== undefined);
 
+  const reasoning = toCanonicalReasoning(request);
+
   return {
     model: request.model as string,
     messages,
@@ -182,6 +195,7 @@ export function toCanonicalRequest(
         maxTokens: request.max_output_tokens,
       }),
       ...(typeof request.top_p === "number" && { topP: request.top_p }),
+      ...(reasoning !== undefined && { reasoning }),
     },
     ...(tools !== undefined && tools.length > 0 && { tools }),
     ...(request.tool_choice !== undefined &&
@@ -195,6 +209,109 @@ export function toCanonicalRequest(
   };
 }
 
+
+/**
+ * `reasoning` + `include` → `config.reasoning` (v1.4 spec §3.3, the
+ * only decoder that produces it). Wire fields per the create
+ * reference and SDK `Shared.Reasoning`: `effort` (the canonical
+ * ladder plus `max`, which has no canonical slot → `xhigh` with a
+ * note), `summary`/`generate_summary` (any set value → `summary:
+ * true` — canonical carries a boolean, not the wire's level).
+ * `include: ["reasoning.encrypted_content"]` marks the request as
+ * reasoning-capable on its own (Codex sends it every turn, E16);
+ * other `include` values keep their `field_dropped` note. Malformed
+ * inputs — a non-object `reasoning`, a non-string `effort`, a
+ * non-array `include` — keep 1.3's `field_dropped` note on the
+ * field path, no values echoed.
+ */
+type CanonicalReasoning = NonNullable<
+  NonNullable<CanonicalRequest["config"]>["reasoning"]
+>;
+
+function toCanonicalReasoning(
+  request: ResponsesRequest,
+): CanonicalReasoning | undefined {
+  let reasoning: CanonicalReasoning | undefined;
+
+  const wire = request.reasoning;
+  if (wire !== undefined) {
+    if (wire !== null && typeof wire === "object" && !Array.isArray(wire)) {
+      reasoning = {};
+      const fields = wire as {
+        effort?: unknown;
+        summary?: unknown;
+        generate_summary?: unknown;
+      };
+      if (fields.effort !== undefined) {
+        if (typeof fields.effort === "string") {
+          if (
+            (EFFORT_LADDER as readonly string[]).includes(fields.effort)
+          ) {
+            reasoning.effort = fields.effort as Effort;
+          } else if (fields.effort === "max") {
+            // `max` is the only documented level above the ladder
+            // (ReasoningEffort in shared.d.ts + the reasoning guide).
+            reasoning.effort = "xhigh";
+            note(
+              "reasoning_effort_lowered",
+              "reasoning.effort",
+              'Lowering reasoning effort "max" to "xhigh" (canonical maximum)',
+            );
+          } else {
+            note(
+              "field_dropped",
+              "reasoning.effort",
+              "Dropping unknown reasoning effort level",
+            );
+          }
+        } else {
+          note(
+            "field_dropped",
+            "reasoning.effort",
+            'Dropping request field "reasoning.effort" (not a level string)',
+          );
+        }
+      }
+      if (
+        fields.summary !== undefined ||
+        fields.generate_summary !== undefined
+      ) {
+        reasoning.summary = true;
+      }
+    } else {
+      note(
+        "field_dropped",
+        "reasoning",
+        'Dropping request field "reasoning" (not an object)',
+      );
+    }
+  }
+
+  const include = request.include;
+  if (include !== undefined) {
+    if (Array.isArray(include)) {
+      for (const entry of include) {
+        if (entry === "reasoning.encrypted_content") {
+          reasoning ??= {};
+        } else {
+          note(
+            "field_dropped",
+            "include",
+            "Dropping an include value (no canonical equivalent)",
+          );
+        }
+      }
+    } else {
+      note(
+        "field_dropped",
+        "include",
+        'Dropping request field "include" (not an array)',
+      );
+    }
+  }
+
+  return reasoning;
+}
 
 // ============ REQUEST: Canonical → Responses ============
 
@@ -243,6 +360,35 @@ export function fromCanonicalRequest(
       tool_choice: toResponsesToolChoice(request.toolChoice),
     }),
   };
+
+  const reasoning = request.config?.reasoning;
+  if (reasoning !== undefined) {
+    // Wire fields per Shared.Reasoning / ReasoningEffort (openai SDK
+    // shared.d.ts) and the reasoning guide
+    // https://developers.openai.com/api/docs/guides/reasoning —
+    // `summary: "auto"` is the documented value; the canonical side
+    // carries only a boolean.
+    const reasoningWire: Record<string, unknown> = {};
+    if (reasoning.effort !== undefined) {
+      reasoningWire.effort = reasoning.effort;
+    }
+    if (reasoning.summary === true) {
+      reasoningWire.summary = "auto";
+    }
+    result.reasoning = reasoningWire;
+    // Reasoning items come back encrypted when the client asked for
+    // them; echoing the marker is also what makes a translated
+    // request carry reasoning context on the next turn (Task 8).
+    result.include = ["reasoning.encrypted_content"];
+    if (reasoning.budgetTokens !== undefined) {
+      note(
+        "reasoning_budget_dropped",
+        "reasoning.budget_tokens",
+        "Dropping reasoning.budget_tokens (no Responses equivalent)",
+        "encode",
+      );
+    }
+  }
   return result as unknown as ResponsesRequest;
 }
 

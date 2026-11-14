@@ -19,6 +19,12 @@ import {
 } from "../../utils/canonical-error";
 import { ValidationError } from "../../utils/errors";
 import { createIdGenerator } from "../../utils/ids";
+import { recordNote } from "../../observe/context";
+import {
+  budgetFor,
+  nearestSupported,
+  type Effort,
+} from "../reasoning-effort";
 import { systemText } from "../system-text";
 import type {
   Content,
@@ -241,6 +247,224 @@ function extractContentParts(
 
 // ============ REQUEST: Canonical → Gemini ============
 
+/**
+ * Models whose generateContent takes
+ * `generationConfig.thinkingConfig.thinkingLevel` — the API
+ * reference marks the field "Recommended for Gemini 3 or later
+ * models. Use with earlier models results in an error"
+ * (https://ai.google.dev/api/generate-content#ThinkingConfig), so
+ * unlisted models get `thinkingBudget` instead (v1.4 spec §3.3).
+ * `levels` is the model's supported set from the thinking docs
+ * (https://ai.google.dev/gemini-api/docs/thinking#thinking-levels);
+ * `xhigh` exists only on `gemini-4-hydrogen`. Prefix-matched, more
+ * specific prefixes first.
+ */
+const THINKING_LEVEL_MODELS: { prefix: string; levels: Effort[] }[] =
+  [
+    { prefix: "gemini-4-hydrogen", levels: ["low", "medium", "high", "xhigh"] },
+    { prefix: "gemini-4-carbon", levels: ["low", "medium", "high"] },
+    { prefix: "gemini-4-argon", levels: ["low", "medium", "high"] },
+    { prefix: "gemini-3.8-flash", levels: ["low", "medium", "high"] },
+    { prefix: "gemini-3.6-flash", levels: ["minimal", "low", "medium", "high"] },
+    { prefix: "gemini-3.5-flash-lite", levels: ["minimal", "low", "medium", "high"] },
+    { prefix: "gemini-3.1-pro-preview", levels: ["low", "medium", "high"] },
+    { prefix: "gemini-3.1-flash-lite-image", levels: ["minimal", "high"] },
+    { prefix: "gemini-3.1-flash-lite", levels: ["minimal", "low", "medium", "high"] },
+    { prefix: "gemini-3-pro-preview", levels: ["low", "high"] },
+    { prefix: "gemini-3-flash-preview", levels: ["minimal", "low", "medium", "high"] },
+    { prefix: "gemini-robotics-er-2-preview", levels: ["minimal", "low", "medium", "high"] },
+  ];
+
+function thinkingLevelsFor(model: string): Effort[] | undefined {
+  return THINKING_LEVEL_MODELS.find((entry) =>
+    model.startsWith(entry.prefix),
+  )?.levels;
+}
+
+/**
+ * `thinkingBudget` ranges and off-switches per model — the
+ * per-model budget table on
+ * https://ai.google.dev/gemini-api/docs/thinking ("Thinking
+ * budgets", generateContent variant). `canDisable` marks the rows
+ * the table gives a `thinkingBudget = 0` off switch; 2.5 Pro has
+ * none ("Cannot disable thinking"), so an off request must leave
+ * the budget unset rather than send `0`. Unlisted models keep the
+ * raw encoding. Prefix-matched, more specific prefixes first.
+ */
+const THINKING_BUDGET_MODELS: {
+  prefix: string;
+  min: number;
+  max: number;
+  canDisable: boolean;
+}[] = [
+  { prefix: "gemini-robotics-er-1.6", min: 0, max: 24576, canDisable: true },
+  { prefix: "gemini-2.5-flash-lite", min: 512, max: 24576, canDisable: true },
+  { prefix: "gemini-2.5-flash", min: 0, max: 24576, canDisable: true },
+  { prefix: "gemini-2.5-pro", min: 128, max: 32768, canDisable: false },
+];
+
+function thinkingBudgetFor(
+  model: string,
+): (typeof THINKING_BUDGET_MODELS)[number] | undefined {
+  return THINKING_BUDGET_MODELS.find((entry) =>
+    model.startsWith(entry.prefix),
+  );
+}
+
+/**
+ * Canonical `config.reasoning` → `generationConfig.thinkingConfig`
+ * (v1.4 spec §3.3). Level-capable models emit `thinkingLevel`
+ * (unsupported efforts lower to the nearest level the model takes;
+ * efforts below the model's floor clamp to that floor — there is no
+ * wire "off" for level models). Other models emit `thinkingBudget`
+ * — `0` disables thinking and `-1` asks for dynamic budgeting per
+ * https://ai.google.dev/api/generate-content#ThinkingConfig.
+ * `includeThoughts` (same reference) carries `summary`.
+ */
+function toThinkingConfig(
+  request: CanonicalRequest,
+): Record<string, unknown> | undefined {
+  const reasoning = request.config?.reasoning;
+  if (reasoning === undefined) return undefined;
+
+  const levels = thinkingLevelsFor(request.model);
+  if (levels !== undefined) {
+    if (reasoning.budgetTokens !== undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "gemini",
+          code: "reasoning_budget_dropped",
+          path: "reasoning.budget_tokens",
+        },
+        "Dropping reasoning.budget_tokens (this model takes thinkingLevel, not a budget)",
+      );
+    }
+    const thinkingConfig: Record<string, unknown> = {};
+    if (reasoning.effort !== undefined) {
+      const resolved = nearestSupported(reasoning.effort, levels);
+      let level: Effort;
+      if (resolved === "none") {
+        // Requested below (or at) the model's floor — the wire has
+        // no off, so clamp to the lowest level it accepts.
+        level = levels[0];
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "gemini",
+            code: "reasoning_effort_clamped",
+            path: "reasoning.effort",
+          },
+          `Clamping reasoning effort "${reasoning.effort}" to "${level}" (${request.model} has no lower level)`,
+        );
+      } else {
+        level = resolved;
+        if (level !== reasoning.effort) {
+          recordNote(
+            {
+              stage: "encode",
+              adapter: "gemini",
+              code: "reasoning_effort_lowered",
+              path: "reasoning.effort",
+            },
+            `Lowering reasoning effort "${reasoning.effort}" to "${level}" (${request.model} supports ${levels.join("/")})`,
+          );
+        }
+      }
+      thinkingConfig.thinkingLevel = level;
+    }
+    // https://ai.google.dev/api/generate-content#ThinkingConfig —
+    // `includeThoughts` asks for thought summaries in the response.
+    if (reasoning.summary === true) {
+      thinkingConfig.includeThoughts = true;
+    }
+    return Object.keys(thinkingConfig).length > 0
+      ? thinkingConfig
+      : undefined;
+  }
+
+  // `thinkingBudget` path — token budget per
+  // https://ai.google.dev/gemini-api/docs/thinking (budget models
+  // take 0 = off, -1 = dynamic). No effort and no budget → thinking
+  // stays off (no `thinkingBudget`); an explicit budget alone
+  // still enables it. Listed models clamp to their documented
+  // range; a model that cannot disable thinking (2.5 Pro) gets no
+  // budget at all for `none` — `0` is not a legal value there.
+  const thinkingConfig: Record<string, unknown> = {};
+  const ranged = thinkingBudgetFor(request.model);
+  if (
+    reasoning.effort === "none" &&
+    ranged !== undefined &&
+    !ranged.canDisable
+  ) {
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "gemini",
+        code: "reasoning_effort_raised",
+        path: "reasoning.effort",
+      },
+      `Raising reasoning effort "none" to the model default (${request.model} cannot turn thinking off)`,
+    );
+    if (reasoning.budgetTokens !== undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "gemini",
+          code: "reasoning_budget_dropped",
+          path: "reasoning.budget_tokens",
+        },
+        "Dropping reasoning.budget_tokens (overridden by effort \"none\")",
+      );
+    }
+  } else if (
+    reasoning.effort !== undefined ||
+    reasoning.budgetTokens !== undefined
+  ) {
+    let budget = reasoning.budgetTokens ?? budgetFor(reasoning.effort!);
+    if (
+      ranged !== undefined &&
+      budget !== -1 &&
+      !(budget === 0 && ranged.canDisable)
+    ) {
+      const path =
+        reasoning.budgetTokens !== undefined
+          ? "reasoning.budget_tokens"
+          : "reasoning.effort";
+      if (budget > ranged.max) {
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "gemini",
+            code: "reasoning_budget_clamped",
+            path,
+          },
+          `Clamping thinking budget ${budget} to ${ranged.max} (${request.model} maximum)`,
+        );
+        budget = ranged.max;
+      } else if (budget < ranged.min) {
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "gemini",
+            code: "reasoning_budget_clamped",
+            path,
+          },
+          `Raising thinking budget ${budget} to ${ranged.min} (${request.model} minimum)`,
+        );
+        budget = ranged.min;
+      }
+    }
+    thinkingConfig.thinkingBudget = budget;
+  }
+  if (reasoning.summary === true) {
+    thinkingConfig.includeThoughts = true;
+  }
+  return Object.keys(thinkingConfig).length > 0
+    ? thinkingConfig
+    : undefined;
+}
+
 export function fromCanonicalRequest(
   request: CanonicalRequest,
 ): GenerateContentRequest {
@@ -330,6 +554,7 @@ export function fromCanonicalRequest(
   // Add generation config
   if (request.config) {
     const c = request.config;
+    const thinkingConfig = toThinkingConfig(request);
     result.generationConfig = {
       ...(c.temperature !== undefined && { temperature: c.temperature }),
       ...(c.maxTokens !== undefined && { maxOutputTokens: c.maxTokens }),
@@ -339,6 +564,7 @@ export function fromCanonicalRequest(
       ...(c.candidateCount !== undefined && {
         candidateCount: c.candidateCount,
       }),
+      ...(thinkingConfig !== undefined && { thinkingConfig }),
     };
   }
 
