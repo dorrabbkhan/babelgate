@@ -65,16 +65,55 @@ export function toCanonicalResponse(
         call_id?: string;
         id?: string;
         name?: string;
+        namespace?: string;
         arguments?: string;
+      };
+      // `namespace` is Codex's explicit field on the call — its
+      // router reads it at 0.169.0
+      // (codex-rs/core/src/tools/router.rs); kept verbatim on
+      // `function.namespace` (the leaf stays in `name`).
+      (toolCalls as NonNullable<typeof toolCalls>).push({
+        id: call.call_id ?? call.id ?? "",
+        type: "function",
+        function: {
+          name: call.name ?? "",
+          arguments: call.arguments ?? "",
+          ...(typeof call.namespace === "string" && {
+            namespace: call.namespace,
+          }),
+        },
+      });
+      continue;
+    }
+    if (typed.type === "custom_tool_call") {
+      // `custom_tool_call` output items per
+      // https://platform.openai.com/docs/api-reference/responses/object
+      // — raw `input` stays the arguments verbatim, `custom: true`
+      // keeps diagnostics/repair off it (v1.4 spec §3.6). `namespace`
+      // rides it the same way it rides function_call
+      // (recording-responses-lite.jsonl).
+      const call = item as {
+        call_id?: string;
+        id?: string;
+        name?: string;
+        namespace?: string;
+        input?: string;
       };
       (toolCalls as NonNullable<typeof toolCalls>).push({
         id: call.call_id ?? call.id ?? "",
         type: "function",
-        function: { name: call.name ?? "", arguments: call.arguments ?? "" },
+        custom: true,
+        function: {
+          name: call.name ?? "",
+          arguments: typeof call.input === "string" ? call.input : "",
+          ...(typeof call.namespace === "string" && {
+            namespace: call.namespace,
+          }),
+        },
       });
       continue;
     }
-    // reasoning (Task 8), custom_tool_call (Task 5), server-side calls.
+    // reasoning (Task 8), server-side calls.
     note(
       "field_dropped",
       `output[${i}]`,
@@ -101,9 +140,10 @@ export function toCanonicalResponse(
 function toCanonicalFinish(
   response: ResponsesResponse,
 ): CanonicalResponse["finishReason"] {
-  const hasToolCalls = (response.output ?? []).some(
-    (item) => (item as { type?: string }).type === "function_call",
-  );
+  const hasToolCalls = (response.output ?? []).some((item) => {
+    const t = (item as { type?: string }).type;
+    return t === "function_call" || t === "custom_tool_call";
+  });
   switch (response.status) {
     case "completed":
     case undefined:
@@ -218,11 +258,28 @@ export function fromCanonicalResponse(
     });
   }
   for (const call of response.message.toolCalls ?? []) {
+    if (call.custom === true) {
+      output.push({
+        type: "custom_tool_call",
+        id: `ctc_${itemSeq++}`,
+        call_id: call.id,
+        name: call.function.name,
+        ...(call.function.namespace !== undefined && {
+          namespace: call.function.namespace,
+        }),
+        input: call.function.arguments,
+        status: "completed",
+      });
+      continue;
+    }
     output.push({
       type: "function_call",
       id: `fc_${itemSeq++}`,
       call_id: call.id,
       name: call.function.name,
+      ...(call.function.namespace !== undefined && {
+        namespace: call.function.namespace,
+      }),
       arguments: call.function.arguments,
       status: "completed",
     });

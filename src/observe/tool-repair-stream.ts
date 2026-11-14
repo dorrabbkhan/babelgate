@@ -21,6 +21,9 @@ export function createRepairTransform(): (
   return (event) => {
     switch (event.type) {
       case "tool_call_start":
+        // §3.6: a custom call's input is raw text — held nowhere,
+        // parsed never. Its deltas stream through untouched.
+        if (event.custom === true) return [event];
         held.set(event.index, { id: event.id, name: event.name, args: "" });
         return [event];
 

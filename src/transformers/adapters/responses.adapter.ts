@@ -332,8 +332,19 @@ export function fromCanonicalRequest(
       ? systemText(request.systemPrompt)
       : undefined;
 
+  // Custom calls re-encode as custom_tool_call and their results as
+  // custom_tool_call_output (SDK ResponseCustomToolCall/Output) — the
+  // id set is scanned up front so results typed before their calls
+  // still match.
+  const customCallIds = new Set(
+    request.messages.flatMap((m) =>
+      (m.toolCalls ?? [])
+        .filter((c) => c.custom === true)
+        .map((c) => c.id),
+    ),
+  );
   for (const message of request.messages) {
-    input.push(...encodeMessage(message));
+    input.push(...encodeMessage(message, customCallIds));
   }
 
   const result: Record<string, unknown> = {
@@ -357,7 +368,10 @@ export function fromCanonicalRequest(
       tools: request.tools.map(toResponsesTool),
     }),
     ...(request.toolChoice !== undefined && {
-      tool_choice: toResponsesToolChoice(request.toolChoice),
+      tool_choice: toResponsesToolChoice(
+        request.toolChoice,
+        request.tools,
+      ),
     }),
   };
 

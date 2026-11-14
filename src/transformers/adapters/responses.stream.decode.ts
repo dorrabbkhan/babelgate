@@ -57,8 +57,8 @@ interface DecodeCall {
  * content never streamed are reconciled (a delta-only or
  * object-only upstream still yields its content exactly once —
  * announced-but-contentless message items included). Unknown event types and item
- * types are ignored with a debug line — Tasks 5/8 own custom-tool
- * and reasoning events. A stream ending without a terminal event
+ * types are ignored with a debug line — Task 8 owns reasoning
+ * events. A stream ending without a terminal event
  * ends in an `error` event.
  */
 export function createStreamDecoder(
@@ -117,6 +117,23 @@ export function createStreamDecoder(
     return undefined;
   }
 
+  /**
+   * Call items: `function_call` and `custom_tool_call` (v1.4 spec
+   * §3.6 — the custom item's `input` streams raw via
+   * `response.custom_tool_call_input.*`; `function_call` uses
+   * `arguments` via `response.function_call_arguments.*`). Codex's
+   * explicit `namespace` field rides the start event verbatim
+   * (codex-rs/core/src/tools/router.rs at 0.169.0).
+   */
+  function isCallItem(item: Obj): boolean {
+    return item.type === "function_call" || item.type === "custom_tool_call";
+  }
+
+  /** The done/reconcile field holding the call's full text. */
+  function callText(item: Obj): unknown {
+    return item.type === "custom_tool_call" ? item.input : item.arguments;
+  }
+
   function openCall(item: Obj, out: CanonicalStreamEvent[]): DecodeCall {
     const call: DecodeCall = { index: nextToolIndex++, args: "", done: false };
     openCalls.push(call.index);
@@ -131,6 +148,10 @@ export function createStreamDecoder(
             ? item.id
             : ids(),
       name: typeof item.name === "string" ? item.name : "",
+      ...(typeof item.namespace === "string" && {
+        namespace: item.namespace,
+      }),
+      ...(item.type === "custom_tool_call" && { custom: true }),
     });
     return call;
   }
@@ -185,14 +206,15 @@ export function createStreamDecoder(
       return;
     }
     if (typeof item.id === "string" && seenItemIds.has(item.id)) return;
-    if (item.type === "function_call") {
+    if (isCallItem(item)) {
       const call = openCall(item, out);
-      if (typeof item.arguments === "string" && item.arguments !== "") {
-        call.args = item.arguments;
+      const text = callText(item);
+      if (typeof text === "string" && text !== "") {
+        call.args = text;
         out.push({
           type: "tool_call_delta",
           index: call.index,
-          argumentsDelta: item.arguments,
+          argumentsDelta: text,
         });
       }
       call.done = true;
@@ -246,7 +268,7 @@ export function createStreamDecoder(
       case "response.output_item.added": {
         const item = event.item ?? {};
         if (typeof item.id === "string") seenItemIds.add(item.id);
-        if (item.type === "function_call") {
+        if (isCallItem(item)) {
           ensureStarted(out);
           const call = openCall(item, out);
           if (typeof event.output_index === "number") {
@@ -258,22 +280,23 @@ export function createStreamDecoder(
       case "response.output_item.done": {
         const item = event.item ?? {};
         if (typeof item.id === "string") seenItemIds.add(item.id);
-        if (item.type !== "function_call") break;
+        if (!isCallItem(item)) break;
         let call =
           typeof item.id === "string"
             ? callsByItem.get(item.id)
             : undefined;
         call ??= callFor(event);
         if (call === undefined) {
-          // A function_call item seen only at its done event —
-          // emit the whole call here.
+          // A call item seen only at its done event — emit the
+          // whole call here.
           call = openCall(item, out);
         }
         if (!call.done) {
           call.done = true;
           openCalls.splice(openCalls.indexOf(call.index), 1);
-          if (typeof item.arguments === "string") {
-            settleArguments(call, item.arguments, type, out);
+          const text = callText(item);
+          if (typeof text === "string") {
+            settleArguments(call, text, type, out);
           }
           out.push({ type: "tool_call_end", index: call.index });
         }
@@ -303,6 +326,33 @@ export function createStreamDecoder(
           // arguments at done; partial deltas are extended, never
           // silently truncated.
           settleArguments(call, event.arguments, type, out);
+        }
+        break;
+      }
+      case "response.custom_tool_call_input.delta": {
+        // Custom tool input streams as `delta` strings — raw text,
+        // never JSON (v1.4 spec §3.6; the Responses streaming
+        // reference + codex-rs/codex-api/src/sse/responses.rs).
+        const call = callFor(event);
+        if (
+          call &&
+          !call.done &&
+          typeof event.delta === "string" &&
+          event.delta !== ""
+        ) {
+          call.args += event.delta;
+          out.push({
+            type: "tool_call_delta",
+            index: call.index,
+            argumentsDelta: event.delta,
+          });
+        }
+        break;
+      }
+      case "response.custom_tool_call_input.done": {
+        const call = callFor(event);
+        if (call && typeof event.input === "string") {
+          settleArguments(call, event.input, type, out);
         }
         break;
       }

@@ -424,6 +424,26 @@ export function fromCanonicalRequest(
     }),
   };
 
+  // v1.4 spec §3.6: `disable_parallel_tool_use` lives inside
+  // tool_choice on the forms that use tools — auto (the default when
+  // none is sent: at most one call), any and tool
+  // (https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
+  // and the SDK's ToolChoice types). `none` has no such field — and
+  // with no tool use parallel_tool_calls means nothing, so it is
+  // dropped silently.
+  if (
+    request.parallelToolCalls === false &&
+    result.tool_choice?.type !== "none"
+  ) {
+    const choice =
+      result.tool_choice ??
+      ({ type: "auto" } as NonNullable<typeof result.tool_choice>);
+    (result as { tool_choice?: unknown }).tool_choice = {
+      ...choice,
+      disable_parallel_tool_use: true,
+    };
+  }
+
   if (request.stream !== undefined) {
     (result as { stream?: boolean }).stream = request.stream;
   }

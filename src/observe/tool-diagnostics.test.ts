@@ -115,6 +115,26 @@ describe("diagnoseToolCalls (spec §3.7)", () => {
     expect(diags).toHaveLength(2);
     expect(JSON.stringify(diags)).not.toContain("SENTINEL-ARG-7q");
   });
+
+  it("custom tool calls are never diagnosed", () => {
+    // v1.4 spec §3.6: a `custom: true` call's arguments are a raw
+    // input string — fences and braces included — never JSON.
+    const customCall: CanonicalToolCall = {
+      id: "call_1",
+      type: "function",
+      custom: true,
+      function: {
+        name: "apply_patch",
+        arguments: "*** Begin Patch\n```\n{\n```",
+      },
+    };
+    const customTools: CanonicalTool[] = [
+      { type: "custom", name: "apply_patch" },
+    ];
+    expect(diagnoseToolCalls([customCall], customTools)).toEqual([]);
+    // Also no unknown_tool diagnostic when the tool isn't declared.
+    expect(diagnoseToolCalls([customCall], tools)).toEqual([]);
+  });
 });
 
 describe("repairArguments (spec §3.7)", () => {

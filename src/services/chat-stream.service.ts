@@ -76,6 +76,7 @@ export async function proxyChatStream(
   const { pipelineDecoder, observed } = observedDecoder(
     result.value.decoder,
     result.entry.repairToolCalls === true,
+    canonical,
   );
 
   const signal = opts?.signal ?? new AbortController().signal;

@@ -38,6 +38,8 @@ type Obj = Record<string, any>;
 interface EncodeCall {
   id: string;
   name: string;
+  namespace?: string;
+  custom?: boolean;
   args: string;
 }
 
@@ -133,15 +135,60 @@ export function createStreamEncoder(
     );
   }
 
-  /** Serialize one buffered call as a complete function_call item. */
+  /** Serialize one buffered call as a complete call item. */
   function emitCall(call: EncodeCall): string {
     const itemId = `fc_${nextItemSeq++}`;
     const outputIndex = nextOutputIndex++;
+    if (call.custom === true) {
+      // `custom_tool_call` + `response.custom_tool_call_input.delta`/
+      // `.done` — event names per
+      // https://platform.openai.com/docs/api-reference/responses-streaming
+      // and the openai 7.30.1 SDK typings (v1.4 spec §3.6).
+      const openItem = {
+        id: itemId,
+        type: "custom_tool_call",
+        call_id: call.id,
+        name: call.name,
+        // `namespace` rides custom_tool_call too
+        // (recording-responses-lite.jsonl).
+        ...(call.namespace !== undefined && { namespace: call.namespace }),
+        input: "",
+        status: "in_progress",
+      };
+      const doneItem = { ...openItem, input: call.args, status: "completed" };
+      emittedItems.push(doneItem);
+      return (
+        closeText() +
+        emit("response.output_item.added", {
+          output_index: outputIndex,
+          item: openItem,
+        }) +
+        (call.args !== ""
+          ? emit("response.custom_tool_call_input.delta", {
+              item_id: itemId,
+              output_index: outputIndex,
+              delta: call.args,
+            })
+          : "") +
+        emit("response.custom_tool_call_input.done", {
+          item_id: itemId,
+          output_index: outputIndex,
+          input: call.args,
+        }) +
+        emit("response.output_item.done", {
+          output_index: outputIndex,
+          item: doneItem,
+        })
+      );
+    }
     const openItem = {
       id: itemId,
       type: "function_call",
       call_id: call.id,
       name: call.name,
+      // Codex's explicit `namespace` field on the call —
+      // codex-rs/core/src/tools/router.rs reads it at 0.169.0.
+      ...(call.namespace !== undefined && { namespace: call.namespace }),
       arguments: "",
       status: "in_progress",
     };
@@ -276,6 +323,10 @@ export function createStreamEncoder(
           calls.set(event.index, {
             id: event.id,
             name: event.name,
+            ...(event.namespace !== undefined && {
+              namespace: event.namespace,
+            }),
+            ...(event.custom !== undefined && { custom: event.custom }),
             args: "",
           });
           return "";

@@ -378,6 +378,95 @@ describe('Anthropic Adapter', () => {
       }
     });
 
+    // v1.4 spec §3.6: `parallelToolCalls: false` →
+    // `tool_choice.disable_parallel_tool_use: true`. Anthropic carries
+    // the flag inside tool_choice on the forms that use tools — `auto`
+    // (the default when no tool_choice is sent → at most one call,
+    // text answers still allowed), `any` and `tool` (exactly one
+    // call). `none` has no such field; the flag is dropped.
+    // https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
+    describe('parallelToolCalls → disable_parallel_tool_use', () => {
+      const withTools = (
+        extra: Partial<CanonicalRequest>,
+      ): MessageCreateParams =>
+        fromCanonicalRequest({
+          model: 'claude-3-opus-20240229',
+          messages: [{ role: 'user', content: 'Weather?' }],
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                parameters: { type: 'object' },
+              },
+            },
+          ],
+          ...extra,
+        });
+
+      it('no tool_choice → {type:"auto", disable_parallel_tool_use:true}', () => {
+        const result = withTools({ parallelToolCalls: false });
+        expect(result.tool_choice).toEqual({
+          type: 'auto',
+          disable_parallel_tool_use: true,
+        });
+      });
+
+      it('tool_choice auto', () => {
+        const result = withTools({
+          toolChoice: 'auto',
+          parallelToolCalls: false,
+        });
+        expect(result.tool_choice).toEqual({
+          type: 'auto',
+          disable_parallel_tool_use: true,
+        });
+      });
+
+      it('tool_choice none sends no flag', () => {
+        const result = withTools({
+          toolChoice: 'none',
+          parallelToolCalls: false,
+        });
+        expect(result.tool_choice).toEqual({ type: 'none' });
+      });
+
+      it('tool_choice required → any with the flag', () => {
+        const result = withTools({
+          toolChoice: 'required',
+          parallelToolCalls: false,
+        });
+        expect(result.tool_choice).toEqual({
+          type: 'any',
+          disable_parallel_tool_use: true,
+        });
+      });
+
+      it('named tool choice keeps the flag', () => {
+        const result = withTools({
+          toolChoice: {
+            type: 'function',
+            function: { name: 'get_weather' },
+          },
+          parallelToolCalls: false,
+        });
+        expect(result.tool_choice).toEqual({
+          type: 'tool',
+          name: 'get_weather',
+          disable_parallel_tool_use: true,
+        });
+      });
+
+      it('parallelToolCalls unset or true adds nothing', () => {
+        expect(withTools({}).tool_choice).toBeUndefined();
+        const result = withTools({
+          parallelToolCalls: true,
+          toolChoice: 'auto',
+        });
+        expect(result.tool_choice).toEqual({ type: 'auto' });
+      });
+    });
+
     it('user message with 3 tool_results splits into 3 tool messages then text', () => {
       const input: MessageCreateParams = {
         model: 'claude-3-opus-20240229',

@@ -79,6 +79,7 @@ async function* canonicalAttemptStream(
   const { pipelineDecoder, observed } = observedDecoder(
     result.value.decoder,
     result.entry.repairToolCalls === true,
+    canonical,
   );
   const signal = ctx.signal ?? new AbortController().signal;
   let iterated = false;

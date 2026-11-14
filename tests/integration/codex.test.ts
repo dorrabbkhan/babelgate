@@ -256,3 +256,829 @@ describe("codex bridge", () => {
     }
   });
 });
+
+// ===== v1.4 Task 5: custom tools, namespace tools, parallel_tool_calls =====
+
+import { http, HttpResponse } from "msw";
+import { writeFileSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { responseOverrides } from "../mocks/upstreams";
+import { canonicalForTarget } from "../../src/services/attempt-targets";
+import type { ProviderEntry } from "../../src/routing/registry";
+import type { Provider } from "../../src/transformers";
+import { registerSink, type TraceSink } from "../../src/observe/emit";
+import type { RequestTrace } from "../../src/observe/trace";
+
+/**
+ * Owner decision A: `{type:"namespace"}` tools flatten to
+ * `ns__leaf` function tools on every non-Responses target and calls
+ * come back as `{name: leaf, namespace: ns}` — the explicit field
+ * Codex's router reads (codex-rs/core/src/tools/router.rs at
+ * 0.169.0). Custom tools lower to one-string functions and come
+ * back as `custom_tool_call`.
+ */
+
+const traces: RequestTrace[] = [];
+const recorder: TraceSink = { name: "recorder", accept: (t) => traces.push(t) };
+registerSink(recorder);
+
+const TMP_DIR = mkdtempSync(join(tmpdir(), "bg-codex5-"));
+
+const NAMESPACE_TOOL = {
+  type: "namespace",
+  name: "multi_agent_v1",
+  description: "Tools for spawning and managing sub-agents.",
+  tools: [
+    {
+      type: "function",
+      name: "spawn_agent",
+      description: "Spawn a sub-agent",
+      parameters: { type: "object" },
+    },
+  ],
+};
+
+const CUSTOM_TOOL = {
+  type: "custom",
+  name: "apply_patch",
+  description: "Apply a patch",
+  format: { type: "grammar", syntax: "lark", definition: "start: patch" },
+};
+
+const namespacedRequest = (extra: Record<string, unknown> = {}) => ({
+  model: "gpt-5-codex",
+  input: [
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "spawn an agent" }],
+    },
+  ],
+  store: false,
+  tools: [NAMESPACE_TOOL],
+  ...extra,
+});
+
+const customRequest = (extra: Record<string, unknown> = {}) => ({
+  model: "gpt-5-codex",
+  input: [
+    {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: "patch it" }],
+    },
+  ],
+  store: false,
+  tools: [CUSTOM_TOOL],
+  ...extra,
+});
+
+function useTarget(t: Provider, yaml?: string): void {
+  process.env.TARGET_API = t;
+  process.env[`${t.toUpperCase()}_API_BASE_URL`] = MOCK_BASE_URLS[t];
+  process.env[`${t.toUpperCase()}_API_KEY`] = "test-key";
+  if (yaml !== undefined) {
+    const file = join(TMP_DIR, `gw-${t}-${Math.random().toString(36).slice(2)}.yaml`);
+    writeFileSync(file, yaml);
+    process.env.BABELGATE_CONFIG = file;
+  } else {
+    delete process.env.BABELGATE_CONFIG;
+  }
+  resetConfig();
+}
+
+/** A tool-call reply in each dialect naming the flattened call. */
+const FLAT_CALL_REPLIES: Record<string, unknown> = {
+  openai: {
+    id: "chatcmpl-tc",
+    object: "chat.completion",
+    created: 1,
+    model: "m",
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: {
+                name: "multi_agent_v1__spawn_agent",
+                arguments: "{}",
+              },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  },
+  anthropic: {
+    id: "msg_tc",
+    type: "message",
+    role: "assistant",
+    model: "m",
+    content: [
+      {
+        type: "tool_use",
+        id: "toolu_1",
+        name: "multi_agent_v1__spawn_agent",
+        input: {},
+      },
+    ],
+    stop_reason: "tool_use",
+    usage: { input_tokens: 10, output_tokens: 5 },
+  },
+  gemini: {
+    candidates: [
+      {
+        content: {
+          role: "model",
+          parts: [
+            {
+              functionCall: {
+                name: "multi_agent_v1__spawn_agent",
+                args: {},
+              },
+            },
+          ],
+        },
+        finishReason: "STOP",
+        index: 0,
+      },
+    ],
+    modelVersion: "m",
+  },
+  ollama: {
+    model: "m",
+    created_at: "2024-01-01T00:00:00Z",
+    message: {
+      role: "assistant",
+      content: "",
+      tool_calls: [
+        {
+          function: {
+            name: "multi_agent_v1__spawn_agent",
+            arguments: {},
+          },
+        },
+      ],
+    },
+    done: true,
+    done_reason: "stop",
+  },
+};
+
+/** Minimal dialect SSE/NDJSON streams carrying the flattened call. */
+function flatCallStream(t: Provider): { text: string; contentType: string } {
+  switch (t) {
+    case "openai":
+      return {
+        contentType: "text/event-stream",
+        text: [
+          'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"multi_agent_v1__spawn_agent","arguments":""}}]},"finish_reason":null}]}',
+          "",
+          'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{}"}}]},"finish_reason":null}]}',
+          "",
+          'data: {"id":"c","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}',
+          "",
+          "data: [DONE]",
+          "",
+        ].join("\n"),
+      };
+    case "anthropic":
+      return {
+        contentType: "text/event-stream",
+        text: [
+          "event: message_start",
+          'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
+          "",
+          "event: content_block_start",
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"multi_agent_v1__spawn_agent","input":{}}}',
+          "",
+          "event: content_block_delta",
+          'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}',
+          "",
+          "event: content_block_stop",
+          'data: {"type":"content_block_stop","index":0}',
+          "",
+          "event: message_delta",
+          'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":5}}',
+          "",
+          "event: message_stop",
+          'data: {"type":"message_stop"}',
+          "",
+        ].join("\n"),
+      };
+    case "gemini":
+      return {
+        contentType: "text/event-stream",
+        text: [
+          'data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"multi_agent_v1__spawn_agent","args":{}}}]},"finishReason":"STOP","index":0}],"modelVersion":"m"}',
+          "",
+        ].join("\n"),
+      };
+    case "ollama":
+      return {
+        contentType: "application/x-ndjson",
+        text: [
+          '{"model":"m","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"multi_agent_v1__spawn_agent","arguments":{}}}]},"done":false}',
+          '{"model":"m","created_at":"2024-01-01T00:00:00Z","message":{"role":"assistant","content":""},"done":true,"done_reason":"stop"}',
+          "",
+        ].join("\n"),
+      };
+    default:
+      throw new Error(`no stream for ${t}`);
+  }
+}
+
+const TARGET_PATHS: Record<string, string> = {
+  openai: `${MOCK_BASE_URLS.openai}/v1/chat/completions`,
+  anthropic: `${MOCK_BASE_URLS.anthropic}/v1/messages`,
+  gemini: `${MOCK_BASE_URLS.gemini}/v1beta/models/*`,
+  ollama: `${MOCK_BASE_URLS.ollama}/api/chat`,
+};
+
+/** OpenAI-dialect SSE carrying one function call whose arguments
+ *  arrive in `pieces`. */
+function openaiCallStream(name: string, pieces: string[]): string {
+  const chunk = (
+    delta: Record<string, unknown>,
+    finish: string | null = null,
+  ) =>
+    `data: ${JSON.stringify({
+      id: "c",
+      object: "chat.completion.chunk",
+      created: 1,
+      model: "m",
+      choices: [{ index: 0, delta, finish_reason: finish }],
+    })}`;
+  return [
+    chunk({
+      role: "assistant",
+      tool_calls: [
+        {
+          index: 0,
+          id: "call_1",
+          type: "function",
+          function: { name, arguments: "" },
+        },
+      ],
+    }),
+    ...pieces.map((p) =>
+      chunk({ tool_calls: [{ index: 0, function: { arguments: p } }] }),
+    ),
+    chunk({}, "tool_calls"),
+    "data: [DONE]",
+    "",
+  ].join("\n\n");
+}
+
+/** supertest parses SSE as an opaque body — collect it as text. */
+function postResponsesStream(body: unknown): request.Test {
+  return request(app)
+    .post("/v1/responses")
+    .send(body)
+    .buffer(true)
+    .parse((res, cb) => {
+      let text = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => (text += chunk));
+      res.on("end", () => cb(null, text));
+    });
+}
+
+function parseSseFrames(text: string): Array<Record<string, unknown>> {
+  return text
+    .split("\n\n")
+    .map((f) => f.trim())
+    .filter((f) => f !== "")
+    .flatMap((frame) =>
+      frame
+        .split("\n")
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).replace(/^ /, "")),
+    )
+    .filter((d) => d !== "[DONE]")
+    .map((d) => JSON.parse(d) as Record<string, unknown>);
+}
+
+describe("custom and namespace tools (v1.4 spec §3.6)", () => {
+  it("custom tool reaches a gemini upstream as a function and returns as custom_tool_call", async () => {
+    useTarget("gemini");
+    responseOverrides.gemini = {
+      body: {
+        candidates: [
+          {
+            content: {
+              role: "model",
+              parts: [
+                {
+                  functionCall: {
+                    name: "apply_patch",
+                    args: { input: "*** Begin Patch\n@@" },
+                  },
+                },
+              ],
+            },
+            finishReason: "STOP",
+            index: 0,
+          },
+        ],
+        modelVersion: "m",
+      },
+    };
+
+    const res = await request(app)
+      .post("/v1/responses")
+      .send(customRequest());
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // The custom tool went upstream as a one-string function tool.
+    const upstream = capturedRequests.gemini[0] as {
+      tools?: Array<{ functionDeclarations?: Array<Record<string, unknown>> }>;
+    };
+    expect(upstream.tools?.[0].functionDeclarations).toEqual([
+      {
+        name: "apply_patch",
+        description: expect.stringContaining("Apply a patch"),
+        parameters: {
+          type: "object",
+          properties: { input: { type: "string" } },
+          required: ["input"],
+        },
+      },
+    ]);
+
+    // …and the call came back as a custom_tool_call, input raw.
+    expect(res.body.output).toEqual([
+      {
+        type: "custom_tool_call",
+        id: expect.any(String),
+        call_id: expect.any(String),
+        name: "apply_patch",
+        input: "*** Begin Patch\n@@",
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("custom tool input is never diagnosed or repaired", async () => {
+    // Review Focus 4: apply_patch-style input containing fences and
+    // braces, with repair_tool_calls on — the client receives the
+    // input byte-identical; zero diagnostics, zero repairs.
+    const INPUT = "*** Begin Patch\n```\n{\n```";
+    const yaml = `default: fix
+providers:
+  fix:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+    repair_tool_calls: true
+routes:
+  - match: "*"
+    to: fix/m
+`;
+    useTarget("openai", yaml);
+    responseOverrides.openai = {
+      body: {
+        id: "chatcmpl-tc",
+        object: "chat.completion",
+        created: 1,
+        model: "m",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function",
+                  function: {
+                    name: "apply_patch",
+                    arguments: JSON.stringify({ input: INPUT }),
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+      },
+    };
+
+    const before = traces.length;
+    const res = await request(app)
+      .post("/v1/responses")
+      .send(customRequest());
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    expect(res.body.output).toEqual([
+      {
+        type: "custom_tool_call",
+        id: expect.any(String),
+        call_id: expect.any(String),
+        name: "apply_patch",
+        input: INPUT,
+        status: "completed",
+      },
+    ]);
+
+    const trace = traces[before];
+    expect(trace).toBeDefined();
+    expect(trace.diagnostics).toEqual([]);
+    expect(trace.repairs).toEqual([]);
+  });
+
+  it("custom input streams byte-identical end to end with repair on (Review Focus 4)", async () => {
+    // A streaming Responses request with apply_patch and
+    // repair_tool_calls on, routed to a non-Responses target that
+    // streams the lowered {"input": …} call across several deltas —
+    // the input must arrive byte-identical, never diagnosed or
+    // repaired.
+    const INPUT = "*** Begin Patch\n```\n{\n```";
+    const yaml = `default: fix
+providers:
+  fix:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+    repair_tool_calls: true
+routes:
+  - match: "*"
+    to: fix/m
+`;
+    useTarget("openai", yaml);
+    const args = JSON.stringify({ input: INPUT });
+    // Split mid-string and mid-fence.
+    const pieces = [args.slice(0, 25), args.slice(25, 42), args.slice(42)];
+    server.use(
+      http.post(TARGET_PATHS.openai, () =>
+        new HttpResponse(openaiCallStream("apply_patch", pieces), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    const before = traces.length;
+    const res = await postResponsesStream(customRequest({ stream: true }));
+    expect(res.status).toBe(200);
+
+    const frames = parseSseFrames(res.body as unknown as string);
+    const joined = frames
+      .filter((f) => f.type === "response.custom_tool_call_input.delta")
+      .map((f) => f.delta as string)
+      .join("");
+    expect(joined).toBe(INPUT);
+    const inputDone = frames.find(
+      (f) => f.type === "response.custom_tool_call_input.done",
+    );
+    expect(inputDone?.input).toBe(INPUT);
+    const item = frames.find(
+      (f) =>
+        f.type === "response.output_item.done" &&
+        (f.item as Record<string, unknown>)?.type === "custom_tool_call",
+    )?.item as Record<string, unknown> | undefined;
+    expect(item?.input).toBe(INPUT);
+
+    const trace = traces[before];
+    expect(trace).toBeDefined();
+    expect(trace.diagnostics).toEqual([]);
+    expect(trace.repairs).toEqual([]);
+  });
+
+  it("a split {input} wrapper with fences produces no diagnostics (streaming)", async () => {
+    // fix round 2: finishStreamTrace diagnoses the RAISED calls, the
+    // same as the unary path — a lowered {input} wrapper never shows
+    // as a diagnostic.
+    useTarget("openai");
+    const INPUT = "*** Begin Patch\n```\n{\n```";
+    const args = JSON.stringify({ input: INPUT });
+    const pieces = [args.slice(0, 25), args.slice(25, 42), args.slice(42)];
+    server.use(
+      http.post(TARGET_PATHS.openai, () =>
+        new HttpResponse(openaiCallStream("apply_patch", pieces), {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+    );
+
+    const before = traces.length;
+    const res = await postResponsesStream(customRequest({ stream: true }));
+    expect(res.status).toBe(200);
+
+    const frames = parseSseFrames(res.body as unknown as string);
+    const inputDone = frames.find(
+      (f) => f.type === "response.custom_tool_call_input.done",
+    );
+    expect(inputDone?.input).toBe(INPUT);
+    expect(traces[before]?.diagnostics).toEqual([]);
+  });
+
+  it("a namespaced custom-leaf call streams with no diagnostics", async () => {
+    // fix round 2: the observed call carries the lowered ns__leaf
+    // name; diagnosing the raised call keeps a custom leaf's raw
+    // input out of unknown_tool/invalid_json checks.
+    useTarget("openai");
+    const args = JSON.stringify({ input: "echo hi" });
+    server.use(
+      http.post(TARGET_PATHS.openai, () =>
+        new HttpResponse(
+          openaiCallStream("functions__exec", [
+            args.slice(0, 11),
+            args.slice(11),
+          ]),
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    );
+
+    const before = traces.length;
+    const res = await postResponsesStream({
+      model: "gpt-5-codex",
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "run it" }],
+        },
+      ],
+      store: false,
+      stream: true,
+      tools: [
+        {
+          type: "namespace",
+          name: "functions",
+          tools: [{ type: "custom", name: "exec" }],
+        },
+      ],
+    });
+    expect(res.status).toBe(200);
+
+    const frames = parseSseFrames(res.body as unknown as string);
+    const item = frames.find(
+      (f) =>
+        f.type === "response.output_item.done" &&
+        (f.item as Record<string, unknown>)?.type === "custom_tool_call",
+    )?.item as Record<string, unknown> | undefined;
+    expect(item).toMatchObject({
+      name: "exec",
+      namespace: "functions",
+      input: "echo hi",
+    });
+    expect(traces[before]?.diagnostics).toEqual([]);
+  });
+
+  it("tool_choice naming a custom tool round-trips as {type:custom} on a responses target", async () => {
+    // {type:"custom", name} per the Responses create reference +
+    // openai 7.30.1 SDK ToolChoiceCustom (fix round 2).
+    useTarget("responses");
+    const res = await request(app)
+      .post("/v1/responses")
+      .send(
+        customRequest({
+          tool_choice: { type: "custom", name: "apply_patch" },
+        }),
+      );
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    expect(capturedRequests.responses[0]).toMatchObject({
+      tool_choice: { type: "custom", name: "apply_patch" },
+    });
+  });
+
+  it.each(["openai", "anthropic", "gemini", "ollama"] as const)(
+    "namespace round-trip on %s (unary)",
+    async (target) => {
+      useTarget(target);
+      responseOverrides[target] = { body: FLAT_CALL_REPLIES[target] };
+
+      const res = await request(app)
+        .post("/v1/responses")
+        .send(namespacedRequest());
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+      // The upstream saw a flattened function tool named
+      // multi_agent_v1__spawn_agent.
+      expect(
+        JSON.stringify(capturedRequests[target][0]),
+      ).toContain("multi_agent_v1__spawn_agent");
+
+      // The client sees the namespaced form.
+      expect(res.body.output).toEqual([
+        {
+          type: "function_call",
+          id: expect.any(String),
+          call_id: expect.any(String),
+          name: "spawn_agent",
+          namespace: "multi_agent_v1",
+          arguments: "{}",
+          status: "completed",
+        },
+      ]);
+    },
+  );
+
+  it.each(["openai", "anthropic", "gemini", "ollama"] as const)(
+    "namespace round-trip on %s (streaming)",
+    async (target) => {
+      useTarget(target);
+      const stream = flatCallStream(target);
+      server.use(
+        http.post(TARGET_PATHS[target], () =>
+          new HttpResponse(stream.text, {
+            headers: { "content-type": stream.contentType },
+          }),
+        ),
+      );
+
+      const res = await request(app)
+        .post("/v1/responses")
+        .send(namespacedRequest({ stream: true }))
+        .buffer(true)
+        .parse((r, cb) => {
+          let text = "";
+          r.setEncoding("utf8");
+          r.on("data", (c: string) => (text += c));
+          r.on("end", () => cb(null, text));
+        });
+      expect(res.status).toBe(200);
+
+      const frames = parseSseFrames(res.body as unknown as string);
+      const doneItem = frames.find(
+        (f) =>
+          f.type === "response.output_item.done" &&
+          (f.item as Record<string, unknown>)?.type === "function_call",
+      )?.item as Record<string, unknown> | undefined;
+      expect(doneItem).toMatchObject({
+        name: "spawn_agent",
+        namespace: "multi_agent_v1",
+      });
+    },
+  );
+});
+
+/**
+ * Conductor pin: for requests carrying only function tools, the full
+ * encoded upstream body is byte-identical to what 1.3 produced — for
+ * every target, and for Anthropic, Chat, Gemini and Ollama sources.
+ * The literals below were captured from the 1.3 encoders before this
+ * task's changes landed; `canonicalForTarget` is included so the
+ * lowering path itself is exercised.
+ */
+describe("non-Responses sources are byte-identical to 1.3", () => {
+  const SOURCE_REQUESTS: Record<string, unknown> = {
+    anthropic: {
+      model: "claude-3-opus-20240229",
+      max_tokens: 1024,
+      messages: [{ role: "user", content: "weather?" }],
+      tools: [
+        {
+          name: "get_weather",
+          description: "Weather for a city",
+          input_schema: {
+            type: "object",
+            properties: { city: { type: "string" } },
+            required: ["city"],
+          },
+        },
+      ],
+      tool_choice: { type: "auto" },
+    },
+    openai: {
+      model: "gpt-4",
+      messages: [{ role: "user", content: "weather?" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Weather for a city",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+            },
+          },
+        },
+      ],
+      tool_choice: "auto",
+    },
+    gemini: {
+      contents: [{ role: "user", parts: [{ text: "weather?" }] }],
+      tools: [
+        {
+          functionDeclarations: [
+            {
+              name: "get_weather",
+              description: "Weather for a city",
+              parameters: {
+                type: "object",
+                properties: { city: { type: "string" } },
+                required: ["city"],
+              },
+            },
+          ],
+        },
+      ],
+    },
+    ollama: {
+      model: "llama3",
+      messages: [{ role: "user", content: "weather?" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Weather for a city",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+            },
+          },
+        },
+      ],
+    },
+  };
+
+  const EXPECTED: Record<string, Record<string, string>> = {
+    anthropic: {
+      openai:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"max_tokens":1024,"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"tool_choice":"auto"}',
+      gemini:
+        '{"contents":[{"role":"user","parts":[{"text":"weather?"}]}],"tools":[{"functionDeclarations":[{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]}],"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}},"generationConfig":{"maxOutputTokens":1024}}',
+      ollama:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"options":{"num_predict":1024},"stream":false}',
+      anthropic:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"max_tokens":1024,"tools":[{"name":"get_weather","description":"Weather for a city","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}],"tool_choice":{"type":"auto"}}',
+      responses:
+        '{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"weather?"}]}],"store":false,"max_output_tokens":1024,"tools":[{"type":"function","name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]},"strict":null}],"tool_choice":"auto"}',
+    },
+    openai: {
+      openai:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"tool_choice":"auto"}',
+      gemini:
+        '{"contents":[{"role":"user","parts":[{"text":"weather?"}]}],"tools":[{"functionDeclarations":[{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]}],"toolConfig":{"functionCallingConfig":{"mode":"AUTO"}},"generationConfig":{}}',
+      ollama:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"stream":false}',
+      anthropic:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"max_tokens":4096,"tools":[{"name":"get_weather","description":"Weather for a city","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}],"tool_choice":{"type":"auto"}}',
+      responses:
+        '{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"weather?"}]}],"store":false,"tools":[{"type":"function","name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]},"strict":null}],"tool_choice":"auto"}',
+    },
+    gemini: {
+      openai:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}]}',
+      gemini:
+        '{"contents":[{"role":"user","parts":[{"text":"weather?"}]}],"tools":[{"functionDeclarations":[{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]}]}',
+      ollama:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"stream":false}',
+      anthropic:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"max_tokens":4096,"tools":[{"name":"get_weather","description":"Weather for a city","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]}',
+      responses:
+        '{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"weather?"}]}],"store":false,"tools":[{"type":"function","name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]},"strict":null}]}',
+    },
+    ollama: {
+      openai:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"stream":true,"stream_options":{"include_usage":true}}',
+      gemini:
+        '{"contents":[{"role":"user","parts":[{"text":"weather?"}]}],"tools":[{"functionDeclarations":[{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]}]}',
+      ollama:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}}],"stream":true}',
+      anthropic:
+        '{"model":"m","messages":[{"role":"user","content":"weather?"}],"max_tokens":4096,"tools":[{"name":"get_weather","description":"Weather for a city","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}],"stream":true}',
+      responses:
+        '{"model":"m","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"weather?"}]}],"store":false,"stream":true,"tools":[{"type":"function","name":"get_weather","description":"Weather for a city","parameters":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]},"strict":null}]}',
+    },
+  };
+
+  it.each(Object.keys(SOURCE_REQUESTS))(
+    "%s source unchanged on every target",
+    (source) => {
+      const canonical = (adapters as Record<string, typeof adapters.openai>)[
+        source
+      ].toCanonicalRequest(SOURCE_REQUESTS[source] as never);
+      for (const [target, expected] of Object.entries(EXPECTED[source])) {
+        const entry = {
+          name: target,
+          type: target,
+          baseUrl: "http://x",
+        } as ProviderEntry;
+        const out = canonicalForTarget(canonical, entry, {
+          provider: target,
+          model: "m",
+        });
+        const wire = (adapters as Record<string, typeof adapters.openai>)[
+          target
+        ].fromCanonicalRequest(out);
+        expect(JSON.stringify(wire), `${source} -> ${target}`).toBe(expected);
+      }
+    },
+  );
+});

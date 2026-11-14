@@ -4412,3 +4412,83 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   model" (was "enables dynamic thinking", `thinkingBudget: -1`). New "no effort leaves thinking
   off" tests assert the exact encoded body for the summary-only case on Anthropic adaptive +
   legacy, Gemini 2.5 + 3.x, Ollama, OpenAI and Responses (which keeps `summary: "auto"`).
+
+## v1.4 Task 5: Custom tools, built-in tools, namespace tools, `parallelToolCalls` (spec §3.6, E3, E13, E14)
+
+- **Canonical changes (types + schema, same commit):** `CanonicalToolCall.function`
+  gains optional `namespace?: string`; `tool_call_start` stream events gain
+  `namespace?: string` (and already had `custom?: boolean`). Codex 0.169.0's router
+  (`codex-rs/core/src/tools/router.rs`, `ToolName::new`) matches calls on the
+  explicit `{name, namespace}` pair — a flat `ns__leaf` name alone never routes —
+  so the raised call must carry `namespace` end-to-end. **Approved canonical
+  change made in this task (owner, conductor session 2026-11-14, PR #95
+  option B):** `CanonicalTool` gains a third variant
+  `{type:"namespace", name, description?, tools, cache?}` whose `tools` are
+  `CanonicalFunctionTool | CanonicalCustomTool` leaves — function tools per
+  `tests/fixtures/codex/recording.jsonl`, and custom tools too: a
+  `{type:"custom"}` leaf inside a namespace is real Codex traffic
+  (`tests/fixtures/codex/recording-responses-lite.jsonl`, namespace
+  "functions" holds the custom `exec` tool). Namespaces do not nest (no
+  evidence in the Codex source).
+- **Namespace tools ride canonical as the variant:** a Responses
+  `{type:"namespace", name, description, tools}` decodes to the
+  `type:"namespace"` variant and re-encodes natively on Responses targets;
+  non-Responses targets get the leaves flattened (below). A custom leaf
+  flattens AND lowers — `ns__leaf` with the one-string `input` parameter —
+  and its call raises back to `{name: leaf, namespace: ns, custom: true}`;
+  `custom_tool_call` therefore also carries `namespace` on decode and
+  encode, matching `function_call` (the lite recording shows the field on
+  real calls).
+- **Flattened naming:** `<namespace>__<leaf>` (separator `__`), sanitized to
+  `[a-zA-Z0-9_-]` and capped at 64 chars — valid under every target's rule:
+  OpenAI Chat `^[a-zA-Z0-9_-]{1,64}$` (function-calling guide), Anthropic
+  `^[a-zA-Z0-9_-]{1,128}$` (tool-use docs), Gemini the same 64-char charset
+  (function-declaration docs), Ollama accepts any string. Names over 64 shorten to
+  `<prefix>-<8-hex FNV-1a of the full name>` — deterministic, so the raise map
+  replays exactly. A flattened name colliding with a top-level tool gets a `__N`
+  suffix + `tool_name_collision` note. Raise-back uses ONLY the map this
+  request's lowering produced — never a name-string guess (owner instruction).
+- **Custom tools:** lower to a same-named function with the grammar verbatim in a
+  fenced `Input format (<syntax>):` block and one required `input` string param
+  (spec §3.6). Calls unwrap `{input}` back to `custom: true`; unparseable or
+  non-`{input}` arguments pass raw with `custom_input_unparsed`. Raw custom input
+  is never JSON-diagnosed or repaired (diagnostics and both repair paths skip
+  `custom: true`; the stream transform sits before the repair transform).
+- **Built-ins:** the §2.2 set drops with `builtin_tool_dropped` (path `tools[i]`);
+  a `tool_choice` naming one becomes `"auto"` with a note. `web_search` (E14)
+  follows §3.6 on the bridge.
+- **`parallelToolCalls`:** OpenAI Chat and Responses emit `parallel_tool_calls`
+  verbatim; Anthropic folds `false` into `tool_choice.disable_parallel_tool_use`
+  on the tool-using `tool_choice` forms — `auto` (synthesized when absent),
+  `any` and `tool` — per
+  https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use
+  and the SDK's ToolChoice types. `{type:"none"}` has no such field (fix
+  round 2): with no tool use the flag means nothing, so it is dropped
+  silently. Gemini and Ollama have no field → `field_dropped` note.
+  A `tool_choice` naming a custom tool re-encodes on Responses targets as
+  `{type:"custom", name}` (Responses create reference + openai 7.30.1 SDK
+  `ToolChoiceCustom`; fix round 2).
+- **Wire-format sources cited in code comments:** OpenAI Responses API reference
+  (`tools[].type:"custom"`, `format{text|grammar,syntax,definition}`,
+  `custom_tool_call{call_id,name,input,namespace?}`,
+  `custom_tool_call_output`, stream `response.custom_tool_call_input.delta`/`.done`
+  riding `response.output_item.added`/`.done`), and `codex-rs/core/src/client.rs` +
+  `tools/router.rs` at 0.169.0 against `tests/fixtures/codex/recording.jsonl`.
+- **Files outside the Files block:** the Responses codec is split — the plan's
+  `responses.adapter.ts`/`responses.stream.ts` names resolve to
+  `responses.tools.ts`, `responses.items.ts`, `responses.response.ts`,
+  `responses.stream.decode.ts`, `responses.stream.encode.ts`. Also:
+  `gemini.adapter.ts` + `ollama.adapter.ts` (the `parallelToolCalls`
+  `field_dropped` notes — the Files block names only openai/anthropic for it),
+  `src/types/canonical.types.ts` + `canonical.schema.ts` (the `namespace` field),
+  `src/utils/stream-reassemble.ts` (carry `namespace`/`custom` through
+  reassembly), `src/services/stream-attempt.ts` + `canonical-stream.service.ts`
+  (the custom transform is wired before repair; `observedDecoder` takes the
+  canonical request), `src/services/attempt-targets.test.ts` (the
+  `canonicalForTarget` lowering pins).
+- **Contract snapshot (owner-approved, fix round 1):** `codex → canonical
+  matches snapshot 1` in `tests/contracts/__snapshots__/fixtures.test.ts.snap`
+  gained the `multi_agent_v1` namespace variant — additive only, hand-edited;
+  `exec_command` and the `web_search` drop are unchanged. The committed codex
+  fixture carries a real `namespace` tool (E13); Task 3 recorded it dropped,
+  decode now carries it.

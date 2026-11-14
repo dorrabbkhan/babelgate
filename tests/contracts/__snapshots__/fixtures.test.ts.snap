@@ -702,6 +702,23 @@ exports[`Adapter golden fixtures > responses > request fixtures > codex → cano
       },
       "type": "function",
     },
+    {
+      "description": "Delegate to sub-agents",
+      "name": "multi_agent_v1",
+      "tools": [
+        {
+          "function": {
+            "description": "Spawn a sub-agent",
+            "name": "spawn_agent",
+            "parameters": {
+              "type": "object",
+            },
+          },
+          "type": "function",
+        },
+      ],
+      "type": "namespace",
+    },
   ],
 }
 `;

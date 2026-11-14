@@ -192,6 +192,20 @@ export function fromCanonicalRequest(
     result.tools = toOllamaTools(request.tools);
   }
 
+  // v1.4 spec §3.6: Ollama has no parallel-tool-calls field — noted
+  // as dropped.
+  if (request.parallelToolCalls !== undefined) {
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "ollama",
+        code: "field_dropped",
+        path: "parallel_tool_calls",
+      },
+      'Dropping request field "parallel_tool_calls" (no Ollama equivalent)',
+    );
+  }
+
   // Convert config to options
   if (request.config) {
     const c = request.config;
