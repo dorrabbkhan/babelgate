@@ -17,6 +17,7 @@ import {
   diagnoseToolCalls,
   repairArguments,
 } from "../observe/tool-diagnostics";
+import { raiseCustomCalls } from "../transformers/custom-tools";
 import type {
   CanonicalRequest,
   CanonicalResponse,
@@ -156,6 +157,12 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     );
     canonicalResp.model = requestedModel;
 
+    // §3.6: calls to lowered custom/namespace tools are raised back
+    // to the client's form (custom: true raw input, {name, namespace})
+    // before diagnostics and the source encode — a no-op when the
+    // request declared neither.
+    canonicalResp = raiseCustomCalls(canonicalResp, canonical, source);
+
     // §3.5 + §3.7: the ring's response.canonical shows the ORIGINAL
     // arguments — snapshot() stores the object by reference, so a deep
     // copy is taken before the repair loop rewrites them (skipped when
@@ -177,6 +184,9 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
       );
       if (result.entry.repairToolCalls === true) {
         for (const call of calls) {
+          // §3.6: a custom call's arguments are raw input — never
+          // parsed as JSON, never repaired.
+          if (call.custom === true) continue;
           const repair = repairArguments(call.function.arguments);
           if (repair !== undefined) {
             call.function.arguments = repair.args;

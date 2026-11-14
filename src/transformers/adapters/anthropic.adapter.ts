@@ -424,6 +424,20 @@ export function fromCanonicalRequest(
     }),
   };
 
+  // v1.4 spec §3.6: `disable_parallel_tool_use` lives inside
+  // tool_choice on every form — auto (the default when none is sent:
+  // at most one call), any, tool and none
+  // (https://platform.claude.com/docs/en/agents-and-tools/tool-use/parallel-tool-use).
+  if (request.parallelToolCalls === false) {
+    const choice =
+      result.tool_choice ??
+      ({ type: "auto" } as NonNullable<typeof result.tool_choice>);
+    (result as { tool_choice?: unknown }).tool_choice = {
+      ...choice,
+      disable_parallel_tool_use: true,
+    };
+  }
+
   if (request.stream !== undefined) {
     (result as { stream?: boolean }).stream = request.stream;
   }

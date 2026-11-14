@@ -120,3 +120,68 @@ it("interleaved and truncated calls with repair on", () => {
     { toolCallId: "call_1", name: "t1", code: "invalid_json" },
   ]);
 });
+
+// v1.4 spec §3.6 / Review Focus 4: a `custom: true` call's input is a
+// raw string — fences and braces included — never JSON. The repair
+// transform passes it through byte-identical with zero diagnostics
+// and zero repairs, even mid-stream and at a terminal event.
+it("custom tool input is never diagnosed or repaired", () => {
+  const trace = testTrace();
+  const transform = createRepairTransform();
+  const events: CanonicalStreamEvent[] = [
+    { type: "message_start", id: "m", model: "m" },
+    {
+      type: "tool_call_start",
+      index: 0,
+      id: "call_1",
+      name: "apply_patch",
+      custom: true,
+    },
+    delta(0, "*** Begin Patch\n```\n{\n"),
+    delta(0, "```"),
+    ended(0),
+    { type: "message_end", finishReason: "tool_call" },
+  ];
+  const out = runWithTrace(trace, () => events.flatMap(transform));
+
+  expect(out).toEqual(events);
+  expect(trace.diagnostics).toEqual([]);
+  expect(trace.repairs).toEqual([]);
+});
+
+it("a held custom call releases unrepaired at a terminal event", () => {
+  const trace = testTrace();
+  const transform = createRepairTransform();
+  const events: CanonicalStreamEvent[] = [
+    {
+      type: "tool_call_start",
+      index: 0,
+      id: "call_1",
+      name: "apply_patch",
+      custom: true,
+    },
+    delta(0, "*** Begin Patch\n```\n{\n"),
+    {
+      type: "error",
+      error: { kind: "upstream", status: 502, message: "boom" },
+    },
+  ];
+  const out = runWithTrace(trace, () => events.flatMap(transform));
+
+  expect(out).toEqual([
+    {
+      type: "tool_call_start",
+      index: 0,
+      id: "call_1",
+      name: "apply_patch",
+      custom: true,
+    },
+    delta(0, "*** Begin Patch\n```\n{\n"),
+    {
+      type: "error",
+      error: { kind: "upstream", status: 502, message: "boom" },
+    },
+  ]);
+  expect(trace.diagnostics).toEqual([]);
+  expect(trace.repairs).toEqual([]);
+});

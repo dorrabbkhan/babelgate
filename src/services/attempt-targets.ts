@@ -11,6 +11,7 @@ import type {
 } from "../types/canonical.types";
 import { ProxyError, UpstreamError } from "../utils/errors";
 import { recordNote } from "../observe/context";
+import { lowerCustomTools } from "../transformers/custom-tools";
 import type { TraceFinish } from "../observe/emit";
 import { toClientError } from "./upstream-errors";
 
@@ -65,12 +66,17 @@ export function canonicalForTarget(
       maxTokens: clamp.to,
     };
   }
+  // §3.6: custom tools and namespace carriers lower to function
+  // tools for non-Responses targets; a Responses target keeps them
+  // native (the same copy carries the lowered call history).
+  const lowered =
+    entry.type === "responses" ? out : lowerCustomTools(out, entry.type);
   // §3.2: Anthropic and providers with cache_hints honour hints;
   // everywhere else they are removed from the copy before encode.
   if (entry.type !== "anthropic" && entry.cacheHints !== true) {
-    return stripCacheHints(out, entry.type);
+    return stripCacheHints(lowered, entry.type);
   }
-  return out;
+  return lowered;
 }
 
 /** Return `part` without its cache hint; shares the object when unhinted. */

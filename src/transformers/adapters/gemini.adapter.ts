@@ -538,6 +538,20 @@ export function fromCanonicalRequest(
     result.toolConfig = toolConfig;
   }
 
+  // v1.4 spec §3.6: Gemini has no parallel-tool-calls field — noted
+  // as dropped (only `false` is meaningful; `true` is the default).
+  if (request.parallelToolCalls !== undefined) {
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "gemini",
+        code: "field_dropped",
+        path: "parallel_tool_calls",
+      },
+      'Dropping request field "parallel_tool_calls" (no Gemini equivalent)',
+    );
+  }
+
   // Add system instruction — systemText flattens a parts prompt (§3.2)
   const systemMsg = request.messages.find((m) => m.role === "system");
   const systemContent =

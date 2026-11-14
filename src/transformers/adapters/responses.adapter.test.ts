@@ -193,9 +193,8 @@ describe("Responses adapter", () => {
       ]) {
         expect(paths).toContain(field);
       }
-      // namespace and web_search are parsed, not honoured — noted drops
-      // (lowering belongs to Tasks 5/8).
-      expect(paths).toContain("tools[1]");
+      // web_search is parsed, not honoured — a noted drop; the
+      // namespace tool rides canonical natively (Task 5, spec §3.6).
       expect(paths).toContain("tools[2]");
       expect(
         trace.notes.every((n) => n.code !== "content"),
@@ -216,12 +215,12 @@ describe("Responses adapter", () => {
       expect(canonical.config?.reasoning).toEqual({ summary: true });
       expect(wire.reasoning).toEqual({ summary: "auto" });
       expect(wire.include).toEqual(["reasoning.encrypted_content"]);
-      // only the real function tool survives
+      // the function tool and the namespace tool survive natively
       expect(wire.tools).toEqual([
         expect.objectContaining({ type: "function", name: "exec_command" }),
+        expect.objectContaining({ type: "namespace", name: "multi_agent_v1" }),
       ]);
-      // namespace/built-in tools never reach the wire
-      expect(JSON.stringify(wire)).not.toContain("namespace");
+      // the built-in tool never reaches the wire
       expect(JSON.stringify(wire)).not.toContain("web_search");
     });
 
@@ -1151,6 +1150,440 @@ describe("Responses adapter", () => {
         code: "reasoning_budget_dropped",
         path: "reasoning.budget_tokens",
       });
+    });
+  });
+
+  describe("custom and namespace tools (v1.4 spec §3.6)", () => {
+    it("web_search dropped with builtin_tool_dropped", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          input: "hi",
+          tools: [{ type: "web_search" }],
+        } as unknown as ResponsesRequest),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "responses",
+        code: "builtin_tool_dropped",
+        path: "tools[0]",
+      });
+    });
+
+    it("tool_choice naming a dropped tool becomes auto", () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          model: "m",
+          input: "hi",
+          tool_choice: { type: "web_search" },
+        } as unknown as ResponsesRequest),
+      );
+
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        tool_choice: { type: "web_search" },
+      } as unknown as ResponsesRequest);
+      expect(canonical.toolChoice).toBe("auto");
+      expect(
+        trace.notes.some(
+          (n) => n.code === "field_dropped" && n.path === "tool_choice",
+        ),
+      ).toBe(true);
+    });
+
+    it("custom_tool_call round-trips", () => {
+      // Item shapes per
+      // https://platform.openai.com/docs/api-reference/responses/object
+      // (`custom_tool_call` {call_id, name, input};
+      // `custom_tool_call_output` {call_id, output}) and the openai
+      // 7.30.1 SDK ResponseInputItem typings.
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: [
+          {
+            type: "custom_tool_call",
+            call_id: "call_9",
+            name: "apply_patch",
+            input: "*** Begin Patch\n@@\n*** End Patch",
+          },
+          {
+            type: "custom_tool_call_output",
+            call_id: "call_9",
+            output: "patched",
+          },
+        ],
+      } as unknown as ResponsesRequest);
+
+      expect(canonical.messages).toEqual([
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call_9",
+              type: "function",
+              custom: true,
+              function: {
+                name: "apply_patch",
+                arguments: "*** Begin Patch\n@@\n*** End Patch",
+              },
+            },
+          ],
+        },
+        { role: "tool", toolCallId: "call_9", content: "patched" },
+      ]);
+
+      const wire = fromCanonicalRequest(canonical) as unknown as {
+        input: Array<Record<string, unknown>>;
+      };
+      expect(wire.input).toEqual([
+        {
+          type: "custom_tool_call",
+          call_id: "call_9",
+          name: "apply_patch",
+          input: "*** Begin Patch\n@@\n*** End Patch",
+          status: "completed",
+        },
+        {
+          type: "custom_tool_call_output",
+          call_id: "call_9",
+          output: "patched",
+        },
+      ]);
+    });
+
+    it("custom tool and custom_tool_call output decode and re-encode", () => {
+      // tools[].type "custom" + `format` (text|grammar) per
+      // https://platform.openai.com/docs/api-reference/responses/create
+      // and the openai 7.30.1 SDK `CustomTool` typing.
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        tools: [
+          {
+            type: "custom",
+            name: "apply_patch",
+            description: "Patch tool",
+            format: {
+              type: "grammar",
+              syntax: "lark",
+              definition: "start: patch",
+            },
+          },
+        ],
+      } as unknown as ResponsesRequest);
+
+      expect(canonical.tools).toEqual([
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Patch tool",
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: "start: patch",
+          },
+        },
+      ]);
+
+      const wire = fromCanonicalRequest(canonical) as unknown as {
+        tools: Array<Record<string, unknown>>;
+      };
+      expect(wire.tools).toEqual([
+        {
+          type: "custom",
+          name: "apply_patch",
+          description: "Patch tool",
+          format: {
+            type: "grammar",
+            syntax: "lark",
+            definition: "start: patch",
+          },
+        },
+      ]);
+    });
+
+    it("namespace tool rides canonical and re-encodes natively", () => {
+      // `{type:"namespace", name, description, tools}` per the
+      // openai 7.30.1 SDK `NamespaceTool` typing; Codex's usage is
+      // evidenced by codex-rs/core/src/client.rs at Codex 0.169.0 and
+      // tests/fixtures/codex/recording.jsonl.
+      const nested = [
+        {
+          type: "function",
+          name: "spawn_agent",
+          description: "Spawn",
+          parameters: { type: "object" },
+        },
+      ];
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: "hi",
+        tools: [
+          {
+            type: "namespace",
+            name: "multi_agent_v1",
+            description: "Sub-agents",
+            tools: nested,
+          },
+        ],
+      } as unknown as ResponsesRequest);
+
+      expect(canonical.tools).toEqual([
+        {
+          type: "custom",
+          name: "multi_agent_v1",
+          description: "Sub-agents",
+          format: {
+            type: "grammar",
+            syntax: "namespace",
+            definition: JSON.stringify(nested),
+          },
+        },
+      ]);
+
+      const wire = fromCanonicalRequest(canonical) as unknown as {
+        tools: Array<Record<string, unknown>>;
+      };
+      expect(wire.tools).toEqual([
+        {
+          type: "namespace",
+          name: "multi_agent_v1",
+          description: "Sub-agents",
+          tools: nested,
+        },
+      ]);
+    });
+
+    it("namespaced function_call items decode natively", () => {
+      // `function_call` items carry an explicit `namespace` field —
+      // codex-rs/core/src/tools/router.rs `build_tool_call` reads only
+      // that field (Codex 0.169.0); a flat name never matches. The
+      // canonical call keeps `{name: leaf, function.namespace}`;
+      // the `ns__leaf` flat name exists only in lowered (upstream)
+      // copies.
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: [
+          {
+            type: "function_call",
+            call_id: "call_1",
+            name: "spawn_agent",
+            namespace: "multi_agent_v1",
+            arguments: "{}",
+          },
+        ],
+      } as unknown as ResponsesRequest);
+
+      expect(canonical.messages[0].toolCalls?.[0].function).toEqual({
+        name: "spawn_agent",
+        namespace: "multi_agent_v1",
+        arguments: "{}",
+      });
+
+      // …and re-encodes with the explicit namespace field intact.
+      const wire = fromCanonicalRequest(canonical) as unknown as {
+        input: Array<Record<string, unknown>>;
+      };
+      expect(wire.input[0]).toMatchObject({
+        type: "function_call",
+        name: "spawn_agent",
+        namespace: "multi_agent_v1",
+      });
+    });
+
+    it("output custom_tool_call decodes to a custom call", () => {
+      // `custom_tool_call` output items per
+      // https://platform.openai.com/docs/api-reference/responses/object
+      const canonical = toCanonicalResponse(
+        {
+          id: "resp_1",
+          object: "response",
+          status: "completed",
+          model: "m",
+          output: [
+            {
+              type: "custom_tool_call",
+              call_id: "call_9",
+              name: "apply_patch",
+              input: "*** Begin Patch",
+            },
+          ],
+        } as unknown as ResponsesResponse,
+        "m",
+      );
+
+      expect(canonical.message.toolCalls).toEqual([
+        {
+          id: "call_9",
+          type: "function",
+          custom: true,
+          function: {
+            name: "apply_patch",
+            arguments: "*** Begin Patch",
+          },
+        },
+      ]);
+      expect(canonical.finishReason).toBe("tool_call");
+    });
+
+    it("a custom call encodes as custom_tool_call output", () => {
+      const wire = fromCanonicalResponse({
+        id: "resp_1",
+        model: "m",
+        finishReason: "tool_call",
+        message: {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call_9",
+              type: "function",
+              custom: true,
+              function: {
+                name: "apply_patch",
+                arguments: "*** Begin Patch",
+              },
+            },
+          ],
+        },
+      }) as unknown as { output: Array<Record<string, unknown>> };
+
+      expect(wire.output).toEqual([
+        {
+          type: "custom_tool_call",
+          id: expect.any(String),
+          call_id: "call_9",
+          name: "apply_patch",
+          input: "*** Begin Patch",
+          status: "completed",
+        },
+      ]);
+    });
+  });
+
+  describe("custom-tool streaming (v1.4 spec §3.6)", () => {
+    const ctx = (
+      requestedModel = "client-model",
+      sourceRequest = {
+        model: requestedModel,
+        input: "hi",
+        stream: true,
+      } as ResponsesRequest,
+    ): StreamEncoderContext<ResponsesRequest> => ({
+      sourceRequest,
+      query: {},
+      requestedModel,
+    });
+
+    function encodeAll(
+      events: CanonicalStreamEvent[],
+      context = ctx(),
+    ): { event?: string; data: any }[] {
+      const encoder = createStreamEncoder(context);
+      let wire = "";
+      for (const event of events) wire += encoder.encode(event);
+      wire += encoder.end();
+      return wire
+        .split("\n\n")
+        .map((f) => f.trim())
+        .filter((f) => f !== "")
+        .map((frame) => {
+          let event: string | undefined;
+          const data: string[] = [];
+          for (const line of frame.split("\n")) {
+            if (line.startsWith("event:")) event = line.slice(6).trim();
+            if (line.startsWith("data:"))
+              data.push(line.slice(5).replace(/^ /, ""));
+          }
+          const text = data.join("\n");
+          return {
+            event,
+            data: text === "[DONE]" ? text : JSON.parse(text),
+          };
+        });
+    }
+
+    function decodeAll(wire: string): CanonicalStreamEvent[] {
+      const decoder = createStreamDecoder("m", sequentialIds());
+      const events = decoder.feed(new TextEncoder().encode(wire));
+      events.push(...decoder.end());
+      return events;
+    }
+
+    it("custom input streams as custom_tool_call_input deltas", () => {
+      // `response.custom_tool_call_input.delta`/`.done` event names
+      // per https://platform.openai.com/docs/api-reference/responses-streaming
+      // (ResponseStreamEvent) and openai 7.30.1 SDK typings.
+      const frames = encodeAll([
+        { type: "message_start", id: "r", model: "m" },
+        {
+          type: "tool_call_start",
+          index: 0,
+          id: "call_9",
+          name: "apply_patch",
+          custom: true,
+        },
+        {
+          type: "tool_call_delta",
+          index: 0,
+          argumentsDelta: "*** Begin Patch",
+        },
+        { type: "tool_call_end", index: 0 },
+        { type: "message_end", finishReason: "tool_call" },
+      ]);
+
+      const types = frames.map((f) => f.data.type);
+      expect(types).toContain("response.custom_tool_call_input.delta");
+      expect(types).toContain("response.custom_tool_call_input.done");
+      const added = frames.find(
+        (f) =>
+          f.data.type === "response.output_item.added" &&
+          f.data.item?.type === "custom_tool_call",
+      );
+      expect(added?.data.item).toMatchObject({
+        call_id: "call_9",
+        name: "apply_patch",
+      });
+      const done = frames.find(
+        (f) => f.data.type === "response.custom_tool_call_input.done",
+      );
+      expect(done?.data.input).toBe("*** Begin Patch");
+    });
+
+    it("custom_tool_call_input deltas decode to tool_call events", () => {
+      const wire = [
+        'data: {"type":"response.created","sequence_number":0,"response":{"id":"r","object":"response","created_at":1,"status":"in_progress","model":"m","output":[]}}',
+        "",
+        'data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"ctc_1","type":"custom_tool_call","call_id":"call_9","name":"apply_patch","input":""}}',
+        "",
+        'data: {"type":"response.custom_tool_call_input.delta","sequence_number":2,"item_id":"ctc_1","output_index":0,"delta":"*** Begin "}',
+        "",
+        'data: {"type":"response.custom_tool_call_input.delta","sequence_number":3,"item_id":"ctc_1","output_index":0,"delta":"Patch"}',
+        "",
+        'data: {"type":"response.custom_tool_call_input.done","sequence_number":4,"item_id":"ctc_1","output_index":0,"input":"*** Begin Patch"}',
+        "",
+        'data: {"type":"response.output_item.done","sequence_number":5,"output_index":0,"item":{"id":"ctc_1","type":"custom_tool_call","call_id":"call_9","name":"apply_patch","input":"*** Begin Patch"}}',
+        "",
+        'data: {"type":"response.completed","sequence_number":6,"response":{"id":"r","object":"response","created_at":1,"status":"completed","model":"m","output":[{"id":"ctc_1","type":"custom_tool_call","call_id":"call_9","name":"apply_patch","input":"*** Begin Patch"}],"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}',
+        "",
+      ].join("\n");
+
+      const events = decodeAll(wire);
+      const start = events.find((e) => e.type === "tool_call_start");
+      expect(start).toMatchObject({
+        id: "call_9",
+        name: "apply_patch",
+        custom: true,
+      });
+      const deltas = events
+        .filter((e) => e.type === "tool_call_delta")
+        .map((e) => e.argumentsDelta)
+        .join("");
+      expect(deltas).toBe("*** Begin Patch");
+      expect(events.at(-1)?.type).toBe("message_end");
     });
   });
 });

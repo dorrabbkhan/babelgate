@@ -15,6 +15,10 @@ import {
 import { finishTrace } from "../observe/emit";
 import { diagnoseToolCalls } from "../observe/tool-diagnostics";
 import { createRepairTransform } from "../observe/tool-repair-stream";
+import {
+  createCustomCallTransform,
+  raiseCustomCalls,
+} from "../transformers/custom-tools";
 import type {
   CanonicalRequest,
   CanonicalResponse,
@@ -121,14 +125,19 @@ export function attemptStreamTarget(
  * Wrap the target decoder so every canonical event it produces lands
  * in `observed` (usage, finish reason, reassembly and tool-call
  * diagnostics all read it; chunk contents are never logged, §3.2).
- * §3.7: with repair_tool_calls on, argument deltas are held per call
+ * §3.6: the custom-call transform raises lowered custom/namespace
+ * calls back to the client's form FIRST (built from `canonical`'s
+ * tools — an empty map for requests declaring neither), so the
+ * §3.7 repair transform never parses a custom call's raw input.
+ * With repair_tool_calls on, argument deltas are then held per call
  * and released merged (repaired when possible) before each end. The
- * transform sits AFTER the recording wrapper so `observed` — and the
+ * transforms sit AFTER the recording wrapper so `observed` — and the
  * diagnostics computed from it — see the original arguments.
  */
 export function observedDecoder(
   decoder: StreamDecoder,
   repair: boolean,
+  canonical: CanonicalRequest,
 ): { pipelineDecoder: StreamDecoder; observed: CanonicalStreamEvent[] } {
   const observed: CanonicalStreamEvent[] = [];
   const recordingDecoder: StreamDecoder = {
@@ -144,15 +153,18 @@ export function observedDecoder(
     },
   };
 
+  const customTransform = createCustomCallTransform(canonical, "responses");
   const repairTransform = repair ? createRepairTransform() : undefined;
-  const pipelineDecoder: StreamDecoder =
+  const transforms: ((e: CanonicalStreamEvent) => CanonicalStreamEvent[])[] =
     repairTransform === undefined
-      ? recordingDecoder
-      : {
-          feed: (chunk) =>
-            recordingDecoder.feed(chunk).flatMap(repairTransform),
-          end: () => recordingDecoder.end().flatMap(repairTransform),
-        };
+      ? [customTransform]
+      : [customTransform, repairTransform];
+  const apply = (events: CanonicalStreamEvent[]): CanonicalStreamEvent[] =>
+    transforms.reduce((evts, t) => evts.flatMap(t), events);
+  const pipelineDecoder: StreamDecoder = {
+    feed: (chunk) => apply(recordingDecoder.feed(chunk)),
+    end: () => apply(recordingDecoder.end()),
+  };
   return { pipelineDecoder, observed };
 }
 
@@ -198,7 +210,11 @@ export async function finishStreamTrace(opts: {
     const canonicalResp: CanonicalResponse =
       reassembleStream(observed);
     canonicalResp.model = requestedModel;
-    snapshot("response.canonical", canonicalResp);
+    // §3.6: the observed calls carry the lowered names — raise them
+    // for the ring's canonical snapshot and the tool-call
+    // diagnostics, matching what the client received.
+    const raised = raiseCustomCalls(canonicalResp, canonical, "responses");
+    snapshot("response.canonical", raised);
     const trace = currentTrace();
     if (trace !== undefined) {
       // Dedupe against diagnostics the repair transform already

@@ -376,6 +376,12 @@ export function fromCanonicalRequest(
     result.tool_choice = request.toolChoice;
   }
 
+  // v1.4 spec §3.6: Chat Completions honours the wire field directly.
+  if (request.parallelToolCalls !== undefined) {
+    (result as { parallel_tool_calls?: boolean }).parallel_tool_calls =
+      request.parallelToolCalls;
+  }
+
   if (request.stream !== undefined) {
     (result as { stream?: boolean }).stream = request.stream;
   }

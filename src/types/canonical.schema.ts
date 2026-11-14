@@ -80,6 +80,7 @@ const toolCallSchema = z.object({
   function: z.object({
     name: z.string(),
     arguments: z.string(),
+    namespace: z.string().optional(),
   }),
   signature: reasoningSignatureSchema.optional(),
   custom: z.boolean().optional(),
@@ -289,6 +290,7 @@ export const canonicalStreamEventSchema = z.discriminatedUnion("type", [
     index: streamIndexSchema,
     id: z.string(),
     name: z.string(),
+    namespace: z.string().optional(),
     custom: z.boolean().optional(),
     signature: reasoningSignatureSchema.optional(),
   }),

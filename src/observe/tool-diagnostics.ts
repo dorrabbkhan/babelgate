@@ -2,6 +2,11 @@ import type {
   CanonicalTool,
   CanonicalToolCall,
 } from "../types/canonical.types";
+import {
+  flatToolName,
+  isNamespaceCarrier,
+  namespaceLeafTools,
+} from "../transformers/custom-tools";
 import type { ToolCallDiagnostic, ToolCallRepair } from "./trace";
 
 /**
@@ -146,19 +151,39 @@ export function diagnoseToolCalls(
   calls: CanonicalToolCall[],
   tools: CanonicalTool[] | undefined,
 ): ToolCallDiagnostic[] {
-  const byName = new Map(
-    (tools ?? []).map(
-      (t) => [t.type === "function" ? t.function.name : t.name, t] as const,
-    ),
-  );
+  const byName = new Map<string, CanonicalTool>();
+  const byNamespaced = new Map<string, CanonicalTool>();
+  for (const t of tools ?? []) {
+    byName.set(t.type === "function" ? t.function.name : t.name, t);
+    if (t.type === "custom" && isNamespaceCarrier(t)) {
+      for (const leaf of namespaceLeafTools(t) ?? []) {
+        // Both spellings a namespaced call can carry: the flattened
+        // `ns__leaf` (pre-raise) and the leaf alone under
+        // `function.namespace` (post-raise). Leaf schemas come from
+        // the carrier's own definition.
+        const fn: CanonicalTool = {
+          type: "function",
+          function: { name: leaf.name, parameters: leaf.parameters },
+        };
+        byName.set(flatToolName(t.name, leaf.name), fn);
+        byNamespaced.set(`${t.name}${leaf.name}`, fn);
+      }
+    }
+  }
   const out: ToolCallDiagnostic[] = [];
   for (const call of calls) {
+    // §3.6: a custom call's arguments are raw input — never parsed,
+    // diagnosed or checked against a JSON schema.
+    if (call.custom === true) continue;
     const { id, name } = { id: call.id, name: call.function.name };
     const argCode = diagnoseArguments(call.function.arguments);
     if (argCode !== undefined) {
       out.push({ toolCallId: id, name, code: argCode });
     }
-    const tool = byName.get(name);
+    const tool =
+      call.function.namespace !== undefined
+        ? byNamespaced.get(`${call.function.namespace}${name}`)
+        : byName.get(name);
     if (tool === undefined) {
       out.push({ toolCallId: id, name, code: "unknown_tool" });
       continue;

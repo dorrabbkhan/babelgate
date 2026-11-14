@@ -177,10 +177,17 @@ export interface CanonicalToolCall {
   type: "function";
   /** Function call details */
   function: {
-    /** Function name */
+    /** Function name — the leaf name when `namespace` is set */
     name: string;
     /** JSON-encoded arguments */
     arguments: string;
+    /** Responses tool namespace (v1.4 spec §3.6): Codex's explicit
+     *  `namespace` field on a call — `codex-rs/core/src/tools/router.rs`
+     *  reads it at 0.169.0; a flat name never matches. Set only on
+     *  calls raised back from a flattened `ns__leaf` name or decoded
+     *  natively; flattened calls carry the `ns__leaf` name in `name`
+     *  with this field absent. */
+    namespace?: string;
   };
   /** Model-bound artefact on the call (Gemini thoughtSignature) */
   signature?: CanonicalReasoningSignature;
@@ -286,7 +293,11 @@ export type CanonicalStreamEvent =
       type: "tool_call_start";
       index: number;
       id: string;
+      /** Leaf name when `namespace` is set */
       name: string;
+      /** Responses tool namespace (v1.4 spec §3.6) — see
+       *  CanonicalToolCall.function.namespace */
+      namespace?: string;
       /** A call to a `type: "custom"` tool (v1.4 spec §3.6) */
       custom?: boolean;
       /** Model-bound artefact on the call (Gemini thoughtSignature) */

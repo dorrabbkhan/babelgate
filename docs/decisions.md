@@ -4412,3 +4412,65 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   model" (was "enables dynamic thinking", `thinkingBudget: -1`). New "no effort leaves thinking
   off" tests assert the exact encoded body for the summary-only case on Anthropic adaptive +
   legacy, Gemini 2.5 + 3.x, Ollama, OpenAI and Responses (which keeps `summary: "auto"`).
+
+## v1.4 Task 5: Custom tools, built-in tools, namespace tools, `parallelToolCalls` (spec §3.6, E3, E13, E14)
+
+- **Canonical changes (types + schema, same commit):** `CanonicalToolCall.function`
+  gains optional `namespace?: string`; `tool_call_start` stream events gain
+  `namespace?: string` (and already had `custom?: boolean`). Codex 0.169.0's router
+  (`codex-rs/core/src/tools/router.rs`, `ToolName::new`) matches calls on the
+  explicit `{name, namespace}` pair — a flat `ns__leaf` name alone never routes —
+  so the raised call must carry `namespace` end-to-end.
+- **Namespace carrier:** a Responses `{type:"namespace", name, description, tools}`
+  decodes to a canonical `type:"custom"` tool whose `format` is
+  `{type:"grammar", syntax:"namespace", definition: <JSON of the nested function
+  tools>}`. `CanonicalTool` needs no new variant (spec §3.2's inventory is
+  `function | custom`), and the carrier round-trips natively on Responses targets.
+- **Flattened naming:** `<namespace>__<leaf>` (separator `__`), sanitized to
+  `[a-zA-Z0-9_-]` and capped at 64 chars — valid under every target's rule:
+  OpenAI Chat `^[a-zA-Z0-9_-]{1,64}$` (function-calling guide), Anthropic
+  `^[a-zA-Z0-9_-]{1,128}$` (tool-use docs), Gemini the same 64-char charset
+  (function-declaration docs), Ollama accepts any string. Names over 64 shorten to
+  `<prefix>-<8-hex FNV-1a of the full name>` — deterministic, so the raise map
+  replays exactly. A flattened name colliding with a top-level tool gets a `__N`
+  suffix + `tool_name_collision` note. Raise-back uses ONLY the map this
+  request's lowering produced — never a name-string guess (owner instruction).
+- **Custom tools:** lower to a same-named function with the grammar verbatim in a
+  fenced `Input format (<syntax>):` block and one required `input` string param
+  (spec §3.6). Calls unwrap `{input}` back to `custom: true`; unparseable or
+  non-`{input}` arguments pass raw with `custom_input_unparsed`. Raw custom input
+  is never JSON-diagnosed or repaired (diagnostics and both repair paths skip
+  `custom: true`; the stream transform sits before the repair transform).
+- **Built-ins:** the §2.2 set drops with `builtin_tool_dropped` (path `tools[i]`);
+  a `tool_choice` naming one becomes `"auto"` with a note. `web_search` (E14)
+  follows §3.6 on the bridge.
+- **`parallelToolCalls`:** OpenAI Chat and Responses emit `parallel_tool_calls`
+  verbatim; Anthropic folds `false` into `tool_choice.disable_parallel_tool_use`
+  on all four `tool_choice` forms (and synthesizes `{type:"auto", …}` when absent)
+  per https://docs.claude.com/en/docs/agents-and-tools/tool-use/implement-tool-use;
+  Gemini and Ollama have no field → `field_dropped` note.
+- **Wire-format sources cited in code comments:** OpenAI Responses API reference
+  (`tools[].type:"custom"`, `format{text|grammar,syntax,definition}`,
+  `custom_tool_call{call_id,name,input,namespace?}`,
+  `custom_tool_call_output`, stream `response.custom_tool_call_input.delta`/`.done`
+  riding `response.output_item.added`/`.done`), and `codex-rs/core/src/client.rs` +
+  `tools/router.rs` at 0.169.0 against `tests/fixtures/codex/recording.jsonl`.
+- **Files outside the Files block:** the Responses codec is split — the plan's
+  `responses.adapter.ts`/`responses.stream.ts` names resolve to
+  `responses.tools.ts`, `responses.items.ts`, `responses.response.ts`,
+  `responses.stream.decode.ts`, `responses.stream.encode.ts`. Also:
+  `gemini.adapter.ts` + `ollama.adapter.ts` (the `parallelToolCalls`
+  `field_dropped` notes — the Files block names only openai/anthropic for it),
+  `src/types/canonical.types.ts` + `canonical.schema.ts` (the `namespace` field),
+  `src/utils/stream-reassemble.ts` (carry `namespace`/`custom` through
+  reassembly), `src/services/stream-attempt.ts` + `canonical-stream.service.ts`
+  (the custom transform is wired before repair; `observedDecoder` takes the
+  canonical request).
+- **Pending owner action — contract snapshot:** `codex → canonical matches
+  snapshot 1` in `tests/contracts/__snapshots__/fixtures.test.ts.snap` must gain
+  the `multi_agent_v1` namespace carrier (additive only — `exec_command` and the
+  `web_search` drop are unchanged). The committed codex fixture carries a real
+  `namespace` tool (E13), and Task 3 recorded it dropped; decode must now carry it
+  for both lowering and the native Responses round-trip, so the golden cannot stay
+  unchanged under any spec-faithful implementation. Held for owner approval per
+  "any other fixture/snapshot change → STOP and escalate" (Global Constraints).

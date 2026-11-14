@@ -30,6 +30,7 @@ export function reassembleStream(
     {
       id: string;
       name: string;
+      namespace?: string;
       args: string;
       ended: boolean;
       custom?: boolean;
@@ -110,6 +111,9 @@ export function reassembleStream(
           name: event.name,
           args: "",
           ended: false,
+          ...(event.namespace !== undefined && {
+            namespace: event.namespace,
+          }),
           ...(event.custom !== undefined && { custom: event.custom }),
           ...(event.signature !== undefined && {
             signature: event.signature,
@@ -157,7 +161,11 @@ export function reassembleStream(
     .map(([, c]) => ({
       id: c.id,
       type: "function" as const,
-      function: { name: c.name, arguments: c.args },
+      function: {
+        name: c.name,
+        arguments: c.args,
+        ...(c.namespace !== undefined && { namespace: c.namespace }),
+      },
       ...(c.custom !== undefined && { custom: c.custom }),
       ...(c.signature !== undefined && { signature: c.signature }),
     }));

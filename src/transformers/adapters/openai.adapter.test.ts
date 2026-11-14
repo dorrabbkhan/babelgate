@@ -631,6 +631,28 @@ describe('OpenAI Adapter', () => {
       }
     });
 
+    it('canonical parallelToolCalls encodes as parallel_tool_calls (v1.4 spec §3.6)', () => {
+      const result = fromCanonicalRequest({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hi' }],
+        tools: [
+          {
+            type: 'function',
+            function: { name: 'get_weather', parameters: { type: 'object' } },
+          },
+        ],
+        parallelToolCalls: false,
+      });
+
+      expect(result.parallel_tool_calls).toBe(false);
+
+      const without = fromCanonicalRequest({
+        model: 'gpt-4',
+        messages: [{ role: 'user', content: 'Hi' }],
+      });
+      expect(without.parallel_tool_calls).toBeUndefined();
+    });
+
     it('openai strict and parallel_tool_calls are dropped with a debug log naming the field', () => {
       const debugSpy = vi.spyOn(logger, 'debug');
       const input = {

@@ -58,8 +58,13 @@ export function decodeInputItem(
       call_id?: string | null;
       id?: string;
       name?: string;
+      namespace?: string;
       arguments?: string;
     };
+    // `namespace` is Codex's explicit field on the call — its router
+    // reads it at 0.169.0 (codex-rs/core/src/tools/router.rs); a flat
+    // name never matches. Canonical keeps it verbatim on
+    // `function.namespace` (the leaf stays in `name`).
     messages.push({
       role: "assistant",
       content: "",
@@ -70,9 +75,49 @@ export function decodeInputItem(
           function: {
             name: call.name ?? "",
             arguments: call.arguments ?? "",
+            ...(typeof call.namespace === "string" && {
+              namespace: call.namespace,
+            }),
           },
         },
       ],
+    });
+    return;
+  }
+  if (type === "custom_tool_call") {
+    // `custom_tool_call` {call_id, name, input} — the Responses object
+    // reference and the SDK's ResponseCustomToolCall; raw `input`
+    // stays the call's arguments verbatim, marked `custom` so
+    // diagnostics and repair never parse it (v1.4 spec §3.6).
+    const call = item as {
+      call_id?: string | null;
+      id?: string;
+      name?: string;
+      input?: string;
+    };
+    messages.push({
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: call.call_id ?? call.id ?? "",
+          type: "function",
+          custom: true,
+          function: {
+            name: call.name ?? "",
+            arguments: typeof call.input === "string" ? call.input : "",
+          },
+        },
+      ],
+    });
+    return;
+  }
+  if (type === "custom_tool_call_output") {
+    const output = item as { call_id?: string | null; output?: unknown };
+    messages.push({
+      role: "tool",
+      toolCallId: output.call_id ?? "",
+      content: toolOutputText(output.output, path),
     });
     return;
   }
@@ -85,9 +130,9 @@ export function decodeInputItem(
     });
     return;
   }
-  // Everything else — reasoning (Task 8), custom_tool_call and
-  // additional_tools (Task 5), server-side tool calls and item
-  // references — is parsed and dropped, never a 400.
+  // Everything else — reasoning (Task 8), additional_tools,
+  // server-side tool calls and item references — is parsed and
+  // dropped, never a 400.
   note(
     "field_dropped",
     path,
@@ -217,7 +262,10 @@ function toolOutputText(output: unknown, path: string): string {
 
 // ============ Items: Canonical → Responses ============
 
-export function encodeMessage(message: CanonicalMessage): Array<Record<string, unknown>> {
+export function encodeMessage(
+  message: CanonicalMessage,
+  customCallIds?: Set<string>,
+): Array<Record<string, unknown>> {
   switch (message.role) {
     case "system":
       return [
@@ -239,10 +287,28 @@ export function encodeMessage(message: CanonicalMessage): Array<Record<string, u
         });
       }
       for (const call of message.toolCalls ?? []) {
+        if (call.custom === true) {
+          // `custom_tool_call` {call_id, name, input} — raw input
+          // verbatim (v1.4 spec §3.6).
+          customCallIds?.add(call.id);
+          items.push({
+            type: "custom_tool_call",
+            call_id: call.id,
+            name: call.function.name,
+            input: call.function.arguments,
+            status: "completed",
+          });
+          continue;
+        }
         items.push({
           type: "function_call",
           call_id: call.id,
           name: call.function.name,
+          // Codex's explicit `namespace` field — its router reads it
+          // at 0.169.0 (codex-rs/core/src/tools/router.rs).
+          ...(call.function.namespace !== undefined && {
+            namespace: call.function.namespace,
+          }),
           arguments: call.function.arguments,
           status: "completed",
         });
@@ -250,13 +316,23 @@ export function encodeMessage(message: CanonicalMessage): Array<Record<string, u
       return items;
     }
     case "tool":
-      return [
-        {
-          type: "function_call_output",
-          call_id: message.toolCallId ?? "",
-          output: toToolOutputText(message.content),
-        },
-      ];
+      // A result for a custom call re-encodes as
+      // `custom_tool_call_output` (SDK ResponseCustomToolCallOutput).
+      return customCallIds?.has(message.toolCallId ?? "")
+        ? [
+            {
+              type: "custom_tool_call_output",
+              call_id: message.toolCallId ?? "",
+              output: toToolOutputText(message.content),
+            },
+          ]
+        : [
+            {
+              type: "function_call_output",
+              call_id: message.toolCallId ?? "",
+              output: toToolOutputText(message.content),
+            },
+          ];
     default:
       return [
         {
