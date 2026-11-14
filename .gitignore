@@ -92,6 +92,8 @@ ui/playwright-report/
 # Agent tooling: shared config is tracked, local state is not
 .claude/settings.local.json
 .claude/worktrees/
+.claude/ms-playwright/
+.claude/ui-shots/
 .devin/config.local.json
 .taskmaster
 .windsurf
