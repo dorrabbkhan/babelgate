@@ -18,6 +18,7 @@ import {
 } from "../../utils/sse";
 import { logger } from "../../utils/logger";
 import { recordNote } from "../../observe/context";
+import { decodeOrigin } from "../reasoning-origin";
 import { estimateInputTokens } from "../../utils/token-estimate";
 import {
   fromCanonicalError,
@@ -60,9 +61,12 @@ const ANTHROPIC_STREAM_ERROR_STATUS: Record<string, number> = {
  * `content_block_start{tool_use}` opens a tool call (re-keyed from wire
  * block index to canonical index in first-appearance order) whose
  * `input_json_delta.partial_json` chunks become `tool_call_delta`s;
- * `content_block_start{text}` and non-tool blocks (thinking,
- * server_tool_use, …) produce nothing, as do `thinking_delta`,
- * `signature_delta` and `ping`; `message_delta` contributes the
+ * `content_block_start{thinking}`/`{redacted_thinking}` open a
+ * reasoning block (own index namespace, v1.4 spec §3.3) — `thinking_delta`
+ * → `reasoning_delta`, `signature_delta` → `reasoning_signature`, and a
+ * `redacted_thinking` block's `data` is its signature's data;
+ * `content_block_start{text}` and other non-tool blocks
+ * (server_tool_use, …) produce nothing; `message_delta` contributes the
  * cumulative `usage` and the stop reason; `message_stop` is terminal —
  * the held usage and `message_end` are emitted there, so a stream cut
  * before `message_stop` ends in an `error` event. `event: error` maps
@@ -84,7 +88,11 @@ export function createStreamDecoder(
   // wire content-block index → block kind / canonical tool index
   const toolIndexByWire = new Map<number, number>();
   const openCalls: number[] = [];
-  // §3.5: dropped thinking types are noted once per stream, named by
+  // wire content-block index → canonical reasoning index (own
+  // namespace, like the tool calls').
+  const reasoningIndexByWire = new Map<number, number>();
+  let nextReasoningIndex = 0;
+  // §3.5: dropped block types are noted once per stream, named by
   // their wire block/delta type.
   const loggedDrops = new Set<string>();
 
@@ -154,11 +162,42 @@ export function createStreamDecoder(
             id: typeof block.id === "string" ? block.id : ids(),
             name: typeof block.name === "string" ? block.name : "",
           });
+        } else if (
+          block.type === "thinking" ||
+          block.type === "redacted_thinking"
+        ) {
+          // v1.4 §3.3: a thinking block opens a reasoning block. Its
+          // signature normally streams later as signature_delta; a
+          // redacted block's `data` is the signature data and arrives
+          // complete in the start event.
+          const rIndex = nextReasoningIndex++;
+          reasoningIndexByWire.set(index, rIndex);
+          const origin = decodeOrigin(model);
+          out.push({
+            type: "reasoning_start",
+            index: rIndex,
+            origin,
+            ...(block.type === "redacted_thinking" && {
+              redacted: true,
+            }),
+          });
+          const sig =
+            block.type === "redacted_thinking"
+              ? block.data
+              : block.signature;
+          if (typeof sig === "string" && sig !== "") {
+            out.push({
+              type: "reasoning_signature",
+              index: rIndex,
+              signature: { origin, data: sig },
+            });
+          }
+        } else if (block.type !== "text") {
+          // text opens nothing (deltas carry it); anything else —
+          // server_tool_use, web_search_tool_result, … — is dropped
+          // and noted once per stream.
+          logDrop(typeof block.type === "string" ? block.type : "?");
         }
-        if (block.type === "thinking" || block.type === "redacted_thinking") {
-          logDrop(block.type);
-        }
-        // text, thinking, server_tool_use, … blocks produce nothing
         break;
       }
       case "content_block_delta": {
@@ -167,9 +206,26 @@ export function createStreamDecoder(
         if (delta.type === "text_delta" && typeof delta.text === "string") {
           out.push({ type: "text_delta", text: delta.text });
         } else if (delta.type === "thinking_delta") {
-          logDrop("thinking_delta");
+          const rIndex = reasoningIndexByWire.get(index);
+          if (rIndex !== undefined && typeof delta.thinking === "string") {
+            out.push({
+              type: "reasoning_delta",
+              index: rIndex,
+              text: delta.thinking,
+            });
+          }
         } else if (delta.type === "signature_delta") {
-          logDrop("signature_delta");
+          const rIndex = reasoningIndexByWire.get(index);
+          if (
+            rIndex !== undefined &&
+            typeof delta.signature === "string"
+          ) {
+            out.push({
+              type: "reasoning_signature",
+              index: rIndex,
+              signature: { origin: decodeOrigin(model), data: delta.signature },
+            });
+          }
         } else if (delta.type === "input_json_delta") {
           const toolIndex = toolIndexByWire.get(index);
           if (
@@ -189,6 +245,7 @@ export function createStreamDecoder(
       }
       case "content_block_stop": {
         const index = typeof event.index === "number" ? event.index : 0;
+        reasoningIndexByWire.delete(index);
         const toolIndex = toolIndexByWire.get(index);
         if (toolIndex !== undefined) {
           toolIndexByWire.delete(index);

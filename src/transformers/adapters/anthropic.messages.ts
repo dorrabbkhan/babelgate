@@ -12,6 +12,10 @@ import { parseToolArguments } from "../../utils/tool-args";
 import { ValidationError } from "../../utils/errors";
 import { recordNote } from "../../observe/context";
 import { logger } from "../../utils/logger";
+import {
+  originMatchesCurrent,
+  signatureMatchesCurrent,
+} from "../reasoning-origin";
 import { toCacheControl, toCacheHint } from "./anthropic.cache";
 import type {
   CacheControlEphemeral,
@@ -298,12 +302,40 @@ export function toMessageParam(m: CanonicalMessage): MessageParam {
   };
 }
 
+/**
+ * Task 7 (v1.4 spec §3.3): a canonical signature on anything Anthropic
+ * can't carry it on — a text part or a tool call (the wire has no
+ * signature slot on either) — is dropped with a `reasoning_dropped`
+ * note when its origin is foreign, or when Anthropic has no field for
+ * it at all.
+ */
+export function noteOrphanedSignature(path: string): void {
+  recordNote(
+    {
+      stage: "encode",
+      adapter: "anthropic",
+      code: "reasoning_dropped",
+      path,
+    },
+    `Dropping signature at ${path} (no Anthropic field carries it)`,
+  );
+}
+
 export function toToolResultBlock(m: CanonicalMessage): ToolResultBlockParam {
   const cacheControl = toCacheControl(m.cache);
+  // A tool_result carries no thinking blocks — reasoning parts in a
+  // tool message's content are dropped before conversion.
+  const content = Array.isArray(m.content)
+    ? m.content.filter((p) => p.type !== "reasoning")
+    : m.content;
   return {
     type: "tool_result",
     tool_use_id: m.toolCallId ?? "",
-    content: convertToAnthropicContent(m.content),
+    // Reasoning parts were filtered above, so no thinking blocks can
+    // be emitted — the tool_result content union can't carry them.
+    content: convertToAnthropicContent(
+      content,
+    ) as ToolResultBlockParam["content"],
     // is_error is sent only when true; Anthropic defaults it to false.
     ...(m.isError === true && { is_error: true }),
     ...(cacheControl && { cache_control: cacheControl }),
@@ -316,6 +348,9 @@ export function toToolUseBlock(tc: CanonicalToolCall): ToolUseBlockParam {
     logger.warn(
       "Tool call arguments are not valid JSON; sending _invalid_arguments wrapper",
     );
+  }
+  if (tc.signature !== undefined) {
+    noteOrphanedSignature(`toolCalls[${tc.id}].signature`);
   }
   return {
     type: "tool_use",
@@ -372,7 +407,9 @@ type AnthropicContentBlock =
       type: "image";
       source: { type: "base64"; media_type: ImageMediaType; data: string };
       cache_control?: CacheControlEphemeral;
-    };
+    }
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string };
 
 function convertToAnthropicContent(
   content: string | CanonicalContentPart[],
@@ -381,17 +418,27 @@ function convertToAnthropicContent(
     return content;
   }
 
-  const blocks: AnthropicContentBlock[] = content.map((part) => {
+  // Task 7 (v1.4 spec §3.3): reasoning parts keep their canonical
+  // position — a thinking block that preceded a text/tool_use block is
+  // reinserted at its original index. They are emitted only when their
+  // signature's origin matches the current attempt; anything else is
+  // dropped with a `reasoning_dropped` note.
+  const blocks: AnthropicContentBlock[] = [];
+  for (const part of content) {
     const cacheControl = toCacheControl(part.cache);
     if (part.type === "text") {
-      return {
+      if (part.signature !== undefined) {
+        noteOrphanedSignature(`content.signature`);
+      }
+      blocks.push({
         type: "text",
         text: part.text || "",
         ...(cacheControl && { cache_control: cacheControl }),
-      };
+      });
+      continue;
     }
     if (part.type === "image" && part.image) {
-      return {
+      blocks.push({
         type: "image",
         source: {
           type: "base64" as const,
@@ -399,10 +446,41 @@ function convertToAnthropicContent(
           data: part.image.data,
         },
         ...(cacheControl && { cache_control: cacheControl }),
-      };
+      });
+      continue;
     }
-    return { type: "text", text: "" };
-  });
+    if (part.type === "reasoning" && part.reasoning) {
+      if (
+        originMatchesCurrent(part.reasoning.origin) &&
+        signatureMatchesCurrent(part.signature)
+      ) {
+        if (part.reasoning.redacted === true) {
+          blocks.push({
+            type: "redacted_thinking",
+            data: part.signature.data,
+          });
+        } else {
+          blocks.push({
+            type: "thinking",
+            thinking: part.reasoning.text ?? "",
+            signature: part.signature.data,
+          });
+        }
+      } else {
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "anthropic",
+            code: "reasoning_dropped",
+            path: "reasoning",
+          },
+          "Dropping reasoning part (no matching-origin signature)",
+        );
+      }
+      continue;
+    }
+    blocks.push({ type: "text", text: "" });
+  }
 
   // If only one text block, return as string — unless it carries a
   // cache hint, which only a block can express.

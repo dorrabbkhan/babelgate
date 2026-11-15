@@ -4,6 +4,7 @@ import type {
   CanonicalResponse,
   CanonicalMessage,
   CanonicalContentPart,
+  CanonicalImage,
   CanonicalToolCall,
   CanonicalError,
   CanonicalErrorKind,
@@ -21,6 +22,11 @@ import {
 import { ValidationError } from "../../utils/errors";
 import { createIdGenerator } from "../../utils/ids";
 import { recordNote } from "../../observe/context";
+import {
+  decodeOrigin,
+  originMatchesCurrent,
+  signatureMatchesCurrent,
+} from "../reasoning-origin";
 import {
   budgetFor,
   nearestSupported,
@@ -569,19 +575,28 @@ export function fromCanonicalRequest(
         parts = parts.filter(
           (p) => !("text" in p && p.text === ""),
         );
-        // Gemini 3.x upstreams 400 unsigned history functionCall
-        // parts ("Function call is missing a thought_signature").
-        // Canonical can't carry real signatures yet (Task-3-window
-        // follow-up), so every outgoing functionCall part gets the
-        // documented placeholder — a part-level sibling, not a field
-        // of functionCall.
+        // v1.4 spec §3.3 (Task 7): a call carrying a signature of the
+        // current attempt's origin sends it verbatim as the part-level
+        // `thoughtSignature`; one with a foreign signature drops it
+        // with a `reasoning_dropped` note (signatures never cross
+        // provider or model, spec §3.2). A call with no matching
+        // signature keeps the v1.3 placeholder — Gemini 3.x upstreams
+        // 400 unsigned history functionCall parts ("Function call is
+        // missing a thought_signature"). A part-level sibling, not a
+        // field of functionCall.
         // https://ai.google.dev/gemini-api/docs/thought-signatures
         parts.push(
-          ...calls.map((call) =>
-            functionCallPart(call, {
-              thoughtSignature: "skip_thought_signature_validator",
-            }),
-          ),
+          ...calls.map((call) => {
+            let thoughtSignature = "skip_thought_signature_validator";
+            if (call.signature !== undefined) {
+              if (signatureMatchesCurrent(call.signature)) {
+                thoughtSignature = call.signature.data;
+              } else {
+                noteReasoningDropped("signature");
+              }
+            }
+            return functionCallPart(call, { thoughtSignature });
+          }),
         );
       }
       contents.push({ role: "model", parts });
@@ -692,25 +707,72 @@ function mapRoleToGemini(role: CanonicalMessage["role"]): GeminiRole {
   return role === "assistant" ? "model" : "user";
 }
 
+function noteReasoningDropped(path: "reasoning" | "signature"): void {
+  recordNote(
+    {
+      stage: "encode",
+      adapter: "gemini",
+      code: "reasoning_dropped",
+      path,
+    },
+    `Dropping ${path} (origin does not match the current attempt)`,
+  );
+}
+
 function convertToParts(content: string | CanonicalContentPart[]): Part[] {
   if (typeof content === "string") {
     return [{ text: content }];
   }
 
-  return content.map((part): Part => {
+  // Task 7 (v1.4 spec §3.3): a signed part of the current attempt's
+  // origin carries `thoughtSignature` on the same wire part it
+  // arrived on — signed text on the text part, reasoning as a
+  // `thought: true` part, in canonical order. Foreign or missing
+  // signatures are dropped with a `reasoning_dropped` note.
+  const parts: Part[] = [];
+  for (const part of content) {
     if (part.type === "text") {
-      return { text: part.text || "" };
+      let thoughtSignature: string | undefined;
+      if (part.signature !== undefined) {
+        if (signatureMatchesCurrent(part.signature)) {
+          thoughtSignature = part.signature.data;
+        } else {
+          noteReasoningDropped("signature");
+        }
+      }
+      parts.push({
+        text: part.text || "",
+        ...(thoughtSignature !== undefined && { thoughtSignature }),
+      } as Part);
+      continue;
     }
     if (part.type === "image" && part.image) {
-      return {
+      parts.push({
         inlineData: {
           mimeType: part.image.mimeType,
           data: part.image.data,
         },
-      };
+      });
+      continue;
     }
-    return { text: "" };
-  });
+    if (part.type === "reasoning" && part.reasoning) {
+      if (
+        originMatchesCurrent(part.reasoning.origin) &&
+        signatureMatchesCurrent(part.signature)
+      ) {
+        parts.push({
+          text: part.reasoning.text ?? "",
+          thought: true,
+          thoughtSignature: part.signature.data,
+        } as Part);
+      } else {
+        noteReasoningDropped("reasoning");
+      }
+      continue;
+    }
+    parts.push({ text: "" });
+  }
+  return parts;
 }
 
 // ============ RESPONSE: Gemini → Canonical ============
@@ -724,18 +786,75 @@ export function toCanonicalResponse(
   const content = candidate?.content;
   const parts = content?.parts ?? [];
 
-  const text = parts
-    .filter((p): p is { text: string } => "text" in p)
-    .map((p) => p.text)
+  // v1.4 spec §3.3 (Task 7): `thought: true` marks a reasoning part —
+  // it decodes with the attempt origin and keeps its `thoughtSignature`
+  // sibling as the part's signature. A `thoughtSignature` on a text
+  // part has no canonical stream event to ride (the twin contract pins
+  // stream == non-stream), so it is dropped with a note — the encode
+  // side still honours signed text parts. Signatures on functionCall
+  // parts ride through toCanonicalToolCalls.
+  const origin = decodeOrigin(model);
+  const out: CanonicalContentPart[] = [];
+  let hasReasoning = false;
+  for (const part of parts) {
+    const p = part as {
+      text?: string;
+      thought?: boolean;
+      thoughtSignature?: string;
+    };
+    if (isFunctionCallPart(part) || isFunctionResponsePart(part)) {
+      continue;
+    }
+    if (p.thought === true) {
+      hasReasoning = true;
+      out.push({
+        type: "reasoning",
+        reasoning: { text: p.text ?? "", origin },
+        ...(typeof p.thoughtSignature === "string" &&
+          p.thoughtSignature !== "" && {
+            signature: { origin, data: p.thoughtSignature },
+          }),
+      });
+      continue;
+    }
+    if (typeof p.thoughtSignature === "string" && p.thoughtSignature !== "") {
+      recordNote(
+        {
+          stage: "decode",
+          adapter: "gemini",
+          code: "reasoning_dropped",
+          path: "signature",
+        },
+        "Dropping thoughtSignature on a text part (no canonical stream event carries it)",
+      );
+    }
+    if (typeof p.text === "string") {
+      out.push({ type: "text", text: p.text });
+      continue;
+    }
+    if ("inlineData" in part && part.inlineData) {
+      out.push({
+        type: "image",
+        image: {
+          data: part.inlineData.data,
+          mimeType: part.inlineData.mimeType as CanonicalImage["mimeType"],
+        },
+      });
+    }
+  }
+
+  const text = out
+    .filter((p): p is { type: "text"; text?: string } => p.type === "text")
+    .map((p) => p.text ?? "")
     .join("");
-  const toolCalls = toCanonicalToolCalls(parts, ids);
+  const toolCalls = toCanonicalToolCalls(parts, ids, origin);
 
   return {
     id: `gemini-${randomUUID()}`,
     model,
     message: {
       role: "assistant",
-      content: text,
+      content: hasReasoning ? out : text,
       ...(toolCalls.length > 0 && { toolCalls }),
     },
     finishReason:
@@ -833,10 +952,15 @@ export function mapFinishReason(
 export function fromCanonicalResponse(
   response: CanonicalResponse,
 ): GeminiGenerateContentResponse {
+  // Task 7: a parts array may carry reasoning — a Gemini client never
+  // receives thought parts, so only text parts are rendered.
   const content =
     typeof response.message.content === "string"
       ? response.message.content
-      : "";
+      : (response.message.content ?? [])
+          .filter((p) => p.type === "text")
+          .map((p) => p.text ?? "")
+          .join("");
   const toolCalls = response.message.toolCalls ?? [];
   const callPart = (call: CanonicalToolCall): Part =>
     functionCallPart(call, { includeId: true });

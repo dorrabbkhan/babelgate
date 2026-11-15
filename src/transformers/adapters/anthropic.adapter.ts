@@ -18,6 +18,7 @@ import {
 import { recordNote } from "../../observe/context";
 import { UnsupportedResponseFormatError } from "../../utils/errors";
 import { budgetFor } from "../reasoning-effort";
+import { decodeOrigin } from "../reasoning-origin";
 import {
   DEFAULT_RESPONSE_FORMAT_NAME,
   isSchemaObject,
@@ -544,13 +545,44 @@ export function toCanonicalResponse(
   response: Message,
   model: string,
 ): CanonicalResponse {
-  const textContent = response.content
-    .filter(
-      (block): block is ContentBlock & { type: "text" } =>
-        block.type === "text",
-    )
-    .map((block) => block.text)
-    .join("");
+  // v1.4 spec §3.3 (Task 7): thinking/redacted_thinking blocks decode
+  // to reasoning parts tagged with the current attempt's origin (or
+  // `{provider: "", model}` outside one). A thinking block's
+  // `signature` is the part's signature; a redacted block's `data`
+  // fills that slot. Parts keep wire order so a thinking block stays
+  // in front of the text/tool block it preceded; when no reasoning
+  // exists the content stays a plain text string as before.
+  const origin = decodeOrigin(model);
+  const parts: Array<
+    | { type: "reasoning"; reasoning: { text?: string; redacted?: boolean; origin: typeof origin }; signature?: { origin: typeof origin; data: string } }
+    | { type: "text"; text: string }
+  > = [];
+  let hasReasoning = false;
+
+  for (const block of response.content) {
+    if (block.type === "thinking") {
+      hasReasoning = true;
+      const b = block as unknown as { thinking?: string; signature?: string };
+      parts.push({
+        type: "reasoning",
+        reasoning: { text: b.thinking ?? "", origin },
+        ...(typeof b.signature === "string" &&
+          b.signature !== "" && { signature: { origin, data: b.signature } }),
+      });
+    } else if (block.type === "redacted_thinking") {
+      hasReasoning = true;
+      const b = block as unknown as { data?: string };
+      parts.push({
+        type: "reasoning",
+        reasoning: { redacted: true, origin },
+        ...(typeof b.data === "string" &&
+          b.data !== "" && { signature: { origin, data: b.data } }),
+      });
+    } else if (block.type === "text") {
+      const b = block as { text: string };
+      parts.push({ type: "text", text: b.text });
+    }
+  }
 
   const toolCalls = response.content
     .filter(
@@ -568,12 +600,17 @@ export function toCanonicalResponse(
       }),
     );
 
+  const textContent = parts
+    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+    .map((p) => p.text)
+    .join("");
+
   return {
     id: response.id || `anthropic-${randomUUID()}`,
     model,
     message: {
       role: "assistant",
-      content: textContent,
+      content: hasReasoning ? parts : textContent,
       ...(toolCalls.length > 0 && { toolCalls }),
     },
     finishReason: mapFinishReason(response.stop_reason),
@@ -599,10 +636,15 @@ export function mapFinishReason(
 // ============ RESPONSE: Canonical → Anthropic ============
 
 export function fromCanonicalResponse(response: CanonicalResponse): Message {
+  // Task 7: a parts array may carry reasoning — an Anthropic client
+  // never receives thinking, so only text parts are rendered.
   const text =
     typeof response.message.content === "string"
       ? response.message.content
-      : "";
+      : (response.message.content ?? [])
+          .filter((p) => p.type === "text")
+          .map((p) => p.text)
+          .join("");
 
   // Text comes before tool_use blocks (spec §3.4).
   const content: Array<

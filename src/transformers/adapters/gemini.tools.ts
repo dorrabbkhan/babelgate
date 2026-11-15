@@ -85,14 +85,23 @@ export function resolveCallId(
   return queue.shift();
 }
 
-/** Gemini functionCall parts → canonical toolCalls (wire id or generated). */
+/**
+ * Gemini functionCall parts → canonical toolCalls (wire id or
+ * generated). Task 7 (v1.4 spec §3.3): a part-level `thoughtSignature`
+ * sibling becomes the call's canonical signature when `origin` is
+ * given — callers pass the decode origin (`decodeOrigin(model)`).
+ */
 export function toCanonicalToolCalls(
   parts: Part[],
   ids: IdGenerator,
+  origin?: { provider: string; model: string },
 ): CanonicalToolCall[] {
   return parts.filter(isFunctionCallPart).map(
     (part): CanonicalToolCall => {
       const call = part.functionCall as GeminiFunctionCall;
+      const thoughtSignature = (
+        part as { thoughtSignature?: string }
+      ).thoughtSignature;
       return {
         id: call.id ?? ids(),
         type: "function",
@@ -100,6 +109,11 @@ export function toCanonicalToolCalls(
           name: call.name,
           arguments: JSON.stringify(call.args ?? {}),
         },
+        ...(origin !== undefined &&
+          typeof thoughtSignature === "string" &&
+          thoughtSignature !== "" && {
+            signature: { origin, data: thoughtSignature },
+          }),
       };
     },
   );

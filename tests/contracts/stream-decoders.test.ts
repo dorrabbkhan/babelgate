@@ -455,10 +455,14 @@ describe("stream decoders", () => {
     ]);
   });
 
-  it("anthropic decoder drops thinking deltas", () => {
-    // Thinking blocks and their thinking_delta/signature_delta events
-    // produce no canonical events (docs.claude.com "Streaming with
-    // extended thinking" — built inline; no fixture carries them).
+  it("thinking_delta and signature_delta decoded", () => {
+    // v1.4 spec §3.3 (Task 7): a wire thinking block opens a canonical
+    // reasoning block — thinking_delta → reasoning_delta,
+    // signature_delta → reasoning_signature (docs.claude.com
+    // "Streaming with extended thinking" — built inline; no fixture
+    // carries thinking). Outside an attempt the origin is the plan's
+    // {provider: "", model} convention.
+    const origin = { provider: "", model: "claude-opus-5-5" };
     const sse = [
       'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_t1","type":"message","role":"assistant","model":"claude-opus-5-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}',
       'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}',
@@ -481,6 +485,13 @@ describe("stream decoders", () => {
         type: "message_start",
         id: "msg_t1",
         model: "claude-opus-5-5",
+      },
+      { type: "reasoning_start", index: 0, origin },
+      { type: "reasoning_delta", index: 0, text: "secret reasoning" },
+      {
+        type: "reasoning_signature",
+        index: 0,
+        signature: { origin, data: "EqQBCgIYAhIM" },
       },
       { type: "text_delta", text: "Hi" },
       {
