@@ -6,13 +6,27 @@ import { runStreamPipeline } from "./stream-pipeline";
 import {
   attemptTargets,
   errorTraceFields,
+  type AttemptResult,
 } from "./attempt-targets";
 import {
   attemptStreamTarget,
   finishStreamTrace,
   observedDecoder,
   stampTtfb,
+  type UpstreamAttempt,
 } from "./stream-attempt";
+import {
+  assertBridgeableBody,
+  finishPassthroughTrace,
+  isPassthrough,
+  passthroughStreamAttempt,
+  type PassthroughStreamAttempt,
+} from "./passthrough";
+import {
+  relayResponseHeaders,
+  relayResponsesStream,
+  type PassthroughObservation,
+} from "./passthrough-relay";
 import type { ChatInput } from "./chat.service";
 import type { ProxyResult } from "./proxy.service";
 
@@ -50,15 +64,39 @@ export async function proxyChatStream(
       query: opts?.query ?? {},
       requestedModel,
     });
+    const bridgedAttempt = attemptStreamTarget(
+      canonical,
+      config,
+      requestId,
+      opts?.signal,
+    );
     result = await attemptTargets(
       plan,
       config.registry,
-      attemptStreamTarget(
-        canonical,
-        config,
-        requestId,
-        opts?.signal,
-      ),
+      (entry, target) => {
+        // §3.4: a `type: responses` entry on a responses source is
+        // pass-through — the request is relayed, never encoded.
+        if (isPassthrough(source, entry)) {
+          return passthroughStreamAttempt(entry, target, {
+            sourceBody,
+            canonical,
+            config,
+            requestId,
+            signal: opts?.signal,
+          });
+        }
+        // §2.2: responses-lite bodies are pass-through-only — on the
+        // bridge each marker is a 400 naming the item.
+        if (source === "responses") {
+          assertBridgeableBody(sourceBody);
+        }
+        // §3.4: the canonical couldn't be validated — it could only
+        // have been relayed, never encoded.
+        if (input.deferredValidation !== undefined) {
+          throw input.deferredValidation;
+        }
+        return bridgedAttempt(entry, target);
+      },
       { requestId, signal: opts?.signal, hops },
     );
   } catch (err) {
@@ -72,14 +110,67 @@ export async function proxyChatStream(
     throw err;
   }
 
-  const { upstream } = result.value;
+  const signal = opts?.signal ?? new AbortController().signal;
+
+  // §3.4: a won pass-through hop relays the upstream SSE byte for
+  // byte — `response.model` restored inside the five lifecycle
+  // events only — never through the canonical pipeline.
+  if (isPassthrough(source, result.entry)) {
+    const pt = result as AttemptResult<PassthroughStreamAttempt>;
+    const observation: PassthroughObservation = {};
+    let ptIterated = false;
+    const ptFinish = async (clientStatus?: number): Promise<void> =>
+      finishPassthroughTrace({
+        reason: plan.reason,
+        requestedModel,
+        canonical,
+        result: pt,
+        observation,
+        signal,
+        iterated: ptIterated,
+        clientStatus,
+      });
+    const ptChunks = (async function* (): AsyncGenerator<string> {
+      try {
+        ptIterated = true;
+        for await (const chunk of relayResponsesStream({
+          upstream: pt.value.upstream.body,
+          upstreamHeaders: pt.value.upstream.headers,
+          requestedModel,
+          idleMs: pt.entry.streamIdleMs ?? config.upstreamStreamIdleMs,
+          signal,
+          observation,
+        })) {
+          stampTtfb();
+          yield chunk;
+        }
+      } finally {
+        await ptFinish();
+      }
+    })();
+    return {
+      stream: {
+        contentType:
+          pt.value.upstream.contentType ?? "text/event-stream",
+        chunks: ptChunks,
+        finish: ptFinish,
+      },
+      headers: {
+        ...relayResponseHeaders(pt.value.upstream.headers),
+        "x-babelgate-provider": pt.target.provider,
+        "x-babelgate-model": pt.target.model,
+        "x-babelgate-attempts": String(pt.hops.length),
+      },
+    };
+  }
+
+  const bridged = result as AttemptResult<UpstreamAttempt>;
+  const { upstream } = bridged.value;
   const { pipelineDecoder, observed } = observedDecoder(
-    result.value.decoder,
-    result.entry.repairToolCalls === true,
+    bridged.value.decoder,
+    bridged.entry.repairToolCalls === true,
     canonical,
   );
-
-  const signal = opts?.signal ?? new AbortController().signal;
 
   // True once the route starts consuming chunks — which it only does
   // after flushing headers, so iterated implies the client got the 200
@@ -91,7 +182,7 @@ export async function proxyChatStream(
       reason: plan.reason,
       requestedModel,
       canonical,
-      result,
+      result: bridged,
       observed,
       signal,
       iterated,
@@ -106,7 +197,7 @@ export async function proxyChatStream(
         upstream: upstream.body,
         decoder: pipelineDecoder,
         encoder,
-        idleMs: result.entry.streamIdleMs ?? config.upstreamStreamIdleMs,
+        idleMs: bridged.entry.streamIdleMs ?? config.upstreamStreamIdleMs,
         signal,
       })) {
         stampTtfb();
@@ -120,9 +211,9 @@ export async function proxyChatStream(
   return {
     stream: { contentType: encoder.contentType, chunks, finish },
     headers: {
-      "x-babelgate-provider": result.target.provider,
-      "x-babelgate-model": result.target.model,
-      "x-babelgate-attempts": String(result.hops.length),
+      "x-babelgate-provider": bridged.target.provider,
+      "x-babelgate-model": bridged.target.model,
+      "x-babelgate-attempts": String(bridged.hops.length),
     },
   };
 }

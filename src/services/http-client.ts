@@ -16,6 +16,11 @@ export interface UpstreamResponse {
   body: unknown;
   durationMs: number;
   contentType?: string;
+  /**
+   * Raw upstream response headers, lower-cased — pass-through relays
+   * the end-to-end subset (services/passthrough.ts owns the policy).
+   */
+  headers?: Record<string, string>;
   /** Whole seconds from the upstream Retry-After header, when present */
   retryAfterSeconds?: number;
 }
@@ -149,6 +154,7 @@ export async function requestJson(
         body: parseFailed ? null : parsed,
         durationMs,
         contentType,
+        headers: Object.fromEntries(res.headers.entries()),
         ...(retryAfterSeconds !== undefined && { retryAfterSeconds }),
       };
     } catch (err) {
@@ -202,6 +208,13 @@ export interface UpstreamStreamResponse {
   status: number;
   body: ReadableStream<Uint8Array>;
   durationMs: number;
+  /** `content-type` header value — pass-through relays it to the client. */
+  contentType?: string;
+  /**
+   * Raw upstream response headers, lower-cased — pass-through relays
+   * the end-to-end subset (services/passthrough.ts owns the policy).
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -310,7 +323,13 @@ export async function postStream(
         );
       }
 
-      return { status: res.status, body: res.body, durationMs };
+      return {
+        status: res.status,
+        body: res.body,
+        durationMs,
+        contentType: res.headers.get("content-type") ?? undefined,
+        headers: Object.fromEntries(res.headers.entries()),
+      };
     } catch (err) {
       if (err instanceof UpstreamError) throw err;
 

@@ -23,7 +23,7 @@ import type {
   CanonicalResponse,
 } from "../types/canonical.types";
 import { canonicalResponseSchema } from "../types/canonical.schema";
-import { UpstreamError } from "../utils/errors";
+import { UpstreamError, ValidationError } from "../utils/errors";
 import { logger } from "../utils/logger";
 import { postJson } from "./http-client";
 import {
@@ -33,6 +33,12 @@ import {
   maxTokensClampOf,
   toClientFacing,
 } from "./attempt-targets";
+import {
+  assertBridgeableBody,
+  finishPassthroughUnary,
+  isPassthrough,
+  passthroughUnaryAttempt,
+} from "./passthrough";
 import type {
   ProxyRequestOptions,
   ProxyResult,
@@ -43,8 +49,19 @@ export interface ChatInput {
   source: Provider;
   /** The client's original request body (stream encoders need it) */
   sourceBody: unknown;
-  /** Validated canonical request — never mutated by the services */
+  /**
+   * Decoded canonical request — validated, except on a responses
+   * source that failed the boundary schema (then deferredValidation
+   * is set and a bridged attempt must throw it before encoding).
+   * Never mutated by the services.
+   */
   canonical: CanonicalRequest;
+  /**
+   * §3.4: the 400 a responses-source request owes when its canonical
+   * fails the boundary schema — deferred so a pass-through entry can
+   * still relay it; thrown by the first bridged attempt.
+   */
+  deferredValidation?: ValidationError;
   /** The model name the client asked for (§3.5 reply model) */
   requestedModel: string;
   plan: RoutePlan;
@@ -80,6 +97,26 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
             upstreamModel: target.model,
           },
           async () => {
+            // §3.4: a `type: responses` entry on a responses source is
+            // pass-through — the request is relayed, never encoded.
+            if (isPassthrough(source, entry)) {
+              return passthroughUnaryAttempt(entry, target, {
+                sourceBody: input.sourceBody,
+                canonical,
+                config,
+                requestId,
+              });
+            }
+            // §2.2: responses-lite bodies are pass-through-only — on
+            // the bridge each marker is a 400 naming the item.
+            if (source === "responses") {
+              assertBridgeableBody(input.sourceBody);
+            }
+            // §3.4: the canonical couldn't be validated — it could
+            // only have been relayed, never encoded.
+            if (input.deferredValidation !== undefined) {
+              throw input.deferredValidation;
+            }
             const targetBody = adapters[
               entry.type
             ].fromCanonicalRequest(
@@ -129,6 +166,17 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
       ...errorTraceFields(err, input.opts?.signal?.aborted === true),
     });
     throw err;
+  }
+
+  // §3.4: a won pass-through hop relays the upstream body — no
+  // decode, no diagnostics repair, no canonical stage.
+  if (isPassthrough(source, result.entry)) {
+    return finishPassthroughUnary({
+      reason: plan.reason,
+      requestedModel,
+      canonical,
+      result,
+    });
   }
 
   // §3.5: the upstream JSON body lands in the ring even when decoding

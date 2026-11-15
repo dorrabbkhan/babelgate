@@ -284,6 +284,8 @@ afterEach(() => {
   delete process.env.TARGET_API;
   delete process.env.OPENAI_API_BASE_URL;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.RESPONSES_API_BASE_URL;
+  delete process.env.RESPONSES_API_KEY;
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.USAGE_DB;
   delete process.env.USAGE_STORE;
@@ -382,6 +384,156 @@ describe("privacy canary (spec §4.1)", () => {
     expect(ringText).not.toContain(CANARY_KEY);
 
     // LOG_BODIES is off: no bodies row on disk.
+    expect(detail!.bodies).toBeUndefined();
+  });
+
+  it("pass-through canary reaches only the ring", async () => {
+    // v1.4 §3.4: a Responses request relayed to a `type: responses`
+    // entry is byte-for-byte upstream — the privacy rule is identical:
+    // body content reaches the body ring (and `bodies` only with
+    // LOG_BODIES=true), never logs, metrics, OTel, live or requests.
+    process.env.TARGET_API = "responses";
+    process.env.RESPONSES_API_BASE_URL = MOCK_BASE_URLS.responses;
+    process.env.RESPONSES_API_KEY = CANARY_KEY;
+    // Response object + function_call/output_text shapes:
+    // https://platform.openai.com/docs/api-reference/responses/object
+    responseOverrides.responses = {
+      status: 200,
+      body: {
+        id: "resp_canary",
+        object: "response",
+        created_at: 1,
+        status: "completed",
+        model: "gpt-5-codex",
+        output: [
+          {
+            type: "message",
+            id: "msg_1",
+            status: "completed",
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: `done ${CANARY_COMPLETION}`,
+                annotations: [],
+              },
+            ],
+          },
+          {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "get_weather",
+            arguments: `{"city":"${CANARY_TOOLARG}"}`,
+            status: "completed",
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 8, total_tokens: 18 },
+      },
+    };
+    resetConfig();
+
+    const exporter = new RecordingExporter();
+    const otel = await createOtelSink(exporter);
+    registerSink(otel);
+    const sse = await connectLive();
+    expect(sse.status).toBe(200);
+
+    const before = traces.length;
+    const res = await request(app)
+      .post("/v1/responses")
+      .send({
+        model: "gpt-5-codex",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: `echo ${CANARY_PROMPT}` },
+            ],
+          },
+        ],
+        tools: [
+          {
+            type: "function",
+            name: "get_weather",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+            },
+          },
+        ],
+        store: false,
+      } as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    // The upstream reply reached the client byte for byte.
+    expect(JSON.stringify(res.body)).toContain(CANARY_COMPLETION);
+    await waitForTraces(before + 1);
+    getUsageStore()!.flush();
+    const requestId = traces[traces.length - 1].requestId;
+    await waitForSseFinished(sse);
+    const liveText = sse.text();
+    sse.close();
+
+    // Sanity: the canaries really were in flight — forwarded verbatim.
+    expect(JSON.stringify(capturedRequests.responses)).toContain(
+      CANARY_PROMPT,
+    );
+    expect(
+      JSON.stringify(
+        capturedHeaders.responses.map((h) => Object.fromEntries(h)),
+      ),
+    ).toContain(CANARY_KEY);
+
+    const metrics = await request(app).get("/metrics");
+    expect(metrics.status).toBe(200);
+    const routing = await request(app).get("/ui/api/routing").set(UI);
+    expect(routing.status).toBe(200);
+    const requestsApi = await request(app)
+      .get("/ui/api/requests")
+      .set(UI);
+    expect(requestsApi.status).toBe(200);
+
+    await otel.shutdown();
+    const store = getUsageStore()!;
+    const tableRows = store.listRequests({ limit: 500 }).rows;
+    const detail = store.getRequest(requestId);
+    expect(detail).toBeDefined();
+    expect(traces[traces.length - 1].bodies).toBeUndefined();
+
+    const haystacks: Record<string, string> = {
+      log: logText(),
+      metrics: metrics.text,
+      otelSpans: JSON.stringify(
+        exporter.spans.map((s) => ({
+          name: s.name,
+          attributes: s.attributes,
+          status: s.status,
+          events: s.events,
+        })),
+      ),
+      live: liveText,
+      routing: JSON.stringify(routing.body),
+      requestsApi: JSON.stringify(requestsApi.body),
+      requestsTable: JSON.stringify({
+        ...detail,
+        bodies: undefined,
+        rows: tableRows,
+      }),
+    };
+    for (const [surface, text] of Object.entries(haystacks)) {
+      for (const canary of ALL_CANARIES) {
+        expect(text, `${surface} leaked ${canary}`).not.toContain(canary);
+      }
+    }
+
+    const ring = getBodyRing()!.get(requestId);
+    expect(ring).toBeDefined();
+    const ringText = JSON.stringify(ring);
+    for (const canary of CONTENT_CANARIES) {
+      expect(ringText).toContain(canary);
+    }
+    expect(ringText).not.toContain(CANARY_KEY);
     expect(detail!.bodies).toBeUndefined();
   });
 

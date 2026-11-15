@@ -12,6 +12,7 @@ import { getMetricsSink } from "../observe/sinks/metrics";
 import { planRoute } from "../routing/plan-route";
 import { estimateInputTokens } from "../utils/token-estimate";
 import { canonicalRequestSchema } from "../types/canonical.schema";
+import type { CanonicalRequest } from "../types/canonical.types";
 import {
   NotFoundError,
   NotSupportedError,
@@ -81,9 +82,11 @@ function methodFromPath(path: string): string {
  *   POST /v1/responses/compact and any other non-create method → 404.
  * - On POST /v1/responses: `previous_response_id`, `conversation` and
  *   `store: true` are server state → 400 `unsupported_parameter`.
- * - An `additional_tools` input item marks the responses-lite shape,
- *   which is pass-through-only in v1.4 (owner decision, Task 3) →
- *   400 naming the item.
+ *
+ * The responses-lite markers are checked later, per attempt
+ * (passthrough.ts `assertBridgeableBody`): they are pass-through-only
+ * in v1.4 (owner decision, Task 3), so whether they are a 400 depends
+ * on the routed entry — a check here could not know.
  */
 function rejectStatefulResponsesRequest(
   method: string,
@@ -121,40 +124,6 @@ function rejectStatefulResponsesRequest(
       "store",
       "babelgate is stateless: store is not supported",
     );
-  }
-  // responses-lite markers (owner decision, Task 3): pass-through only
-  // in v1.4 — on the bridge each is a 400 naming the unsupported item.
-  const liteParam = (param: string): never => {
-    throw new UnsupportedParameterError(
-      param,
-      `${param} is not supported: responses-lite requests are pass-through only in v1.4`,
-    );
-  };
-
-  if (
-    request.reasoning !== null &&
-    typeof request.reasoning === "object" &&
-    (request.reasoning as Record<string, unknown>).context !== undefined
-  ) {
-    liteParam("reasoning.context");
-  }
-
-  if (Array.isArray(request.input)) {
-    for (const item of request.input) {
-      if (item === null || typeof item !== "object") continue;
-      const entry = item as { type?: unknown; phase?: unknown; namespace?: unknown };
-      if (entry.type === "additional_tools") liteParam("additional_tools");
-      if (entry.type === "message" && entry.phase !== undefined) {
-        liteParam("phase");
-      }
-      if (
-        (entry.type === "custom_tool_call" ||
-          entry.type === "custom_tool_call_output") &&
-        entry.namespace !== undefined
-      ) {
-        liteParam("custom_tool_call");
-      }
-    }
   }
 }
 
@@ -242,8 +211,34 @@ export async function proxyRequest(
   }
 
   // Boundary validation: malformed client request → 400, not 500.
+  // §3.4 exception for a responses source: the decoded canonical only
+  // feeds routing and the trace — a request canonical can't express
+  // (`input: []`, lite-only input) may still be relayed verbatim to a
+  // `type: responses` entry, so the 400 is deferred to the first
+  // bridged attempt (chat.service/chat-stream.service throw it when
+  // they actually have to encode).
   const parsed = canonicalRequestSchema.safeParse(canonical);
-  if (!parsed.success) {
+  let canonicalRequest: CanonicalRequest;
+  let deferredValidation: ValidationError | undefined;
+  if (parsed.success) {
+    canonicalRequest = parsed.data;
+  } else if (sourceApi === "responses") {
+    canonicalRequest = canonical;
+    deferredValidation = new ValidationError("Malformed request body", {
+      requestId,
+      issues: parsed.error.issues.map((i) => ({
+        path: i.path.join("."),
+        message: i.message,
+      })),
+    });
+    // The deferral exists for bodies a `type: responses` entry can
+    // still relay verbatim — but routing itself reads the model
+    // (planRoute → parseTarget), so a non-string model reaches no
+    // entry at all: throw the deferred 400 now, before routing.
+    if (typeof canonicalRequest.model !== "string") {
+      throw deferredValidation;
+    }
+  } else {
     throw new ValidationError("Malformed request body", {
       requestId,
       issues: parsed.error.issues.map((i) => ({
@@ -252,7 +247,7 @@ export async function proxyRequest(
       })),
     });
   }
-  snapshot("canonical", parsed.data);
+  snapshot("canonical", canonicalRequest);
 
   // The model comes from the source path when the provider puts it there
   // (Gemini), otherwise from the canonical request. An explicitly empty
@@ -268,7 +263,7 @@ export async function proxyRequest(
 
   // The chars/4 input estimate is computed once — count_tokens answers
   // with it (§3.5) and routing `when` conditions consume it (§3.3).
-  const estimatedInputTokens = estimateInputTokens(parsed.data);
+  const estimatedInputTokens = estimateInputTokens(canonicalRequest);
 
   // §3.5: count_tokens is answered locally — a chars/4 estimate with the
   // estimate header, never an upstream call. The reply shape is the
@@ -284,7 +279,7 @@ export async function proxyRequest(
 
   // §3.3: resolve the model to an ordered list of targets — env mode
   // produces MODEL_MAP routes then the single default provider.
-  const requestedModel = modelFromPath ?? parsed.data.model;
+  const requestedModel = modelFromPath ?? canonicalRequest.model;
   // §3.9: the /ui/api live feed marks the request in flight from here —
   // the earliest point the requested model is known.
   traceStarted(requestedModel);
@@ -298,7 +293,8 @@ export async function proxyRequest(
   const input: ChatInput = {
     source: sourceApi,
     sourceBody: body,
-    canonical: parsed.data,
+    canonical: canonicalRequest,
+    ...(deferredValidation !== undefined && { deferredValidation }),
     requestedModel,
     plan,
     config,
@@ -311,8 +307,11 @@ export async function proxyRequest(
   // flag, so canonical.stream is set here for the target adapter's
   // own streaming marker (openai stream_options, anthropic/ollama
   // stream:true).
-  if (parsed.data.stream === true || route.isStreamPath?.(path) === true) {
-    parsed.data.stream = true;
+  if (
+    canonicalRequest.stream === true ||
+    route.isStreamPath?.(path) === true
+  ) {
+    canonicalRequest.stream = true;
     return proxyChatStream(input);
   }
 

@@ -4574,3 +4574,112 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   - `src/types/gemini.types.ts` is inside "matching src/types/*.types.ts"
     — it gained `GeminiGenerationConfig` (SDK `GenerationConfig` +
     `responseJsonSchema`, a REST field the SDK omits).
+
+## v1.4 Task 10: Responses pass-through (spec §3.4)
+
+- **File split (rule 7)** — the single `passthrough.ts` the Files
+  block names would be ~800 lines, so the wire relay lives in
+  `src/services/passthrough-relay.ts` (SSE block re-framing,
+  lifecycle `response.model` restore, `DecompressionStream`
+  content-encoding handling, the upstream-header relay policy and
+  `PassthroughObservation`); `passthrough.ts` keeps the routing
+  predicate, lite-marker check, request-body build, unary/stream
+  attempts and the trace finishes.
+- **Predicate** — `isPassthrough(source, entry)` is true only for
+  `source === "responses" && entry.type === "responses"`. Selection
+  happens per attempt inside `attemptTargets` (a `type: responses`
+  entry relays; a non-responses entry — including a fallback —
+  bridges through the Responses adapter unchanged).
+- **Request body** — `passthroughTargetBody` shallow-copies the
+  client's body, rewrites `model` to the routed model and applies the
+  same `max_output_tokens` clamp `canonicalForTarget` produces
+  (`maxTokensClampOf`). The client's object is never mutated; every
+  other field — `reasoning`, built-in/custom/namespace tools,
+  `include`, `metadata`, `text`, responses-lite markers, unknown
+  fields — reaches the upstream untouched.
+- **Lite-marker 400s moved per-attempt** — Task 3 rejected
+  responses-lite markers (`additional_tools`, message `phase`,
+  `reasoning.context`, namespaced `custom_tool_call*`) pre-routing,
+  unconditionally. Task 10 moves that check into
+  `assertBridgeableBody`, invoked only by bridged attempts, so a
+  `type: responses` entry relays them (that's the point of
+  pass-through; owner decision §2.2) while a bridged target still
+  gets the same 400 `unsupported_parameter` naming the item —
+  identical error, now thrown per-attempt. `UnsupportedParameterError`
+  is not fallback-eligible, so it ends the plan immediately exactly
+  as the old pre-routing throw did.
+- **Deferred boundary validation (new)** — `canonicalRequestSchema`
+  requires `messages.min(1)`, but a valid upstream-bound Responses
+  request may decode to zero canonical messages (`input: []`, or
+  input holding only items canonical can't express). For a responses
+  source the schema failure is now *deferred*: proxy.service keeps
+  the decoded canonical (routing estimate + trace only) and carries
+  the `ValidationError` on `ChatInput.deferredValidation`; a bridged
+  attempt throws it before encoding, a pass-through attempt never
+  sees it. Other sources still throw at the boundary — nothing
+  changed for them.
+- **Response relay** — unary: the upstream JSON is sent back with
+  only top-level `model` restored to the client's model (a shallow
+  copy; non-object bodies relay verbatim). Stream:
+  `relayResponsesStream` re-frames at SSE event boundaries — only
+  the five lifecycle events (`response.created`, `.in_progress`,
+  `.completed`, `.incomplete`, `.failed` per
+  https://platform.openai.com/docs/api-reference/responses-streaming)
+  are JSON-parsed so `response.model` can be restored; their frames
+  are re-rendered keeping non-`data:` lines (`event:`, `id:`
+  comments). Every other byte — deltas, `data: [DONE]`, CRLF,
+  whitespace, unknown events — is verbatim. Event type comes from
+  the payload `type` first, the `event:` line only as fallback —
+  Codex's own precedence (`codex-rs/codex-api/src/sse/responses.rs`
+  at 0.169.0), which is what OpenRouter-shaped streams (no `event:`
+  lines) need.
+- **Relay buffering** — only up to one event boundary: a complete
+  event in a chunk is emitted before the next upstream read, so
+  deltas reach the client with no extra delay.
+- **Header policy** — upstream response headers are relayed except:
+  hop-by-hop headers (RFC 7230 §6.1, plus whatever the upstream's
+  `connection` header names), `content-length` (stale once
+  `response.model` is restored), `content-encoding` (the body handed
+  to the client is already decoded), and `content-type` (carried on
+  the stream descriptor instead, so the route sets it after the
+  service headers). `x-babelgate-*` headers are added as usual.
+- **Content-encoding** — undici transparently decompresses yet keeps
+  the `content-encoding` header; a recorder/bare-socket upstream may
+  hand over still-compressed bytes. The relay sniffs magic bytes
+  (`1f 8b` gzip / `78` deflate) when the header claims an encoding:
+  still-compressed → `DecompressionStream`; already-decoded →
+  verbatim. No header → verbatim.
+- **Mid-stream failure** — upstream close before a terminal
+  lifecycle event, a read error, or an idle timeout synthesizes a
+  `response.failed` frame (built by `toResponsesResponseObject`, the
+  same shape the bridged encoder emits) and ends the client stream —
+  §3.7's "no fallback after bytes flowed", in-stream. A bare `error`
+  SSE event relays verbatim and marks the trace failed.
+- **Trace** — `RequestTrace.passthrough?: boolean` is set only on
+  relayed requests (absent elsewhere — no existing trace shape
+  changes, verified by the unchanged observe/contract suites). A
+  pass-through trace drops the `canonical` body stage and clears
+  decode notes (they describe transforms that never ran); stages
+  are source → target → `response.wire`. Usage and finishReason come
+  from the terminal event's `response` run through the responses
+  adapter's own `toCanonicalResponse` — pure observation, so the
+  field map can't drift from the bridge; usage counts only on
+  `response.completed`. `finishPassthroughTrace` emits exactly once
+  across ok / pre-iteration failure / mid-stream error / client
+  abort (before and after `response.completed` — usage already seen
+  survives an abort). Diagnostics run on the decoded tool calls;
+  `repair_tool_calls` never touches relayed bytes.
+- **Abort** — the client abort signal is OR'd into the upstream
+  request (`AbortSignal.any`); on abort the relay cancels the
+  upstream reader and ends quietly — trace `status: "aborted"`,
+  `httpStatus: 200` if headers already went out, 499 before the
+  first chunk.
+- **Files outside the Files block:**
+  - `src/services/http-client.ts` — `UpstreamResponse` and
+    `UpstreamStreamResponse` gain `headers?: Record<string,string>`
+    (and the stream response `contentType?`) so the relay can apply
+    the header policy above. Additive; bridged callers ignore them.
+  - `tests/integration/privacy-canary.test.ts` — the conductor
+    instructions require extending the v1.3 canary to a pass-through
+    request (sentinel body never reaches logs/metrics/live feed; the
+    body ring is the only place it may appear).

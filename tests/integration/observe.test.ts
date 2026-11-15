@@ -1532,3 +1532,284 @@ describe("/metrics (spec §3.8)", () => {
     }
   });
 });
+
+// ===== v1.4 Task 10: pass-through tracing (spec §3.4) =====
+
+describe("pass-through tracing (v1.4 spec §3.4)", () => {
+  function useResponsesTarget(): void {
+    process.env.TARGET_API = "responses";
+    process.env.RESPONSES_API_BASE_URL = MOCK_BASE_URLS.responses;
+    process.env.RESPONSES_API_KEY = "test-key";
+    resetConfig();
+  }
+
+  const respBody = (extra: Record<string, unknown> = {}) => ({
+    model: "gpt-5-codex",
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hi" }],
+      },
+    ],
+    store: false,
+    ...extra,
+  });
+
+  it("pass-through requests carry passthrough: true; bridged do not", async () => {
+    useResponsesTarget();
+    const json = await request(app)
+      .post("/v1/responses")
+      .send(respBody());
+    expect(json.status, JSON.stringify(json.body)).toBe(200);
+
+    const stream = await postStream(
+      "/v1/responses",
+      respBody({ stream: true }),
+    );
+    expect(stream.status).toBe(200);
+
+    // An openai-source request to the same responses entry is the
+    // bridge — no passthrough flag.
+    const bridged = await request(app)
+      .post("/v1/chat/completions")
+      .send(openaiFixtures.requests.basic as object);
+    expect(bridged.status, JSON.stringify(bridged.body)).toBe(200);
+
+    await waitForTraces(3);
+    expect(traces[0]).toMatchObject({
+      sourceApi: "responses",
+      winner: "responses",
+      stream: false,
+      status: "ok",
+      passthrough: true,
+    });
+    expect(traces[1]).toMatchObject({
+      sourceApi: "responses",
+      stream: true,
+      status: "ok",
+      passthrough: true,
+    });
+    expect(traces[2].passthrough).toBeUndefined();
+  });
+
+  it("inspector stages for pass-through", async () => {
+    useResponsesTarget();
+    const ring = createBodyRing(50);
+    registerSink(ring);
+
+    const json = await request(app)
+      .post("/v1/responses")
+      .send(respBody());
+    expect(json.status, JSON.stringify(json.body)).toBe(200);
+    const stream = await postStream(
+      "/v1/responses",
+      respBody({ stream: true }),
+    );
+    expect(stream.status).toBe(200);
+    await waitForTraces(2);
+
+    // §3.4: source, target and response.wire — never a canonical
+    // stage, since nothing was canonicalized.
+    const unary = ring.get(traces[0].requestId);
+    expect(unary).toBeDefined();
+    expect(unary?.source?.value).toMatchObject({ model: "gpt-5-codex" });
+    expect(unary?.canonical).toBeUndefined();
+    expect(unary?.target).toHaveLength(1);
+    expect(unary?.target[0].value).toMatchObject({
+      model: "gpt-5-codex",
+    });
+    expect(unary?.response?.canonical).toBeUndefined();
+    expect(unary?.response?.wire?.value).toMatchObject({
+      object: "response",
+    });
+
+    const streamed = ring.get(traces[1].requestId);
+    expect(streamed).toBeDefined();
+    expect(streamed?.canonical).toBeUndefined();
+    expect(streamed?.target).toHaveLength(1);
+    expect(streamed?.response?.canonical).toBeUndefined();
+    const wire = streamed?.response?.wire;
+    expect(typeof wire?.value).toBe("string");
+    expect(wire?.value as string).toContain("response.completed");
+  });
+
+  // Review Focus 2: Ctrl-C mid-relay — exactly one trace, aborted,
+  // no usage (response.completed never arrived), the upstream fetch
+  // really aborts, and nothing emits a second time.
+  it("aborted pass-through emits one trace", async () => {
+    useResponsesTarget();
+    let upstreamAborted = false;
+    server.use(
+      http.post(
+        `${MOCK_BASE_URLS.responses}/v1/responses`,
+        ({ request }) => {
+          request.signal.addEventListener("abort", () => {
+            upstreamAborted = true;
+          });
+          const enc = new TextEncoder();
+          const body = new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(
+                enc.encode(
+                  'data: {"type":"response.output_text.delta","delta":"one"}\n\n',
+                ),
+              );
+              c.enqueue(
+                enc.encode(
+                  'data: {"type":"response.output_text.delta","delta":"two"}\n\n',
+                ),
+              );
+              // stays open — the client leaves before any terminal
+              // event
+            },
+            cancel() {
+              upstreamAborted = true;
+            },
+          });
+          return new HttpResponse(body, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      ),
+    );
+
+    const listener = app.listen(0);
+    try {
+      const port = (listener.address() as AddressInfo).port;
+      const ac = new AbortController();
+      const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(respBody({ stream: true })),
+        signal: ac.signal,
+      });
+      expect(res.status).toBe(200);
+
+      const reader = res.body!.getReader();
+      const utf8 = new TextDecoder();
+      let text = "";
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) break;
+        text += utf8.decode(r.value, { stream: true });
+        if ((text.match(/output_text.delta/g) ?? []).length >= 2) break;
+      }
+      // two deltas in, Ctrl-C
+      ac.abort();
+      await reader.read().catch(() => {});
+
+      await waitForTraces(1);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        sourceApi: "responses",
+        winner: "responses",
+        stream: true,
+        status: "aborted",
+        httpStatus: 200,
+        passthrough: true,
+      });
+      // `response.completed` never arrived → no usage.
+      expect(traces[0].inputTokens).toBeUndefined();
+      expect(traces[0].outputTokens).toBeUndefined();
+
+      // The upstream request really was aborted.
+      const deadline = Date.now() + 3000;
+      while (!upstreamAborted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(upstreamAborted).toBe(true);
+
+      // Give any second emit a chance to fire — there is none.
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      await new Promise<void>((r) => listener.close(() => r()));
+    }
+  });
+
+  // Same abort shape after the terminal event already went out: the
+  // usage that arrived is kept on the single aborted trace.
+  it("abort after response.completed keeps usage", async () => {
+    useResponsesTarget();
+    // `response.completed.response.usage` fields per
+    // https://platform.openai.com/docs/api-reference/responses-streaming
+    const completed = JSON.stringify({
+      type: "response.completed",
+      response: {
+        id: "resp_u",
+        object: "response",
+        created_at: 1,
+        status: "completed",
+        model: "gpt-5-codex",
+        output: [],
+        usage: {
+          input_tokens: 11,
+          input_tokens_details: { cached_tokens: 0 },
+          output_tokens: 3,
+          output_tokens_details: { reasoning_tokens: 0 },
+          total_tokens: 14,
+        },
+      },
+    });
+    server.use(
+      http.post(`${MOCK_BASE_URLS.responses}/v1/responses`, () => {
+        const enc = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(
+              enc.encode(
+                'data: {"type":"response.output_text.delta","delta":"one"}\n\n',
+              ),
+            );
+            c.enqueue(enc.encode(`data: ${completed}\n\n`));
+            // stays open after the terminal event (a keep-alive
+            // upstream that never closes its stream)
+          },
+        });
+        return new HttpResponse(body, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }),
+    );
+
+    const listener = app.listen(0);
+    try {
+      const port = (listener.address() as AddressInfo).port;
+      const ac = new AbortController();
+      const res = await fetch(`http://127.0.0.1:${port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(respBody({ stream: true })),
+        signal: ac.signal,
+      });
+      expect(res.status).toBe(200);
+
+      const reader = res.body!.getReader();
+      const utf8 = new TextDecoder();
+      let text = "";
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) break;
+        text += utf8.decode(r.value, { stream: true });
+        if (text.includes("response.completed")) break;
+      }
+      ac.abort();
+      await reader.read().catch(() => {});
+
+      await waitForTraces(1);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        stream: true,
+        status: "aborted",
+        passthrough: true,
+        inputTokens: 11,
+        outputTokens: 3,
+      });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      await new Promise<void>((r) => listener.close(() => r()));
+    }
+  });
+});
