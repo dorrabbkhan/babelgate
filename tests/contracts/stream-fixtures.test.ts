@@ -5,7 +5,10 @@ import { adapters, type Provider } from "../../src/transformers";
 import { canonicalStreamEventSchema } from "../../src/types/canonical.schema";
 import { reassembleStream } from "../../src/utils/stream-reassemble";
 import { sequentialIds } from "../../src/utils/ids";
-import type { CanonicalStreamEvent } from "../../src/types/canonical.types";
+import type {
+  CanonicalMessage,
+  CanonicalStreamEvent,
+} from "../../src/types/canonical.types";
 
 /**
  * Stream fixture corpus guard (spec §4.1): every tests/fixtures/streams/
@@ -71,6 +74,33 @@ function wireToolArgs(provider: "gemini" | "ollama", text: string): unknown[] {
     }
   }
   return args;
+}
+
+/**
+ * D8 (owner, #99): a fixture's `.sse` and `nonStreaming` body are two
+ * separate recordings, so a text part's `thoughtSignature` differs
+ * between them. Only `signature.data` on *text* parts is normalised
+ * before the twin compare — presence and origin still compare
+ * exactly, and each recording's exact `data` stays asserted on its
+ * own (expectedEvents; "max_tokens nonStreaming text signature
+ * decoded verbatim" below).
+ */
+function withoutTextSignatureData(
+  message: CanonicalMessage,
+): CanonicalMessage {
+  const content = message.content;
+  if (!Array.isArray(content)) return message;
+  return {
+    ...message,
+    content: content.map((part) =>
+      part.type === "text" && part.signature !== undefined
+        ? {
+            ...part,
+            signature: { ...part.signature, data: "<twin normalised>" },
+          }
+        : part,
+    ),
+  };
 }
 
 const cases: { provider: Provider; name: string }[] = [];
@@ -148,14 +178,39 @@ describe("stream fixture corpus", () => {
         sequentialIds(),
       );
       expect({
-        message: reassembled!.message,
+        message: withoutTextSignatureData(reassembled!.message),
         finishReason: reassembled!.finishReason,
         usage: reassembled!.usage,
       }).toEqual({
-        message: twin.message,
+        message: withoutTextSignatureData(twin.message),
         finishReason: twin.finishReason,
         usage: twin.usage,
       });
     }
+  });
+
+  it("max_tokens nonStreaming text signature decoded verbatim", () => {
+    // D8 (owner, #99): the twin compare normalises only `data`; each
+    // recording's exact signature stays asserted per recording — here
+    // the nonStreaming body's own thoughtSignature.
+    const fixture = JSON.parse(
+      readFileSync(join(STREAMS_DIR, "gemini", "max_tokens.json"), "utf8"),
+    ) as StreamFixture;
+    const twin = adapters.gemini.toCanonicalResponse(
+      fixture.nonStreaming,
+      fixture.model,
+      sequentialIds(),
+    );
+
+    expect(twin.message.content).toEqual([
+      {
+        type: "text",
+        text: "1, 2",
+        signature: {
+          origin: { provider: "", model: "gemini-3.5-flash-lite" },
+          data: "EmAKXgFpFH0T8DFM32ZBoAcBowQ9DYivaJ59QbxOKd+8hU/AGLPR7YMc+iG1RSfcXLtF/w9zfJT5CgrXTaVvORbtaQgRcfd2Hp1yBu1evgzGyFUuGxCxMVFXgqAH/N+AbIQ=",
+        },
+      },
+    ]);
   });
 });

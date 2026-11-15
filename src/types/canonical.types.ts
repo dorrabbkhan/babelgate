@@ -281,10 +281,20 @@ export interface CanonicalUsage {
  *    {provider: currentAttempt().providerName,
  *    model: currentAttempt().upstreamModel} inside an attempt, or
  *    {provider: "", model} outside one (the plan's Task 7 convention).
+ * 7. text_signature carries the signature of the text part currently
+ *    being streamed — the last one opened by a text_delta (Task 7a,
+ *    #99). It never carries text; alone it opens an empty text part.
  */
 export type CanonicalStreamEvent =
   | { type: "message_start"; id: string; model: string }
   | { type: "text_delta"; text: string }
+  | {
+      /** Signature of the text part currently being streamed — the
+       *  last one opened by a text_delta (Task 7a, #99). Never carries
+       *  text; alone it opens an empty text part. */
+      type: "text_signature";
+      signature: CanonicalReasoningSignature;
+    }
   | {
       /** Opens a reasoning content block — the block-scoped data
        *  (origin, redacted) that the per-delta events can't carry, like

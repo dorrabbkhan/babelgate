@@ -22,7 +22,16 @@ export function reassembleStream(
   let done = false;
   let id = "";
   let model = "";
-  let text = "";
+  // Text accumulates as a list of parts (Task 7a, #99): a text_delta
+  // appends to the current part, or opens a new one when the current
+  // is already signed — a non-empty part following a signed one is new
+  // text, so a signature never moves to other text. A text_signature
+  // signs the current part; with none open it opens an empty one
+  // (Gemini can sign an empty final text part, as max_tokens.sse does).
+  const textParts: {
+    text: string;
+    signature?: CanonicalReasoningSignature;
+  }[] = [];
   let usage: CanonicalUsage | undefined;
   let finishReason: CanonicalResponse["finishReason"] | undefined;
   const calls = new Map<
@@ -67,9 +76,24 @@ export function reassembleStream(
         id = event.id;
         model = event.model;
         break;
-      case "text_delta":
-        text += event.text;
+      case "text_delta": {
+        const last = textParts[textParts.length - 1];
+        if (last !== undefined && last.signature === undefined) {
+          last.text += event.text;
+        } else {
+          textParts.push({ text: event.text });
+        }
         break;
+      }
+      case "text_signature": {
+        const last = textParts[textParts.length - 1];
+        if (last !== undefined && last.signature === undefined) {
+          last.signature = event.signature;
+        } else {
+          textParts.push({ text: "", signature: event.signature });
+        }
+        break;
+      }
       case "reasoning_start":
         if (reasoning.has(event.index)) {
           fail(`duplicate reasoning_start for index ${event.index}`);
@@ -190,20 +214,37 @@ export function reassembleStream(
       }),
     }));
 
+  // A signed text part makes content a parts array (the same rule as
+  // reasoning parts); without one it stays the joined string, so
+  // unsigned traffic is unchanged.
+  const hasSignedText = textParts.some((p) => p.signature !== undefined);
+  const text = textParts.map((p) => p.text).join("");
+  const content =
+    reasoningParts.length === 0 && !hasSignedText
+      ? text
+      : [
+          ...reasoningParts,
+          ...(hasSignedText
+            ? textParts.map(
+                (p): CanonicalContentPart => ({
+                  type: "text" as const,
+                  text: p.text,
+                  ...(p.signature !== undefined && {
+                    signature: p.signature,
+                  }),
+                }),
+              )
+            : text !== ""
+              ? [{ type: "text" as const, text }]
+              : []),
+        ];
+
   return {
     id,
     model,
     message: {
       role: "assistant",
-      content:
-        reasoningParts.length === 0
-          ? text
-          : [
-              ...reasoningParts,
-              ...(text !== ""
-                ? [{ type: "text" as const, text }]
-                : []),
-            ],
+      content,
       ...(toolCalls.length > 0 && { toolCalls }),
     },
     // done without throwing ⇒ a message_end set finishReason

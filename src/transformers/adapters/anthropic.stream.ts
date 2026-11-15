@@ -426,6 +426,7 @@ export function createStreamEncoder(
         case "reasoning_start":
         case "reasoning_delta":
         case "reasoning_signature":
+        case "text_signature":
           // v1.4 §3.3: reasoning replay to this target lands in a
           // later task; reasoning a target can't take is dropped.
           return "";

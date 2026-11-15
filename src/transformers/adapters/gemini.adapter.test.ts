@@ -1543,6 +1543,91 @@ describe('cache hints on tool results (Task 17a)', () => {
       });
     });
 
+    it('gemini text-part signature decoded (non-stream)', () => {
+      // Task 7a (#99): a thoughtSignature on a text part decodes as
+      // that part's signature — no longer dropped.
+      const response = {
+        candidates: [
+          {
+            content: {
+              role: 'model',
+              parts: [{ text: 'answer', thoughtSignature: 'sig_txt' }],
+            },
+            finishReason: 'STOP',
+            index: 0,
+          },
+        ],
+      } as unknown as GenerateContentResponse;
+
+      const canonical = runWithAttempt(ATTEMPT, () =>
+        toCanonicalResponse(response, 'gemini-2.5-flash', sequentialIds()),
+      );
+
+      expect(canonical.message.content).toEqual([
+        {
+          type: 'text',
+          text: 'answer',
+          signature: { origin: ORIGIN, data: 'sig_txt' },
+        },
+      ]);
+    });
+
+    it('signed text part round-trips gemini to gemini upstream', () => {
+      // Decode → encode in one attempt → {text, thoughtSignature} on
+      // the same wire part (spec §3.3: signatures on the part they
+      // came on).
+      const response = {
+        candidates: [
+          {
+            content: {
+              role: 'model',
+              parts: [{ text: 'answer', thoughtSignature: 'sig_txt' }],
+            },
+            finishReason: 'STOP',
+            index: 0,
+          },
+        ],
+      } as unknown as GenerateContentResponse;
+
+      const canonical = runWithAttempt(ATTEMPT, () =>
+        toCanonicalResponse(response, 'gemini-2.5-flash', sequentialIds()),
+      );
+      const wire = encodeRequest(canonical.message);
+
+      expect(wire.contents[1].parts).toEqual([
+        { text: 'answer', thoughtSignature: 'sig_txt' },
+      ]);
+    });
+
+    it('foreign text signature dropped with a note', () => {
+      // Same provider, other model → the signature is dropped, the
+      // text is kept (spec §3.2: signatures never cross origin).
+      const foreign = { provider: 'gemini-main', model: 'gemini-3-pro' };
+      const message = {
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: 'answer',
+            signature: { origin: foreign, data: 'sig_x' },
+          },
+        ],
+      } as CanonicalRequest['messages'][number];
+
+      let wire: ReturnType<typeof fromCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        wire = encodeRequest(message);
+      });
+
+      expect(wire?.contents[1].parts).toEqual([{ text: 'answer' }]);
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'gemini',
+        code: 'reasoning_dropped',
+        path: 'signature',
+      });
+    });
+
     it('gemini client never receives thought parts', () => {
       const canonical: CanonicalResponse = {
         id: 'r1',

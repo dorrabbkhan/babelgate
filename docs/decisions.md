@@ -4807,3 +4807,76 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   origin `{provider: "", model: "gemini-2.5-flash"}` — the
   outside-attempt convention the fixture harness produces. CI's
   expected red is "FIXTURE GUARD FAILED … all other checks passed".
+
+## v1.4 Task 7a: Gemini text-part signatures — canonical `text_signature` stream event (spec §3.3, issue #99)
+
+- **Canonical change (owner-approved, #99)** — exactly one new stream
+  event, `{type: "text_signature"; signature: CanonicalReasoningSignature}`,
+  added to `canonical.types.ts` and `canonical.schema.ts` together.
+  It carries the signature of the text part currently being streamed
+  (the last one a `text_delta` opened), never text. No other canonical
+  change; the PR is titled `[OWNER REVIEW]`. This closes the Task 7
+  deviation "Text-part `thoughtSignature` dropped on decode".
+- **Reassembly rule** — `reassembleStream` accumulates text as a list
+  of parts: a `text_delta` appends to the current part, or opens a new
+  one when the current part is already signed ("a non-empty text part
+  following a signed one starts a new text part", so a signature never
+  moves to other text); a `text_signature` signs the current part, or
+  opens an empty one when there is none or it is already signed —
+  Gemini can sign an empty final text part (max_tokens.sse), and one
+  wire part carries at most one signature, so a second signature
+  belongs to a new part (ambiguity resolved: the plan names only the
+  no-part case; the already-signed case follows the same one-
+  signature-per-part rule). When any text part is signed,
+  `message.content` becomes a parts array — the same rule reasoning
+  parts already applied — otherwise it stays the joined string, so
+  unsigned traffic and every other fixture are byte-identical.
+- **Decoders** — non-stream: a `thoughtSignature` on a text part sets
+  that part's `signature` and `hasSignedText` makes the same
+  parts-array call; stream: it becomes a `text_signature` event right
+  after the part's `text_delta`, or alone when the part's text is
+  empty. Task 7's `reasoning_dropped` decode note for text parts is
+  removed; a `thoughtSignature` on a part kind canonical still can't
+  sign (e.g. `inlineData`) is still dropped with a `reasoning_dropped`
+  note (once per stream / per part). Wire-format evidence:
+  https://ai.google.dev/gemini-api/docs/thought-signatures ("Signatures
+  in non `functionCall` parts": returning them is recommended, not
+  validated). The Gemini request encoder needed no change — Task 7's
+  `convertToParts` already returns a matching-origin text signature as
+  `{text, thoughtSignature}`.
+- **Client-visible rule kept** — every client stream encoder ignores
+  `text_signature` (dropped beside the reasoning events) and every
+  client response encoder emits no text signature, so non-Responses
+  clients get byte-identical v1.3 output (Global Constraints); pinned
+  by `stream-reasoning-drop.test.ts`'s `"client encoders ignore
+  text_signature"` per non-Responses format.
+- **Files outside the Files block:**
+  - `src/transformers/adapters/anthropic.stream.ts`,
+    `openai.stream.ts`, `ollama.stream.ts`,
+    `responses.stream.encode.ts` — each stream encoder's drop group
+    gains `case "text_signature"`. Required: an unhandled event falls
+    through `encode()` and would corrupt the wire bytes; the task's
+    `"client encoders ignore text_signature"` test covers all four
+    (plus Gemini, in the Files block).
+  - `tests/contracts/stream-sdk.test.ts` — the `"gemini SDK parses
+    encoded <case>"` loop compared the SDK's `text()` to
+    `expected.message.content`, which is now a parts array for
+    `max_tokens`; the assertion now joins the content's text parts —
+    the same text the client encoder emits — so nothing is loosened
+    (the signature is ignored by the client encoder, which is what the
+    test encodes).
+- **D8 fixture (owner-approved, #99)** — `max_tokens.json`'s
+  `expectedEvents` gains one `text_signature` event after the second
+  `text_delta`, origin `{provider: "", model: "gemini-3.5-flash-lite"}`,
+  `data` the `.sse` recording's `thoughtSignature` verbatim. Nothing
+  else in the file (or any other fixture/snapshot) changed. CI's
+  expected red is "FIXTURE GUARD FAILED … all other checks passed".
+- **Twin contracts (owner-approved)** — the `.sse` and `nonStreaming`
+  bodies are separate recordings with different signatures, so the
+  twin `toEqual` in `stream-fixtures.test.ts` and
+  `stream-properties.test.ts` compares copies where `signature.data`
+  on text parts is replaced by a constant — presence and origin still
+  exact, and each recording's exact `data` stays asserted on its own
+  (stream via `expectedEvents`; non-stream via the new
+  `"max_tokens nonStreaming text signature decoded verbatim"` test).
+  No other assertion changed.

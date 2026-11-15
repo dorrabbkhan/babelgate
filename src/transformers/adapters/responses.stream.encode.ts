@@ -315,6 +315,7 @@ export function createStreamEncoder(
         case "reasoning_start":
         case "reasoning_delta":
         case "reasoning_signature":
+        case "text_signature":
           // v1.4 spec §3.3: reasoning items are emitted by Task 8's
           // envelope work; until then they are dropped, like the
           // other encoders.

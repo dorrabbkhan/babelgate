@@ -7,6 +7,7 @@ import { parseToolArguments } from "../../src/utils/tool-args";
 import { sequentialIds } from "../../src/utils/ids";
 import { estimateInputTokens } from "../../src/utils/token-estimate";
 import type {
+  CanonicalMessage,
   CanonicalResponse,
   CanonicalStreamEvent,
   CanonicalUsage,
@@ -682,6 +683,33 @@ interface StreamFixture {
   nonStreaming?: unknown;
 }
 
+/**
+ * D8 (owner, #99): a fixture's `.sse` and `nonStreaming` body are two
+ * separate recordings, so a text part's `thoughtSignature` differs
+ * between them. Only `signature.data` on *text* parts is normalised
+ * before the twin compare — presence and origin still compare
+ * exactly, and each recording's exact `data` stays asserted per
+ * recording (expectedEvents; the verbatim nonStreaming assertion in
+ * stream-fixtures.test.ts).
+ */
+function withoutTextSignatureData(
+  message: CanonicalMessage,
+): CanonicalMessage {
+  const content = message.content;
+  if (!Array.isArray(content)) return message;
+  return {
+    ...message,
+    content: content.map((part) =>
+      part.type === "text" && part.signature !== undefined
+        ? {
+            ...part,
+            signature: { ...part.signature, data: "<twin normalised>" },
+          }
+        : part,
+    ),
+  };
+}
+
 const twinCases: { provider: Provider; name: string; fixture: StreamFixture }[] =
   [];
 for (const provider of PROVIDERS) {
@@ -721,11 +749,11 @@ describe("stream vs non-streaming twin", () => {
         sequentialIds(),
       );
       expect({
-        message: reassembled.message,
+        message: withoutTextSignatureData(reassembled.message),
         finishReason: reassembled.finishReason,
         usage: reassembled.usage,
       }).toEqual({
-        message: twin.message,
+        message: withoutTextSignatureData(twin.message),
         finishReason: twin.finishReason,
         usage: twin.usage,
       });
