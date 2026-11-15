@@ -12,6 +12,8 @@ import { makeCanonicalError } from "../../utils/canonical-error";
 import { parseToolArguments } from "../../utils/tool-args";
 import { createSseParser, createUtf8Decoder } from "../../utils/sse";
 import { logger } from "../../utils/logger";
+import { recordNote } from "../../observe/context";
+import { decodeOrigin } from "../reasoning-origin";
 import {
   fromCanonicalError,
   geminiUsageFromCanonical,
@@ -35,10 +37,16 @@ const isObj = (v: unknown): v is Obj =>
  * The first frame emits `message_start` (`responseId` → id,
  * `modelVersion` → model). `candidates[0]` text parts become
  * `text_delta`s (empty strings — e.g. thoughtSignature-only parts —
- * emit nothing); `functionCall` parts arrive whole — each becomes
- * start + one delta (`JSON.stringify(args)`) + end at sequential
- * canonical indices, keeping the wire `id` when present and drawing
- * from `ids` otherwise. `usageMetadata` is cumulative on every frame —
+ * emit nothing); `thought: true` parts open a reasoning block (own
+ * index namespace, v1.4 spec §3.3): `reasoning_start` + one
+ * `reasoning_delta` per text, and the part's `thoughtSignature`
+ * becomes a `reasoning_signature`. `functionCall` parts arrive whole —
+ * each becomes start + one delta (`JSON.stringify(args)`) + end at
+ * sequential canonical indices, keeping the wire `id` when present and
+ * drawing from `ids` otherwise; a `thoughtSignature` sibling rides as
+ * `tool_call_start.signature`. A `thoughtSignature` on a plain text
+ * part has no canonical event to ride and is dropped (noted once per
+ * stream). `usageMetadata` is cumulative on every frame —
  * the last one seen is emitted once as `usage` when a `finishReason`
  * ends the stream; a stream that ends in function calls reports
  * `tool_call`, `MAX_TOKENS` maps to `length` via `mapFinishReason`.
@@ -58,7 +66,9 @@ export function createStreamDecoder(
   let started = false;
   let finished = false;
   let nextIndex = 0;
+  let nextReasoningIndex = 0;
   let sawToolCalls = false;
+  let notedSignatureDrop = false;
   let usage: Obj | undefined;
 
   function failUndecodable(out: CanonicalStreamEvent[]): void {
@@ -109,8 +119,50 @@ export function createStreamDecoder(
       return;
     }
     for (const part of parts ?? []) {
-      if (typeof part?.text === "string" && part.text.length > 0) {
-        out.push({ type: "text_delta", text: part.text });
+      const sig =
+        typeof part?.thoughtSignature === "string" &&
+        part.thoughtSignature !== ""
+          ? part.thoughtSignature
+          : undefined;
+      if (part?.thought === true) {
+        const index = nextReasoningIndex++;
+        const origin = decodeOrigin(model);
+        out.push({ type: "reasoning_start", index, origin });
+        if (typeof part.text === "string" && part.text.length > 0) {
+          out.push({
+            type: "reasoning_delta",
+            index,
+            text: part.text,
+          });
+        }
+        if (sig !== undefined) {
+          out.push({
+            type: "reasoning_signature",
+            index,
+            signature: { origin, data: sig },
+          });
+        }
+      } else {
+        if (sig !== undefined && part?.functionCall == null) {
+          // A thoughtSignature on a plain text part has no canonical
+          // event — dropped, noted once per stream (its non-streaming
+          // twin drops it the same way).
+          if (!notedSignatureDrop) {
+            notedSignatureDrop = true;
+            recordNote(
+              {
+                stage: "decode",
+                adapter: "gemini",
+                code: "reasoning_dropped",
+                path: "signature",
+              },
+              "Dropping thoughtSignature on a text part (no canonical stream event carries it)",
+            );
+          }
+        }
+        if (typeof part?.text === "string" && part.text.length > 0) {
+          out.push({ type: "text_delta", text: part.text });
+        }
       }
       const fc = part?.functionCall;
       if (fc != null) {
@@ -125,6 +177,9 @@ export function createStreamDecoder(
           index,
           id: typeof fc.id === "string" ? fc.id : ids(),
           name: typeof fc.name === "string" ? fc.name : "",
+          ...(sig !== undefined && {
+            signature: { origin: decodeOrigin(model), data: sig },
+          }),
         });
         out.push({
           type: "tool_call_delta",

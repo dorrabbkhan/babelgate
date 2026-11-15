@@ -12,7 +12,14 @@
       "type": "tool_call_start",
       "index": 0,
       "id": "call_0",
-      "name": "sum"
+      "name": "sum",
+      "signature": {
+        "origin": {
+          "provider": "",
+          "model": "gemini-2.5-flash"
+        },
+        "data": "CmIBvj72+4pAeKnGzc+2rNwOgLyF3mo/fgOg3Nblgmuo9Mi8ln6O1N7n44cra26xGGff6ytv5zn/rtbUZtxEbAH/r2gaff8IVDzP9yg6eVn5b8Q9KgZ+9eXgqwUyyPhvgtX7xQrTAQG+Pvb7ebaQHoDzFqzNxQvrfKM5M065iUMaAZAz2UJGxPPlIax4lob1+E303FYme/2SenXsgqKTZ7i4NYjhs9QfwQbOfd3dYbZZ1RZyDKU6RX+PYzt4TJ2NzayUos42UHDW+vCftrntl7paR1azuiu+Tr7RqqVeBng6yvwkmzJTHSXZrurGRLwNbzeCijEC4O5OPZepbdtiCo1AKP9Tc5tTeVWaTY1K8/ps5usoAgPQkOMWl9QQwjNSYW/ER7oHzkRidxQzabT1DG8FOKK98VIySfwKSwG+Pvb7U2KAVMyij4xiu5gkeZR0jguuRR7+QWThUIzNNL/Y/fLgP9i8nS5Gpdus5o97y66e2VlUZgBbMXiieDrIbSPlEcbuubkHzQ=="
+      }
     },
     {
       "type": "tool_call_delta",

@@ -10,7 +10,7 @@ import { fromCanonicalRequest as openaiFromCanonical } from './openai.adapter';
 import { fromCanonicalRequest as geminiFromCanonical } from './gemini.adapter';
 import { fromCanonicalRequest as ollamaFromCanonical } from './ollama.adapter';
 import { fromCanonicalRequest as responsesFromCanonical } from './responses.adapter';
-import { runWithTrace } from '../../observe/context';
+import { runWithTrace, runWithAttempt } from '../../observe/context';
 import { newTrace, type RequestTrace } from '../../observe/trace';
 import { ValidationError } from '../../utils/errors';
 import type {
@@ -1711,11 +1711,14 @@ describe('Anthropic Adapter', () => {
     });
 
     it('stream block drop records stream_block_dropped', () => {
+      // Task 7 decodes thinking/redacted_thinking into reasoning
+      // blocks — server_tool_use remains a genuinely dropped type.
       const decoder = createStreamDecoder('claude-3-opus-20240229');
       const chunk = new TextEncoder().encode(
         'event: content_block_start\n' +
           'data: {"type":"content_block_start","index":0,' +
-          '"content_block":{"type":"thinking","thinking":"hmm"}}\n\n',
+          '"content_block":{"type":"server_tool_use","id":"srv_1",' +
+          '"name":"web_search","input":{}}}\n\n',
       );
 
       const trace = traced(() => decoder.feed(chunk));
@@ -1724,8 +1727,192 @@ describe('Anthropic Adapter', () => {
         stage: 'decode',
         adapter: 'anthropic',
         code: 'stream_block_dropped',
-        path: 'thinking',
+        path: 'server_tool_use',
       });
+    });
+  });
+
+  describe('reasoning parts and signatures (v1.4 spec §3.3, Task 7)', () => {
+    const ATTEMPT = {
+      providerName: 'claude',
+      upstreamModel: 'claude-opus-5-5',
+    };
+    const ORIGIN = { provider: 'claude', model: 'claude-opus-5-5' };
+
+    const encodeRequest = (message: CanonicalRequest['messages'][number]) =>
+      runWithAttempt(ATTEMPT, () =>
+        fromCanonicalRequest({
+          model: 'claude-opus-5-5',
+          messages: [{ role: 'user', content: 'hi' }, message],
+          config: { maxTokens: 1024 },
+        }),
+      );
+
+    it('thinking block round-trips with its signature', () => {
+      // docs.claude.com "Extended thinking": a thinking block carries
+      // {thinking, signature}; both decode to canonical and encode
+      // back when the origin matches the attempt.
+      const message = createTestMessage({
+        content: [
+          { type: 'thinking', thinking: 'hmm', signature: 'sig_1' },
+          { type: 'text', text: 'answer' },
+        ] as Message['content'],
+      });
+
+      const canonical = runWithAttempt(ATTEMPT, () =>
+        toCanonicalResponse(message, 'claude-opus-5-5'),
+      );
+
+      expect(canonical.message.content).toEqual([
+        {
+          type: 'reasoning',
+          reasoning: { text: 'hmm', origin: ORIGIN },
+          signature: { origin: ORIGIN, data: 'sig_1' },
+        },
+        { type: 'text', text: 'answer' },
+      ]);
+
+      const wire = encodeRequest(canonical.message);
+      expect(wire.messages[1]).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'hmm', signature: 'sig_1' },
+          { type: 'text', text: 'answer' },
+        ],
+      });
+    });
+
+    it('redacted_thinking round-trips', () => {
+      // A redacted block has no readable text — its `data` is the
+      // signature's data (spec §3.3).
+      const message = createTestMessage({
+        content: [
+          { type: 'redacted_thinking', data: 'opaque-xyz' },
+          { type: 'text', text: 'ok' },
+        ] as Message['content'],
+      });
+
+      const canonical = runWithAttempt(ATTEMPT, () =>
+        toCanonicalResponse(message, 'claude-opus-5-5'),
+      );
+
+      expect(canonical.message.content).toEqual([
+        {
+          type: 'reasoning',
+          reasoning: { redacted: true, origin: ORIGIN },
+          signature: { origin: ORIGIN, data: 'opaque-xyz' },
+        },
+        { type: 'text', text: 'ok' },
+      ]);
+
+      const wire = encodeRequest(canonical.message);
+      expect(wire.messages[1]).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'redacted_thinking', data: 'opaque-xyz' },
+          { type: 'text', text: 'ok' },
+        ],
+      });
+    });
+
+    it('thinking before tool_use keeps its position', () => {
+      const message = createTestMessage({
+        stop_reason: 'tool_use',
+        content: [
+          { type: 'thinking', thinking: 'plan', signature: 'sig_t' },
+          {
+            type: 'tool_use',
+            id: 'toolu_1',
+            name: 'get_weather',
+            input: { city: 'Paris' },
+          },
+        ] as Message['content'],
+      });
+
+      const canonical = runWithAttempt(ATTEMPT, () =>
+        toCanonicalResponse(message, 'claude-opus-5-5'),
+      );
+
+      expect(canonical.message.content).toEqual([
+        {
+          type: 'reasoning',
+          reasoning: { text: 'plan', origin: ORIGIN },
+          signature: { origin: ORIGIN, data: 'sig_t' },
+        },
+      ]);
+
+      const wire = encodeRequest(canonical.message);
+      expect(wire.messages[1]).toEqual({
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'plan', signature: 'sig_t' },
+          {
+            type: 'tool_use',
+            id: 'toolu_1',
+            name: 'get_weather',
+            input: { city: 'Paris' },
+          },
+        ],
+      });
+    });
+
+    it('foreign origin dropped with a note', () => {
+      // Same provider, other model → the signature is model-bound and
+      // never crosses (spec §3.2).
+      const foreign = { provider: 'claude', model: 'claude-sonnet-4-6' };
+      const message = {
+        role: 'assistant',
+        content: [
+          {
+            type: 'reasoning',
+            reasoning: { text: 'hmm', origin: foreign },
+            signature: { origin: foreign, data: 'sig_x' },
+          },
+          { type: 'text', text: 'answer' },
+        ],
+      } as CanonicalRequest['messages'][number];
+
+      let wire: ReturnType<typeof fromCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        wire = encodeRequest(message);
+      });
+
+      expect(wire?.messages[1]).toEqual({
+        role: 'assistant',
+        content: 'answer',
+      });
+      expect(trace.notes).toContainEqual({
+        stage: 'encode',
+        adapter: 'anthropic',
+        code: 'reasoning_dropped',
+        path: 'reasoning',
+      });
+    });
+
+    it('anthropic client never receives thinking', () => {
+      // Global Constraints: encoders of client replies skip reasoning
+      // parts — a canonical reply carrying them still renders only
+      // the visible blocks.
+      const canonical: CanonicalResponse = {
+        id: 'msg_r1',
+        model: 'claude-opus-5-5',
+        finishReason: 'stop',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'reasoning',
+              reasoning: { text: 'hmm', origin: ORIGIN },
+              signature: { origin: ORIGIN, data: 'sig_1' },
+            },
+            { type: 'text', text: 'answer' },
+          ],
+        },
+      };
+
+      const wire = fromCanonicalResponse(canonical);
+
+      expect(wire.content).toEqual([{ type: 'text', text: 'answer' }]);
     });
   });
 

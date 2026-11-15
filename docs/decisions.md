@@ -4683,3 +4683,94 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
     instructions require extending the v1.3 canary to a pass-through
     request (sentinel body never reaches logs/metrics/live feed; the
     body ring is the only place it may appear).
+
+## v1.4 Task 7: Reasoning parts + signatures — Anthropic `thinking`/`redacted_thinking`, Gemini `thought`/`thoughtSignature` (spec §3.3, E7, E8)
+
+- **Files outside the Files block:**
+  - `src/transformers/reasoning-origin.ts` (new) — the origin rule
+    (`decodeOrigin(model)` → the ambient attempt's providerName +
+    upstreamModel, or `{provider:"", model}` outside one, per the
+    plan's Task 7 convention; `originMatchesCurrent` /
+    `signatureMatchesCurrent` for encode-side checks). Anthropic and
+    Gemini adapters may not import each other, so the shared rule
+    sits in a provider-neutral transformer module, same precedent as
+    `reasoning-effort.ts` and `response-format.ts`.
+- **Decode origin** — inside an attempt, decoders tag reasoning
+  parts and signatures with `{provider: attempt.providerName,
+  model: attempt.upstreamModel}` (the configured provider *name*,
+  not the wire type, so two providers of one type never exchange
+  signatures); outside one — unit tests, the fixture harness — the
+  plan's `{provider: "", model}` convention. D7's fixture signature
+  therefore carries `provider: ""`.
+- **Text-part `thoughtSignature` dropped on decode (deviation)** —
+  §3.3 names "a text part's `thoughtSignature` → that text part's
+  signature", and the encode side honours signed text parts
+  (`thoughtSignature` re-attached to the same part). But the
+  canonical stream has no event for a signature on a *text* part —
+  the stream event set was fixed in Task 2, and `reasoning_signature`
+  belongs to a reasoning block's index. The recorded `max_tokens`
+  fixture carries exactly this shape (a `thoughtSignature` on a
+  streamed text part) and the twin contracts
+  (`stream-fixtures.test.ts`, `stream-properties.test.ts`) pin
+  stream-reassembled == non-stream-decoded messages, so attaching
+  it in the non-stream decoder would break an oracle test that may
+  not change. Both Gemini decoders therefore drop text-part
+  signatures — stream: once per stream, non-stream: per part — with
+  a `reasoning_dropped` decode note. A canonical event for
+  text-part signatures is follow-up work if Codex traffic needs it.
+- **Encode requires a matching signature** — a reasoning part is
+  reinserted only when it carries a signature whose origin matches
+  the current attempt; anything else (foreign origin, unsigned
+  reasoning, or no ambient attempt at all — `currentAttempt()` is
+  the same source `decodeOrigin` consults, so encode outside an
+  attempt drops everything) falls back to `reasoning_dropped`
+  (encode note, path `reasoning` for a dropped part, `signature`
+  for a dropped artefact on a carried part/call). Anthropic's wire
+  shape makes this strict: a `thinking` block without its signature
+  is invalid on replay, and `redacted_thinking` *is* its `data` —
+  so the canonical part → `{thinking, signature}` or
+  `{redacted_thinking, data: signature.data}` respectively.
+  Signatures on Anthropic text parts and tool calls have no wire
+  field at all — always `reasoning_dropped` (they're only legal on
+  Gemini). Gemini reasoning emits `{text, thought: true,
+  thoughtSignature}` on the same part position it arrived on; a
+  signed functionCall sends its real signature, while an unsigned
+  or foreign-signed call keeps the v1.3
+  `skip_thought_signature_validator` placeholder (Gemini 3.x 400s
+  unsigned history calls — E8).
+- **Positions preserved** — Anthropic decodes thinking blocks into
+  reasoning parts at their wire index inside the content array, so
+  encode reinserts a thinking block in front of the text or
+  tool_use block it preceded (tool_use still appends after the
+  content blocks, which is where the wire requires thinking to sit
+  anyway). `reassembleStream` already places streamed reasoning
+  parts ahead of reply text, matching the recorded wire order —
+  thinking precedes the reply on both providers.
+- **String-vs-parts content** — both response decoders keep
+  `message.content` a joined string whenever no reasoning parts
+  exist (unchanged shape for all existing traffic and every
+  fixture); it becomes a parts array only when reasoning is present
+  — the same rule `reassembleStream` applies, so stream and
+  non-stream decodes stay equal under the twin contracts.
+- **Reasoning indices** — stream decoders use a dedicated index
+  namespace for reasoning blocks (canonical rule 6): Anthropic
+  re-keys wire `content_block` indices to sequential reasoning
+  indices on `content_block_start{thinking|redacted_thinking}`
+  (`thinking_delta` → `reasoning_delta`, `signature_delta` →
+  `reasoning_signature`; a redacted block's `data` arrives complete
+  in the start event and emits `reasoning_start{redacted:true}` +
+  `reasoning_signature` together); Gemini opens one per
+  `thought:true` part. The drop-note coverage in
+  `stream_block_dropped` moved to `server_tool_use` — genuinely
+  undecodable now that thinking blocks decode.
+- **Client-visible rule kept** — `fromCanonicalResponse` on both
+  adapters renders only text parts from a parts array (Global
+  Constraints: non-Responses clients never see reasoning), and the
+  stream encoders' blanket drop of reasoning events is unchanged
+  (pinned by the global stream-encoder contract).
+- **D7 fixture** — the owner-approved change adds the recorded
+  `thoughtSignature` to the first `tool_call_start` in
+  `tests/fixtures/streams/gemini/parallel_tool_calls.json` with
+  origin `{provider: "", model: "gemini-2.5-flash"}` — the
+  outside-attempt convention the fixture harness produces. CI's
+  expected red is "FIXTURE GUARD FAILED … all other checks passed".
