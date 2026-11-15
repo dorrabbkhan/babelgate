@@ -4936,3 +4936,43 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   byte-identical NDJSON input. The decoder's real order matched the approved
   expectation exactly (message_start → reasoning_start → reasoning_delta →
   text_delta → usage → message_end).
+
+## v1.4 Task 11: pair matrix 5×5; structured output per target; multi-turn Codex replay
+
+- **All changed files are inside the task's Files block**
+  (`tests/integration/pairs.test.ts`, `tests/integration/stream-pairs.test.ts`,
+  `tests/mocks/upstreams.ts`, `tests/integration/codex.test.ts`,
+  `tests/integration/privacy-canary.test.ts`, this file). No adapter or service
+  code changed — Step 2 permits wiring/mock fixes only, and every failure found
+  was wiring.
+- **Mocks (`upstreams.ts`):** `reasoningReply[provider]` and
+  `structuredReply[provider]` opt-ins, reset in `afterEach`. `reasoningReply`
+  plants a provider-native reasoning block carrying an ordinal-marked signature
+  on each captured request (Gemini `thought`+`thoughtSignature`, Anthropic
+  `thinking`+`signature`, OpenAI `reasoning_content`, Ollama `thinking`,
+  Responses `reasoning` item + `encrypted_content`); `structuredReply` answers
+  the request's schema with a conforming object. Each field cites its provider
+  doc in a comment, per the task.
+- **`cachedUsageStreamText("responses")` fix:** the synthetic stream ended its
+  terminal `response.completed` frame with a single `\n`, not the blank line
+  that terminates an SSE event. The pass-through relay (correctly, per the SSE
+  spec) treated it as unterminated and appended `response.failed`. The mock now
+  emits the trailing blank line; no relay code changed.
+- **Streamed cached-usage expectation for `responses` sources:** the Responses
+  wire always emits `input_tokens_details` (`openai` SDK
+  `ResponseUsage.input_tokens_details`), so a count the target dialect could
+  not carry arrives as `0`, not absent — the same rule
+  `pairs.test.ts:expectCachedUsage` already pins non-streamed. The streamed
+  matrix now expects `?? 0` for a responses source; other sources' expectations
+  are unchanged.
+- **Codex replay hydration:** `tests/fixtures/codex/turns.json` masks values as
+  `<string:N>` / `<number:N>`; the replay hydrates them, replaces each echoed
+  prior-turn block (assistant `message` + `function_call`) with the *live*
+  items from that turn's response — so turn 2/3 carry the real bg1 envelopes —
+  and rewrites `function_call_output.call_id` to the live call id. `reasoning`
+  gains `effort:"medium"` over the recorded `{summary:"auto"}` so the
+  target-side reasoning encoders engage.
+- **Privacy canary:** four new sentinels (reasoning text, thought signature,
+  custom tool input, schema content) asserted absent from the log stream,
+  `/metrics`, OTel spans, `/ui/api/live`, `/ui/api/routing` and `requests`
+  while present in the bodies ring/table.

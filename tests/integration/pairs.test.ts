@@ -14,7 +14,9 @@ import {
   resetCaptured,
   resetOverrides,
   resetCachedUsage,
+  resetReplyOptins,
   cachedUsage,
+  structuredReply,
   CACHED_USAGE,
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
@@ -207,6 +209,7 @@ afterEach(() => {
   resetCaptured();
   resetOverrides();
   resetCachedUsage();
+  resetReplyOptins();
 });
 
 afterAll(() => {
@@ -306,4 +309,115 @@ describe("provider pair coverage", () => {
     const res = await request(app).get("/v1/chat/completions");
     expect(res.status).toBe(404);
   });
+});
+
+// ---------- structured output (v1.4 spec §3.5, §4.2) ----------
+
+/**
+ * The same JSON-Schema object sent in each source's dialect field
+ * must reach every target's upstream body unchanged — babelgate never
+ * strips or rewrites schema keywords (D3). Source fields:
+ * OpenAI `response_format`, Anthropic `output_config.format`, Gemini
+ * `generationConfig.responseJsonSchema`, Ollama `format`, Responses
+ * `text.format`.
+ */
+const STRUCT_SCHEMA = {
+  type: "object",
+  properties: {
+    name: { type: "string" },
+    age: { type: "integer", minimum: 0 },
+  },
+  required: ["name"],
+  additionalProperties: false,
+};
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+const FORMAT_REQUESTS: Record<Provider, Record<string, unknown>> = {
+  openai: {
+    model: "gpt-4",
+    messages: [{ role: "user", content: "extract a person" }],
+    response_format: {
+      type: "json_schema",
+      json_schema: { name: "person", schema: STRUCT_SCHEMA, strict: true },
+    },
+  },
+  anthropic: {
+    model: "claude-3-opus-20240229",
+    max_tokens: 1024,
+    messages: [{ role: "user", content: "extract a person" }],
+    output_config: {
+      format: { type: "json_schema", schema: STRUCT_SCHEMA },
+    },
+  },
+  gemini: {
+    contents: [
+      { role: "user", parts: [{ text: "extract a person" }] },
+    ],
+    generationConfig: {
+      responseJsonSchema: STRUCT_SCHEMA,
+      responseMimeType: "application/json",
+    },
+  },
+  ollama: {
+    model: "llama3",
+    stream: false,
+    messages: [{ role: "user", content: "extract a person" }],
+    format: STRUCT_SCHEMA,
+  },
+  responses: {
+    model: "gpt-5-codex",
+    store: false,
+    input: [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "extract a person" }],
+      },
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "person",
+        schema: STRUCT_SCHEMA,
+        strict: true,
+      },
+    },
+  },
+};
+
+/** The schema object's slot in each target's upstream request body. */
+function upstreamSchema(target: Provider): unknown {
+  const body = capturedRequests[target][0] as any;
+  switch (target) {
+    case "openai":
+      return body.response_format?.json_schema?.schema;
+    case "anthropic":
+      return body.output_config?.format?.schema;
+    case "gemini":
+      return body.generationConfig?.responseJsonSchema;
+    case "ollama":
+      return body.format;
+    case "responses":
+      return body.text?.format?.schema;
+  }
+}
+
+describe("structured output reaches every target (spec §3.5, §4.2)", () => {
+  it.each(pairs)(
+    "$source → $target carries the schema unchanged",
+    async ({ source, target }) => {
+      process.env.SOURCE_API = source;
+      process.env.TARGET_API = target;
+      resetConfig();
+      structuredReply[target] = true;
+
+      const res = await request(app)
+        .post(PROVIDER_PATHS[source].pathPrefix)
+        .send(FORMAT_REQUESTS[source]);
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(capturedRequests[target]).toHaveLength(1);
+      expect(upstreamSchema(target)).toEqual(STRUCT_SCHEMA);
+    },
+  );
 });

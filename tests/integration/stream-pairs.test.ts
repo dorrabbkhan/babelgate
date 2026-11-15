@@ -39,8 +39,8 @@ import anthropicFixtures from "../fixtures/anthropic.json";
 import responsesFixtures from "../fixtures/responses.json";
 
 /**
- * Full pair matrix (spec §4.5, §5 milestone 2): every ordered pair of
- * the four providers ×
+ * Full pair matrix (spec §4.2, §4.5, §5 milestone 2): every ordered
+ * pair of the five providers ×
  * {text, tool_call, parallel_tool_calls, after_tool_result} ×
  * {stream, non-stream}. The msw upstream serves the recorded stream
  * corpus for streaming requests and the matching non-stream body
@@ -53,7 +53,13 @@ import responsesFixtures from "../fixtures/responses.json";
  * `id` as optional); and after_tool_result's tool result must reach
  * the upstream request in the target's dialect.
  */
-const PROVIDERS: Provider[] = ["openai", "gemini", "ollama", "anthropic"];
+const PROVIDERS: Provider[] = [
+  "openai",
+  "gemini",
+  "ollama",
+  "anthropic",
+  "responses",
+];
 const ALL_PAIRS: [Provider, Provider][] = PROVIDERS.flatMap((source) =>
   PROVIDERS.map((target) => [source, target] as [Provider, Provider]),
 );
@@ -122,12 +128,7 @@ function setPair(source: Provider, target: Provider): void {
 
 beforeAll(() => {
   server.listen({ onUnhandledRequest: "bypass" });
-  for (const p of [
-    "openai",
-    "gemini",
-    "ollama",
-    "anthropic",
-  ] as Provider[]) {
+  for (const p of PROVIDERS) {
     process.env[`${p.toUpperCase()}_API_BASE_URL`] = MOCK_BASE_URLS[p];
     process.env[`${p.toUpperCase()}_API_KEY`] = "test-key";
   }
@@ -296,6 +297,35 @@ function toolResultRequest(source: Provider): Record<string, unknown> {
       tools,
     };
   }
+  if (source === "responses") {
+    // function_call_output pairs to its call by `call_id`
+    // (Responses create reference, function_call_output item).
+    return {
+      model: "gpt-5-codex",
+      store: false,
+      input: [
+        {
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "What's the weather?" },
+          ],
+        },
+        {
+          type: "function_call",
+          call_id: callId,
+          name: "get_weather",
+          arguments: '{"location":"Paris"}',
+        },
+        {
+          type: "function_call_output",
+          call_id: callId,
+          output: TOOL_RESULT_TEXT,
+        },
+      ],
+      tools,
+    };
+  }
   throw new Error(`no tool-result request builder for source ${source}`);
 }
 
@@ -343,9 +373,26 @@ interface StreamFixture {
   expectedEvents: CanonicalStreamEvent[];
 }
 
+/**
+ * The recorded Responses corpus (Task 4) is named for its events —
+ * `tools` (one call), `text` — not for the matrix cases. Map each
+ * matrix case to the fixture the target's mock serves; every other
+ * provider's corpus is named by case.
+ */
+const FIXTURE_CASE: Partial<
+  Record<Provider, Partial<Record<Case, string>>>
+> = {
+  responses: { tool_call: "tools", after_tool_result: "text" },
+};
+const fixtureCase = (target: Provider, caseName: Case): string =>
+  FIXTURE_CASE[target]?.[caseName] ?? caseName;
+
 function streamFixture(provider: Provider, caseName: Case): StreamFixture {
   return JSON.parse(
-    readFileSync(join(STREAMS_DIR, provider, `${caseName}.json`), "utf8"),
+    readFileSync(
+      join(STREAMS_DIR, provider, `${fixtureCase(provider, caseName)}.json`),
+      "utf8",
+    ),
   ) as StreamFixture;
 }
 
@@ -431,6 +478,14 @@ function providerCalls(provider: Provider, body: unknown): ExpectedCall[] {
           name: p.functionCall.name,
           args: p.functionCall.args,
         }));
+    case "responses":
+      return (b.output ?? [])
+        .filter((i: any) => i.type === "function_call")
+        .map((i: any) => ({
+          id: i.call_id,
+          name: i.name,
+          args: JSON.parse(i.arguments ?? "null"),
+        }));
   }
 }
 
@@ -448,6 +503,13 @@ function providerText(provider: Provider, body: unknown): string {
         .join("");
     case "gemini":
       return (b.candidates?.[0]?.content?.parts ?? [])
+        .map((p: any) => p.text ?? "")
+        .join("");
+    case "responses":
+      return (b.output ?? [])
+        .filter((i: any) => i.type === "message")
+        .flatMap((i: any) => i.content ?? [])
+        .filter((p: any) => p.type === "output_text")
         .map((p: any) => p.text ?? "")
         .join("");
   }
@@ -516,6 +578,27 @@ function clientJsonReply(source: Provider, body: any): ClientReply {
           .map((p) => ({
             name: p.functionCall.name,
             args: p.functionCall.args,
+          })),
+      };
+    }
+    case "responses": {
+      const items: any[] = body.output ?? [];
+      return {
+        // output items: message content parts are output_text;
+        // function_call items carry the call id in `call_id`
+        // (Responses object reference).
+        text: items
+          .filter((i) => i.type === "message")
+          .flatMap((i) => i.content ?? [])
+          .filter((p) => p.type === "output_text")
+          .map((p) => p.text ?? "")
+          .join(""),
+        calls: items
+          .filter((i) => i.type === "function_call")
+          .map((i) => ({
+            id: i.call_id,
+            name: i.name,
+            args: JSON.parse(i.arguments ?? "null"),
           })),
       };
     }
@@ -647,6 +730,36 @@ function clientStreamReply(source: Provider, wire: string): ClientReply {
       }
       return { text, calls };
     }
+    case "responses": {
+      let text = "";
+      const calls: ClientCall[] = [];
+      // Responses SSE: text arrives as output_text deltas; completed
+      // items come whole on response.output_item.done (streaming
+      // reference: function_call items carry call_id/name/arguments).
+      for (const frame of wire.split(/\r?\n\r?\n/)) {
+        const data = frame
+          .split(/\r?\n/)
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).replace(/^ /, ""))
+          .join("\n");
+        if (!data || data === "[DONE]") continue;
+        const evt = JSON.parse(data);
+        if (evt.type === "response.output_text.delta") {
+          text += evt.delta ?? "";
+        }
+        if (
+          evt.type === "response.output_item.done" &&
+          evt.item?.type === "function_call"
+        ) {
+          calls.push({
+            id: evt.item.call_id,
+            name: evt.item.name,
+            args: JSON.parse(evt.item.arguments ?? "null"),
+          });
+        }
+      }
+      return { text, calls };
+    }
     default:
       throw new Error(`no stream parser for source ${source}`);
   }
@@ -670,6 +783,9 @@ function assertSourceFormat(
       expect(typeof res.body.done).toBe("boolean");
     } else if (source === "gemini") {
       expect(Array.isArray(res.body.candidates)).toBe(true);
+    } else if (source === "responses") {
+      expect(res.body.object).toBe("response");
+      expect(Array.isArray(res.body.output)).toBe(true);
     }
     return;
   }
@@ -693,6 +809,11 @@ function assertSourceFormat(
   } else if (source === "gemini") {
     expect(res.headers["content-type"]).toContain("text/event-stream");
     expect(wire).toContain("data: {");
+  } else if (source === "responses") {
+    expect(res.headers["content-type"]).toContain("text/event-stream");
+    // The terminal event is response.completed — the Responses
+    // streaming reference has no [DONE] sentinel.
+    expect(wire).toContain("response.completed");
   }
 }
 
@@ -713,6 +834,23 @@ function assertToolResultForwarded(
   target: Provider,
   source: Provider,
 ): void {
+  if (target === "responses") {
+    // The upstream input carries the call and its result as items:
+    // function_call {call_id, name} + function_call_output
+    // {call_id, output} (Responses create reference).
+    const items = (capturedRequests.responses[0] as any)?.input ?? [];
+    expect(
+      items.some(
+        (i: any) => i.type === "function_call" && i.name === "get_weather",
+      ),
+      "upstream request carries the assistant tool call",
+    ).toBe(true);
+    const out = items.find((i: any) => i.type === "function_call_output");
+    expect(out, "upstream request carries the tool result").toBeDefined();
+    expect(out.call_id).toBe(CLIENT_CALL_ID[source]);
+    expect(out.output).toBe(TOOL_RESULT_TEXT);
+    return;
+  }
   if (target === "gemini") {
     const contents = (capturedRequests.gemini[0] as any)?.contents ?? [];
     const parts = contents.flatMap((c: any) => c.parts ?? []);
@@ -789,12 +927,12 @@ const matrix = ALL_PAIRS.flatMap(([source, target]) =>
   ),
 );
 
-describe("16-pair streaming × tools matrix (spec §4.5, §5)", () => {
+describe("every pair: plain, stream, tools, stream × tools (25 pairs; spec §4.2, §4.5, §5)", () => {
   it.each(matrix)(
     "$source → $target $caseName stream=$streaming",
     async ({ source, target, caseName, streaming }) => {
       setPair(source, target);
-      streamCase[target] = caseName;
+      streamCase[target] = fixtureCase(target, caseName);
       const { path, body } = clientRequest(source, caseName, streaming);
 
       const res = streaming
@@ -955,6 +1093,26 @@ function clientStreamUsage(source: Provider, wire: string): StreamUsage {
       read: usage?.cachedContentTokenCount,
     };
   }
+  if (source === "responses") {
+    let usage: any;
+    for (const frame of wire.split(/\r?\n\r?\n/)) {
+      const data = frame
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith("data:"))
+        .map((l) => l.slice(5).replace(/^ /, ""))
+        .join("\n");
+      if (!data || data === "[DONE]") continue;
+      const evt = JSON.parse(data);
+      // response.completed.response.usage (streaming reference).
+      if (evt.type === "response.completed") usage = evt.response?.usage;
+    }
+    return {
+      input: usage?.input_tokens,
+      output: usage?.output_tokens,
+      read: usage?.input_tokens_details?.cached_tokens,
+      write: usage?.input_tokens_details?.cache_write_tokens,
+    };
+  }
   // ollama: the done:true line carries the totals; no cache fields.
   const lines = wire.split("\n").filter((l) => l !== "");
   const last = JSON.parse(lines.at(-1)!);
@@ -1006,6 +1164,14 @@ describe("cached usage survives every pair, streamed (spec §3.2, §4.2)", () =>
         );
       } else if (source === "gemini") {
         expect(usage.read).toBe(expected.read);
+      } else if (source === "responses") {
+        // input_tokens_details is always emitted on the wire; a
+        // count the target's dialect could not carry arrives as 0
+        // (the same rule pairs.test.ts pins for non-streaming).
+        expect(usage.read, `${source} cache read`).toBe(expected.read ?? 0);
+        expect(usage.write, `${source} cache write`).toBe(
+          expected.write ?? 0,
+        );
       } else {
         expect(usage.read, `${source} cache read`).toBe(expected.read);
         expect(usage.write, `${source} cache write`).toBe(expected.write);
