@@ -113,4 +113,43 @@ describe("stream encoders drop reasoning events", () => {
       );
     },
   );
+
+  it.each(PROVIDERS)(
+    "%s: client encoders ignore text_signature",
+    (provider) => {
+      // Task 7a (#99): a text_signature mid-stream changes nothing on
+      // a non-Responses client's wire — byte-identical output.
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-11-13T00:00:00Z"));
+      const signature = {
+        origin: { provider: "p", model: "m" },
+        data: "OPAQUE",
+      };
+      const plain: CanonicalStreamEvent[] = [
+        { type: "message_start", id: "msg_1", model: "m" },
+        { type: "text_delta", text: "Hello " },
+        { type: "text_delta", text: "world" },
+        {
+          type: "usage",
+          usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+        },
+        { type: "message_end", finishReason: "stop" },
+      ];
+      const withSignature: CanonicalStreamEvent[] = [
+        { type: "message_start", id: "msg_1", model: "m" },
+        { type: "text_delta", text: "Hello " },
+        { type: "text_signature", signature },
+        { type: "text_delta", text: "world" },
+        {
+          type: "usage",
+          usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+        },
+        { type: "message_end", finishReason: "stop" },
+      ];
+
+      expect(encode(provider, withSignature)).toBe(
+        encode(provider, plain),
+      );
+    },
+  );
 });

@@ -351,6 +351,48 @@ describe("stream decoders", () => {
     }
   });
 
+  it("gemini text-part signature decoded (stream)", () => {
+    // v1.4 spec §3.3 (Task 7a, #99): a thoughtSignature on a text part
+    // becomes a text_signature event right after that part's
+    // text_delta — or alone when the part's text is empty
+    // (ai.google.dev/gemini-api/docs/thought-signatures; built inline,
+    // mirroring max_tokens.sse). Origin is the outside-attempt
+    // {provider: "", model} convention.
+    const origin = { provider: "", model: "gemini-3.5-flash-lite" };
+    const sse = [
+      'data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"1,"}]}},{"index":0}],"responseId":"r_sig"}',
+      'data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":" 2","thoughtSignature":"sig_txt"}]}}]}',
+      'data: {"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"","thoughtSignature":"sig_empty"}]},"finishReason":"MAX_TOKENS"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4,"totalTokenCount":14}}',
+      "",
+    ].join("\n\n");
+
+    const events = decode("gemini", "gemini-3.5-flash-lite", [
+      new TextEncoder().encode(sse),
+    ]);
+    expect(events).toEqual([
+      {
+        type: "message_start",
+        id: "r_sig",
+        model: "gemini-3.5-flash-lite",
+      },
+      { type: "text_delta", text: "1," },
+      { type: "text_delta", text: " 2" },
+      {
+        type: "text_signature",
+        signature: { origin, data: "sig_txt" },
+      },
+      {
+        type: "text_signature",
+        signature: { origin, data: "sig_empty" },
+      },
+      {
+        type: "usage",
+        usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
+      },
+      { type: "message_end", finishReason: "length" },
+    ]);
+  });
+
   it("ollama decoder ignores thinking", () => {
     // Thinking content arrives in `message.thinking`, not
     // `message.content` (docs.ollama.com/api/chat — think:true models);

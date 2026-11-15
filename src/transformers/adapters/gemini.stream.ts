@@ -44,9 +44,11 @@ const isObj = (v: unknown): v is Obj =>
  * each becomes start + one delta (`JSON.stringify(args)`) + end at
  * sequential canonical indices, keeping the wire `id` when present and
  * drawing from `ids` otherwise; a `thoughtSignature` sibling rides as
- * `tool_call_start.signature`. A `thoughtSignature` on a plain text
- * part has no canonical event to ride and is dropped (noted once per
- * stream). `usageMetadata` is cumulative on every frame —
+ * `tool_call_start.signature`. A `thoughtSignature` on a text part
+ * becomes a `text_signature` event right after that part's
+ * `text_delta` — or alone when the part's text is empty (Task 7a,
+ * #99); on any other part kind it is still dropped, noted once per
+ * stream. `usageMetadata` is cumulative on every frame —
  * the last one seen is emitted once as `usage` when a `finishReason`
  * ends the stream; a stream that ends in function calls reports
  * `tool_call`, `MAX_TOKENS` maps to `length` via `mapFinishReason`.
@@ -143,11 +145,21 @@ export function createStreamDecoder(
           });
         }
       } else {
+        if (typeof part?.text === "string" && part.text.length > 0) {
+          out.push({ type: "text_delta", text: part.text });
+        }
         if (sig !== undefined && part?.functionCall == null) {
-          // A thoughtSignature on a plain text part has no canonical
-          // event — dropped, noted once per stream (its non-streaming
-          // twin drops it the same way).
-          if (!notedSignatureDrop) {
+          if (part?.inlineData == null) {
+            // Task 7a (#99): a signature on a text part rides the new
+            // text_signature event — alone when the part's text is
+            // empty (max_tokens.sse's signed final part).
+            out.push({
+              type: "text_signature",
+              signature: { origin: decodeOrigin(model), data: sig },
+            });
+          } else if (!notedSignatureDrop) {
+            // A signature on a part kind canonical can't sign — still
+            // dropped, noted once per stream like its non-stream twin.
             notedSignatureDrop = true;
             recordNote(
               {
@@ -156,12 +168,9 @@ export function createStreamDecoder(
                 code: "reasoning_dropped",
                 path: "signature",
               },
-              "Dropping thoughtSignature on a text part (no canonical stream event carries it)",
+              "Dropping thoughtSignature on a non-text part (no canonical signature for it)",
             );
           }
-        }
-        if (typeof part?.text === "string" && part.text.length > 0) {
-          out.push({ type: "text_delta", text: part.text });
         }
       }
       const fc = part?.functionCall;
@@ -356,6 +365,7 @@ export function createStreamEncoder(
         case "reasoning_start":
         case "reasoning_delta":
         case "reasoning_signature":
+        case "text_signature":
           // v1.4 §3.3: reasoning replay to this target lands in a
           // later task; reasoning a target can't take is dropped.
           return "";

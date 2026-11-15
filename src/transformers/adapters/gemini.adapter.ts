@@ -786,16 +786,18 @@ export function toCanonicalResponse(
   const content = candidate?.content;
   const parts = content?.parts ?? [];
 
-  // v1.4 spec §3.3 (Task 7): `thought: true` marks a reasoning part —
-  // it decodes with the attempt origin and keeps its `thoughtSignature`
-  // sibling as the part's signature. A `thoughtSignature` on a text
-  // part has no canonical stream event to ride (the twin contract pins
-  // stream == non-stream), so it is dropped with a note — the encode
-  // side still honours signed text parts. Signatures on functionCall
-  // parts ride through toCanonicalToolCalls.
+  // v1.4 spec §3.3 (Tasks 7/7a, #99): `thought: true` marks a
+  // reasoning part — it decodes with the attempt origin and keeps its
+  // `thoughtSignature` sibling as the part's signature. A
+  // `thoughtSignature` on a text part becomes that part's signature
+  // (Task 7a: the stream twin carries it as `text_signature`).
+  // Signatures on functionCall parts ride through
+  // toCanonicalToolCalls; on any other part kind there is no
+  // signature-carrying canonical part, so the drop is still noted.
   const origin = decodeOrigin(model);
   const out: CanonicalContentPart[] = [];
   let hasReasoning = false;
+  let hasSignedText = false;
   for (const part of parts) {
     const p = part as {
       text?: string;
@@ -805,34 +807,40 @@ export function toCanonicalResponse(
     if (isFunctionCallPart(part) || isFunctionResponsePart(part)) {
       continue;
     }
+    const sig =
+      typeof p.thoughtSignature === "string" && p.thoughtSignature !== ""
+        ? { origin, data: p.thoughtSignature }
+        : undefined;
     if (p.thought === true) {
       hasReasoning = true;
       out.push({
         type: "reasoning",
         reasoning: { text: p.text ?? "", origin },
-        ...(typeof p.thoughtSignature === "string" &&
-          p.thoughtSignature !== "" && {
-            signature: { origin, data: p.thoughtSignature },
-          }),
+        ...(sig !== undefined && { signature: sig }),
       });
       continue;
     }
-    if (typeof p.thoughtSignature === "string" && p.thoughtSignature !== "") {
-      recordNote(
-        {
-          stage: "decode",
-          adapter: "gemini",
-          code: "reasoning_dropped",
-          path: "signature",
-        },
-        "Dropping thoughtSignature on a text part (no canonical stream event carries it)",
-      );
-    }
     if (typeof p.text === "string") {
-      out.push({ type: "text", text: p.text });
+      if (sig !== undefined) hasSignedText = true;
+      out.push({
+        type: "text",
+        text: p.text,
+        ...(sig !== undefined && { signature: sig }),
+      });
       continue;
     }
     if ("inlineData" in part && part.inlineData) {
+      if (sig !== undefined) {
+        recordNote(
+          {
+            stage: "decode",
+            adapter: "gemini",
+            code: "reasoning_dropped",
+            path: "signature",
+          },
+          "Dropping thoughtSignature on a non-text part (no canonical signature for it)",
+        );
+      }
       out.push({
         type: "image",
         image: {
@@ -840,6 +848,13 @@ export function toCanonicalResponse(
           mimeType: part.inlineData.mimeType as CanonicalImage["mimeType"],
         },
       });
+      continue;
+    }
+    if (sig !== undefined) {
+      // A signed part with no text — Gemini can sign an empty final
+      // part (max_tokens.nonstreaming.json records the shape).
+      hasSignedText = true;
+      out.push({ type: "text", text: "", signature: sig });
     }
   }
 
@@ -854,7 +869,7 @@ export function toCanonicalResponse(
     model,
     message: {
       role: "assistant",
-      content: hasReasoning ? out : text,
+      content: hasReasoning || hasSignedText ? out : text,
       ...(toolCalls.length > 0 && { toolCalls }),
     },
     finishReason:

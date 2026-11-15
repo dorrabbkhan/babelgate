@@ -888,7 +888,17 @@ describe("stream encoders via the provider SDK", () => {
 
     const expected = reassembleStream(fixture.expectedEvents);
 
-    expect(final.text()).toBe(expected.message.content);
+    // Task 7a (#99): content is a parts array when a text part carries
+    // a signature; the client encoder ignores signatures, so the SDK's
+    // text() compares against the joined text parts.
+    const expectedText =
+      typeof expected.message.content === "string"
+        ? expected.message.content
+        : expected.message.content
+            .filter((p) => p.type === "text")
+            .map((p) => p.text ?? "")
+            .join("");
+    expect(final.text()).toBe(expectedText);
     expect(final.functionCalls() ?? []).toEqual(
       (expected.message.toolCalls ?? []).map((tc) => ({
         id: tc.id,

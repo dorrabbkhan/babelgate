@@ -17,6 +17,16 @@
       "text": " 2"
     },
     {
+      "type": "text_signature",
+      "signature": {
+        "origin": {
+          "provider": "",
+          "model": "gemini-3.5-flash-lite"
+        },
+        "data": "EmAKXgFpFH0TkPbYBEpYUy+rB5bf78HKoy7x/ZDtXyz6xDSyFoMGwo1wNPQ0J69MQc8H2TjNH7Ij+XKYOAEJEoV0aY47Hm3v5cWqKemxsZNLS4dFxQOhvntgSyZpRHgPZCY="
+      }
+    },
+    {
       "type": "usage",
       "usage": {
         "inputTokens": 10,

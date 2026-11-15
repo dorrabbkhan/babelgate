@@ -647,6 +647,21 @@ describe('v1.4 canonical extensions (v1.4 spec §3.2)', () => {
     }
   });
 
+  it('text_signature event parses and needs a signature', () => {
+    // Task 7a (#99): the signature of the text part currently being
+    // streamed — no index, no text.
+    const valid = canonicalStreamEventSchema.safeParse({
+      type: 'text_signature',
+      signature: { origin: { provider: 'p', model: 'm' }, data: 'sig' },
+    });
+    expect(valid.success).toBe(true);
+
+    const missing = canonicalStreamEventSchema.safeParse({
+      type: 'text_signature',
+    });
+    expect(missing.success).toBe(false);
+  });
+
   it('reasoning_start needs origin', () => {
     const noOrigin = canonicalStreamEventSchema.safeParse({
       type: 'reasoning_start',

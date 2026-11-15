@@ -104,6 +104,56 @@ describe("reassembleStream", () => {
     ]);
   });
 
+  it("text_signature reassembles onto its text part", () => {
+    // v1.4 spec §3.3 (Task 7a, #99): the signature attaches to the text
+    // part currently being streamed; a non-empty text_delta after a
+    // signed part opens a new part, so a signature never moves to
+    // other text. Any signed text part makes content a parts array.
+    const signature = {
+      origin: { provider: "", model: "gemini-3.5-flash-lite" },
+      data: "sig_text",
+    };
+    const events: CanonicalStreamEvent[] = [
+      {
+        type: "message_start",
+        id: "msg_1",
+        model: "gemini-3.5-flash-lite",
+      },
+      { type: "text_delta", text: "1," },
+      { type: "text_delta", text: " 2" },
+      { type: "text_signature", signature },
+      { type: "text_delta", text: " tail" },
+      { type: "message_end", finishReason: "stop" },
+    ];
+
+    expect(reassembleStream(events).message.content).toEqual([
+      { type: "text", text: "1, 2", signature },
+      { type: "text", text: " tail" },
+    ]);
+  });
+
+  it("text_signature with no text opens an empty signed part", () => {
+    // Gemini can send the signature on an empty final text part
+    // (max_tokens.sse): with no open text part the event opens one.
+    const signature = {
+      origin: { provider: "", model: "gemini-3.5-flash-lite" },
+      data: "sig_empty",
+    };
+    const events: CanonicalStreamEvent[] = [
+      {
+        type: "message_start",
+        id: "msg_1",
+        model: "gemini-3.5-flash-lite",
+      },
+      { type: "text_signature", signature },
+      { type: "message_end", finishReason: "stop" },
+    ];
+
+    expect(reassembleStream(events).message.content).toEqual([
+      { type: "text", text: "", signature },
+    ]);
+  });
+
   it("reasoning_delta without reasoning_start fails", () => {
     expect(() =>
       reassembleStream([
