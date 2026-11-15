@@ -231,6 +231,13 @@ export async function proxyRequest(
         message: i.message,
       })),
     });
+    // The deferral exists for bodies a `type: responses` entry can
+    // still relay verbatim — but routing itself reads the model
+    // (planRoute → parseTarget), so a non-string model reaches no
+    // entry at all: throw the deferred 400 now, before routing.
+    if (typeof canonicalRequest.model !== "string") {
+      throw deferredValidation;
+    }
   } else {
     throw new ValidationError("Malformed request body", {
       requestId,

@@ -1622,4 +1622,57 @@ routes:
       JSON.stringify(capturedRequests.responses[0]),
     ).toContain("additional_tools");
   });
+
+  // A non-string model survives the adapter's missing-field guard and
+  // fails the canonical schema — but routing itself reads it
+  // (planRoute → parseTarget), so the deferred 400 fires before
+  // routing on every route kind. Same body main returns for these.
+  const malformedModelBody = {
+    error: {
+      message: "Malformed request body",
+      type: "invalid_request_error",
+      param: null,
+      code: "invalid_request",
+    },
+  };
+
+  it.each([5, {}, true, []])(
+    "non-string model %j is a 400 on a pass-through route",
+    async (model) => {
+      useTarget("responses", passYaml());
+      const res = await request(app)
+        .post("/v1/responses")
+        .send({ model, input: [] });
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual(malformedModelBody);
+      expect(capturedRequests.responses).toHaveLength(0);
+    },
+  );
+
+  it.each([5, {}, true, []])(
+    "non-string model %j is a 400 on a bridged route",
+    async (model) => {
+      useTarget("openai");
+      const res = await request(app)
+        .post("/v1/responses")
+        .send({ model, input: [] });
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual(malformedModelBody);
+      expect(capturedRequests.openai).toHaveLength(0);
+    },
+  );
+
+  // An empty-string model is still a string: it routes (no glob
+  // match → the `or` default) and a `type: responses` entry relays it
+  // verbatim — the upstream's problem to reject, not ours.
+  it("empty-string model relays to a pass-through target", async () => {
+    useTarget("responses", passYaml());
+    const res = await request(app)
+      .post("/v1/responses")
+      .send({ model: "", input: [] });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(capturedRequests.responses).toHaveLength(1);
+    expect(capturedRequests.responses[0]).toMatchObject({ model: "" });
+    expect(res.body.model).toBe("");
+  });
 });
