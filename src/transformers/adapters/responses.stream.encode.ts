@@ -14,6 +14,7 @@
  *    https://platform.openai.com/docs/api-reference/responses/object
  */
 import type {
+  CanonicalContentPart,
   CanonicalStreamEvent,
   CanonicalUsage,
   StreamEncoder,
@@ -24,6 +25,8 @@ import type {
   ResponsesResponse,
 } from "../../types/responses.types";
 import { formatSse } from "../../utils/sse";
+import { recordNote } from "../../observe/context";
+import { packEnvelope, type EnvelopePayload } from "./responses.envelope";
 import {
   toResponsesResponseObject,
   toResponsesUsage,
@@ -76,12 +79,130 @@ export function createStreamEncoder(
   let nextCallEmit = 0;
   const emittedItems: Obj[] = [];
   let outputText = "";
+  // Task 8 (spec §3.3): reasoning blocks stream into one `reasoning`
+  // output item per contiguous group; signatures collected on later
+  // events go into the next envelope emitted.
+  let reasoningItem:
+    | {
+        itemId: string;
+        outputIndex: number;
+        summaryIndex: number;
+        partOpen: boolean;
+        partText: string;
+      }
+    | undefined;
+  const reasoningParts = new Map<number, CanonicalContentPart>();
+  const pendingSigs: EnvelopePayload["signatures"] = [];
+  let textPartIndex = 0;
 
   const emit = (type: string, data: Obj): string =>
     formatSse(
       JSON.stringify({ type, sequence_number: seq++, ...data }),
       type,
     );
+
+  /**
+   * `reasoning` output item (Task 8, spec §3.3): `output_item.added`
+   * opens it, `reasoning_summary_part` frames stream the visible
+   * summary text, and `output_item.done` carries the `bg1.` envelope
+   * in `encrypted_content` — the turn's reasoning parts verbatim plus
+   * the signatures collected so far. Over the 1 MiB cap the item
+   * emits without `encrypted_content` (envelope_too_large note).
+   */
+  function closeReasoning(): string {
+    if (reasoningItem === undefined) return "";
+    const { itemId, outputIndex, partOpen, partText, summaryIndex } =
+      reasoningItem;
+    reasoningItem = undefined;
+    const parts = [...reasoningParts.values()];
+    reasoningParts.clear();
+    const summary = parts
+      .filter(
+        (p) =>
+          p.type === "reasoning" &&
+          p.reasoning?.text !== undefined &&
+          p.reasoning.text !== "",
+      )
+      .map((p) => ({ type: "summary_text", text: p.reasoning!.text! }));
+    const packed = packEnvelope({
+      v: 1,
+      reasoning: parts,
+      signatures: pendingSigs.splice(0),
+    });
+    if (packed === undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "responses",
+          code: "reasoning_dropped",
+          path: "envelope_too_large",
+        },
+        "Dropping reasoning envelope over the 1 MiB cap",
+      );
+    }
+    const item = {
+      id: itemId,
+      type: "reasoning",
+      summary,
+      ...(packed !== undefined && { encrypted_content: packed }),
+    };
+    emittedItems.push(item);
+    return (
+      (partOpen
+        ? emit("response.reasoning_summary_text.done", {
+            item_id: itemId,
+            output_index: outputIndex,
+            summary_index: summaryIndex,
+            text: partText,
+          }) +
+          emit("response.reasoning_summary_part.done", {
+            item_id: itemId,
+            output_index: outputIndex,
+            summary_index: summaryIndex,
+            part: { type: "summary_text", text: partText },
+          })
+        : "") +
+      emit("response.output_item.done", { output_index: outputIndex, item })
+    );
+  }
+
+  /** A signature-only envelope item, for signatures collected after
+   *  the reasoning group closed (call/text signatures). */
+  function emitPendingSigs(): string {
+    if (pendingSigs.length === 0) return "";
+    const itemId = `rs_${nextItemSeq++}`;
+    const outputIndex = nextOutputIndex++;
+    const packed = packEnvelope({
+      v: 1,
+      reasoning: [],
+      signatures: pendingSigs.splice(0),
+    });
+    if (packed === undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "responses",
+          code: "reasoning_dropped",
+          path: "envelope_too_large",
+        },
+        "Dropping reasoning envelope over the 1 MiB cap",
+      );
+    }
+    const item = {
+      id: itemId,
+      type: "reasoning",
+      summary: [],
+      ...(packed !== undefined && { encrypted_content: packed }),
+    };
+    emittedItems.push(item);
+    return (
+      emit("response.output_item.added", {
+        output_index: outputIndex,
+        item,
+      }) +
+      emit("response.output_item.done", { output_index: outputIndex, item })
+    );
+  }
 
   // The Response object inside every `response.*` frame carries the
   // unary path's field set via toResponsesResponseObject — the
@@ -159,6 +280,7 @@ export function createStreamEncoder(
       emittedItems.push(doneItem);
       return (
         closeText() +
+        emitPendingSigs() +
         emit("response.output_item.added", {
           output_index: outputIndex,
           item: openItem,
@@ -196,6 +318,7 @@ export function createStreamEncoder(
     emittedItems.push(doneItem);
     return (
       closeText() +
+      emitPendingSigs() +
       emit("response.output_item.added", {
         output_index: outputIndex,
         item: openItem,
@@ -265,15 +388,113 @@ export function createStreamEncoder(
     contentType: "text/event-stream",
     encode(event) {
       if (finished) return "";
+      // A reasoning item stays open across reasoning_* events; the
+      // first other event closes it (spec §3.3: reasoning precedes
+      // the content it explains).
+      const prefix =
+        event.type === "reasoning_start" ||
+        event.type === "reasoning_delta" ||
+        event.type === "reasoning_signature"
+          ? ""
+          : closeReasoning();
       switch (event.type) {
+        case "reasoning_start": {
+          // One summary part per reasoning block, all inside the
+          // group item (Task 8 event chain per the streaming
+          // reference).
+          reasoningParts.set(event.index, {
+            type: "reasoning",
+            reasoning: {
+              ...(event.redacted === true
+                ? { redacted: true }
+                : { text: "" }),
+              origin: event.origin,
+            },
+          });
+          let out = "";
+          if (reasoningItem === undefined) {
+            const itemId = `rs_${nextItemSeq++}`;
+            const outputIndex = nextOutputIndex++;
+            reasoningItem = {
+              itemId,
+              outputIndex,
+              summaryIndex: 0,
+              partOpen: false,
+              partText: "",
+            };
+            out = emit("response.output_item.added", {
+              output_index: outputIndex,
+              item: { id: itemId, type: "reasoning", summary: [] },
+            });
+          } else if (reasoningItem.partOpen) {
+            const { itemId, outputIndex, summaryIndex, partText } =
+              reasoningItem;
+            reasoningItem.summaryIndex += 1;
+            out =
+              emit("response.reasoning_summary_text.done", {
+                item_id: itemId,
+                output_index: outputIndex,
+                summary_index: summaryIndex,
+                text: partText,
+              }) +
+              emit("response.reasoning_summary_part.done", {
+                item_id: itemId,
+                output_index: outputIndex,
+                summary_index: summaryIndex,
+                part: { type: "summary_text", text: partText },
+              });
+          }
+          const { itemId, outputIndex, summaryIndex } = reasoningItem;
+          reasoningItem.partOpen = true;
+          reasoningItem.partText = "";
+          return (
+            out +
+            emit("response.reasoning_summary_part.added", {
+              item_id: itemId,
+              output_index: outputIndex,
+              summary_index: summaryIndex,
+              part: { type: "summary_text", text: "" },
+            })
+          );
+        }
+        case "reasoning_delta": {
+          const part = reasoningParts.get(event.index);
+          if (part?.reasoning !== undefined && reasoningItem !== undefined) {
+            part.reasoning.text = (part.reasoning.text ?? "") + event.text;
+            reasoningItem.partText += event.text;
+            const { itemId, outputIndex, summaryIndex } = reasoningItem;
+            return emit("response.reasoning_summary_text.delta", {
+              item_id: itemId,
+              output_index: outputIndex,
+              summary_index: summaryIndex,
+              delta: event.text,
+            });
+          }
+          return "";
+        }
+        case "reasoning_signature": {
+          const part = reasoningParts.get(event.index);
+          if (part !== undefined) part.signature = event.signature;
+          return "";
+        }
+        case "text_signature":
+          // Task 7a part signature — into the next envelope's
+          // signatures (spec §3.3); the index counts the text parts
+          // signed so far.
+          pendingSigs.push({
+            textIndex: textPartIndex++,
+            signature: event.signature,
+          });
+          return prefix;
         case "message_start":
           responseId = event.id;
           return (
+            prefix +
             emit("response.created", { response: responseSkeleton() }) +
             emit("response.in_progress", { response: responseSkeleton() })
           );
         case "text_delta": {
-          if (event.text === "") return "";
+          if (event.text === "") return prefix;
           let open = "";
           if (openText === undefined) {
             openText = {
@@ -303,6 +524,7 @@ export function createStreamEncoder(
           outputText += event.text;
           const { itemId, outputIndex } = openText;
           return (
+            prefix +
             open +
             emit("response.output_text.delta", {
               item_id: itemId,
@@ -312,14 +534,6 @@ export function createStreamEncoder(
             })
           );
         }
-        case "reasoning_start":
-        case "reasoning_delta":
-        case "reasoning_signature":
-        case "text_signature":
-          // v1.4 spec §3.3: reasoning items are emitted by Task 8's
-          // envelope work; until then they are dropped, like the
-          // other encoders.
-          return "";
         case "tool_call_start":
           calls.set(event.index, {
             id: event.id,
@@ -330,29 +544,40 @@ export function createStreamEncoder(
             ...(event.custom !== undefined && { custom: event.custom }),
             args: "",
           });
-          return "";
+          // A model-bound signature on the call (Gemini
+          // thoughtSignature) — into the next envelope emitted, so a
+          // reasoning item precedes the call it explains.
+          if (event.signature !== undefined) {
+            pendingSigs.push({
+              toolCallId: event.id,
+              signature: event.signature,
+            });
+          }
+          return prefix;
         case "tool_call_delta": {
           const call = calls.get(event.index);
           if (call) call.args += event.argumentsDelta;
-          return "";
+          return prefix;
         }
         case "tool_call_end": {
           const call = calls.get(event.index);
-          if (!call) return "";
+          if (!call) return prefix;
           calls.delete(event.index);
           completed.set(event.index, call);
-          return flushCompleted();
+          return prefix + flushCompleted();
         }
         case "usage":
           usage = event.usage;
-          return "";
+          return prefix;
         case "message_end": {
           finished = true;
           switch (event.finishReason) {
             case "length":
             case "content_filter":
               return (
+                prefix +
                 closeText("incomplete") +
+                emitPendingSigs() +
                 flushCompleted() +
                 emit("response.incomplete", {
                   response: terminalResponse("incomplete", {
@@ -365,7 +590,9 @@ export function createStreamEncoder(
               );
             case "error":
               return (
+                prefix +
                 closeText() +
+                emitPendingSigs() +
                 flushCompleted() +
                 emit("response.failed", {
                   response: terminalResponse("failed", {
@@ -378,7 +605,9 @@ export function createStreamEncoder(
               );
             default:
               return (
+                prefix +
                 closeText() +
+                emitPendingSigs() +
                 flushCompleted() +
                 emit("response.completed", {
                   response: terminalResponse("completed"),
@@ -389,7 +618,9 @@ export function createStreamEncoder(
         case "error":
           finished = true;
           return (
+            prefix +
             closeText() +
+            emitPendingSigs() +
             flushCompleted() +
             emit("response.failed", {
               response: terminalResponse("failed", {

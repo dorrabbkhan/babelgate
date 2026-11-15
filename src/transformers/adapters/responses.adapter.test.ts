@@ -1774,3 +1774,203 @@ describe("Responses adapter", () => {
     });
   });
 });
+
+// ===== v1.4 Task 8: reasoning items + bg1 envelope (spec §3.3) =====
+
+import { runWithAttempt } from "../../observe/context";
+import { packEnvelope } from "./responses.envelope";
+import type { CanonicalReasoningOrigin } from "../../types/canonical.types";
+
+describe("reasoning items (v1.4 spec §3.3)", () => {
+  const ATTEMPT = { providerName: "resp", upstreamModel: "gpt-5-codex" };
+  const ORIGIN: CanonicalReasoningOrigin = {
+    provider: "resp",
+    model: "gpt-5-codex",
+  };
+
+  it("reasoning item precedes the call it explains", () => {
+    const signature = { origin: ORIGIN, data: "sig-call" };
+    const out = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest({
+        model: "gpt-5-codex",
+        messages: [
+          { role: "user", content: "hi" },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "reasoning",
+                reasoning: { text: "hmm", origin: ORIGIN },
+              },
+            ],
+            toolCalls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: { name: "get_weather", arguments: "{}" },
+                signature,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    const input = (out as unknown as { input: Array<Record<string, unknown>> })
+      .input;
+    const reasoningIdx = input.findIndex((i) => i.type === "reasoning");
+    const callIdx = input.findIndex((i) => i.type === "function_call");
+    expect(reasoningIdx).toBeGreaterThanOrEqual(0);
+    expect(callIdx).toBeGreaterThan(reasoningIdx);
+    // The envelope carries the call's signature under its call id.
+    const item = input[reasoningIdx] as {
+      encrypted_content?: string;
+    };
+    expect(item.encrypted_content?.startsWith("bg1.")).toBe(true);
+  });
+
+  it("reasoning output item comes first in fromCanonicalResponse", () => {
+    const res = fromCanonicalResponse({
+      id: "resp_1",
+      model: "m",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "reasoning",
+            reasoning: { text: "why", origin: ORIGIN },
+            signature: { origin: ORIGIN, data: "blob" },
+          },
+          { type: "text", text: "answer" },
+        ],
+      },
+      finishReason: "stop",
+    });
+    expect((res.output as unknown as Array<{ type: string }>)[0].type).toBe("reasoning");
+    const item = (res.output as unknown as Array<Record<string, unknown>>)[0] as {
+      summary?: Array<{ type: string; text: string }>;
+      encrypted_content?: string;
+    };
+    expect(item.summary).toEqual([{ type: "summary_text", text: "why" }]);
+    expect(item.encrypted_content?.startsWith("bg1.")).toBe(true);
+  });
+
+  it("summary text streams as reasoning_summary_text deltas", () => {
+    const encoder = createStreamEncoder({
+      sourceRequest: { model: "m", input: [] } as ResponsesRequest,
+      query: {},
+      requestedModel: "m",
+    });
+    const events: CanonicalStreamEvent[] = [
+      { type: "message_start", id: "resp_1", model: "m" },
+      { type: "reasoning_start", index: 0, origin: ORIGIN },
+      { type: "reasoning_delta", index: 0, text: "think " },
+      { type: "reasoning_delta", index: 0, text: "more" },
+      {
+        type: "reasoning_signature",
+        index: 0,
+        signature: { origin: ORIGIN, data: "blob" },
+      },
+      { type: "text_delta", text: "answer" },
+      { type: "message_end", finishReason: "stop" },
+    ];
+    const text = events.map((e) => encoder.encode(e)).join("") + encoder.end();
+    const frames = text
+      .split("\n\n")
+      .filter((f) => f !== "")
+      .map((f) =>
+        JSON.parse(f.split("\n").find((l) => l.startsWith("data:"))!.slice(5)),
+      );
+    const types = frames.map((f: { type: string }) => f.type);
+    // Event chain per the streaming reference + the plan's Task 8
+    // Interfaces block.
+    const added = types.indexOf("response.output_item.added");
+    expect(types[added + 1]).toBe("response.reasoning_summary_part.added");
+    const deltas = frames.filter(
+      (f: { type: string }) => f.type === "response.reasoning_summary_text.delta",
+    );
+    expect(deltas.map((d: { delta: string }) => d.delta)).toEqual([
+      "think ",
+      "more",
+    ]);
+    expect(types).toContain("response.reasoning_summary_text.done");
+    expect(types).toContain("response.reasoning_summary_part.done");
+    const done = frames.find(
+      (f: { type: string; item?: { type?: string } }) =>
+        f.type === "response.output_item.done" && f.item?.type === "reasoning",
+    ) as { item: { encrypted_content?: string } };
+    expect(done.item.encrypted_content?.startsWith("bg1.")).toBe(true);
+  });
+
+  it("reasoning input item unpacks to the following assistant turn", () => {
+    // A recorded Codex replay: the envelope restores the reasoning part
+    // and the call signature verbatim.
+    const envelope = packEnvelope({
+      v: 1,
+      reasoning: [
+        {
+          type: "reasoning",
+          reasoning: { text: "hmm", origin: ORIGIN },
+          signature: { origin: ORIGIN, data: "blob" },
+        },
+      ],
+      signatures: [
+        {
+          toolCallId: "call_1",
+          signature: { origin: ORIGIN, data: "sig-call" },
+        },
+      ],
+    })!;
+    const canonical = toCanonicalRequest({
+      model: "m",
+      input: [
+        { type: "reasoning", encrypted_content: envelope },
+        {
+          type: "function_call",
+          call_id: "call_1",
+          name: "get_weather",
+          arguments: "{}",
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "next" }],
+        },
+      ],
+    } as unknown as ResponsesRequest);
+
+    const assistant = canonical.messages.find((m) => m.role === "assistant");
+    expect(assistant?.content).toEqual([
+      {
+        type: "reasoning",
+        reasoning: { text: "hmm", origin: ORIGIN },
+        signature: { origin: ORIGIN, data: "blob" },
+      },
+    ]);
+    expect(assistant?.toolCalls?.[0].signature).toEqual({
+      origin: ORIGIN,
+      data: "sig-call",
+    });
+  });
+
+  it("non-bg1 encrypted_content is dropped with a reasoning note", () => {
+    const trace = traced(() =>
+      toCanonicalRequest({
+        model: "m",
+        input: [
+          { type: "reasoning", encrypted_content: "real-upstream-blob" },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "hi" }],
+          },
+        ],
+      } as unknown as ResponsesRequest),
+    );
+    expect(trace.notes).toContainEqual({
+      stage: "decode",
+      adapter: "responses",
+      code: "reasoning_dropped",
+      path: "input[0]",
+    });
+  });
+});

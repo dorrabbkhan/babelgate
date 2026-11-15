@@ -465,6 +465,60 @@ describe('OpenAI Adapter', () => {
 
       expect(result.id).toMatch(/^chatcmpl-/);
     });
+
+    it('openai client gets the text when the upstream reasons', () => {
+      // Task 8 fix: a parts array may carry reasoning — an OpenAI
+      // client receives only the joined text parts.
+      const result = fromCanonicalResponse({
+        id: 'chatcmpl-r',
+        model: 'm',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'reasoning',
+              reasoning: {
+                text: 'hmm',
+                origin: { provider: '', model: 'm' },
+              },
+            },
+            { type: 'text', text: 'the answer' },
+          ],
+        },
+        finishReason: 'stop',
+      });
+
+      expect(result.choices[0].message.content).toBe('the answer');
+      const body = JSON.stringify(result);
+      expect(body).not.toContain('hmm');
+      expect(body).not.toContain('reasoning_content');
+    });
+
+    it('openai client gets the text of a signed text part', () => {
+      // Task 7a: a Gemini text part may carry a thoughtSignature —
+      // the client gets the text, never the signature.
+      const result = fromCanonicalResponse({
+        id: 'chatcmpl-s',
+        model: 'm',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: '1, 2',
+              signature: {
+                origin: { provider: '', model: 'gemini-3.5-flash-lite' },
+                data: 'SIG',
+              },
+            },
+          ],
+        },
+        finishReason: 'stop',
+      });
+
+      expect(result.choices[0].message.content).toBe('1, 2');
+      expect(JSON.stringify(result)).not.toContain('SIG');
+    });
   });
 
   describe('cached usage (spec §3.2)', () => {
@@ -1048,5 +1102,175 @@ describe('OpenAI Adapter', () => {
         path: 'response_format',
       });
     });
+  });
+});
+
+// ===== v1.4 Task 8: reasoning_content decode + passback (spec §3.3) =====
+
+import { runWithAttempt } from '../../observe/context';
+import { canonicalForTarget } from '../../services/attempt-targets';
+import type { ProviderEntry } from '../../routing/registry';
+import type { CanonicalReasoningOrigin } from '../../types/canonical.types';
+
+describe('reasoning_content (v1.4 spec §3.3)', () => {
+  const ATTEMPT = { providerName: 'deep', upstreamModel: 'deepseek-v3' };
+  const ORIGIN: CanonicalReasoningOrigin = {
+    provider: 'deep',
+    model: 'deepseek-v3',
+  };
+
+  it('reasoning_content decoded', () => {
+    // DeepSeek/OpenRouter/vLLM reply field — a reasoning part with no
+    // signature, tagged with the attempt's origin.
+    const response = {
+      id: 'chatcmpl-r',
+      object: 'chat.completion',
+      created: 1,
+      model: 'deepseek-v3',
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: 'answer',
+            reasoning_content: 'thought it through',
+          },
+          finish_reason: 'stop',
+        },
+      ],
+    } as unknown as ChatCompletionResponse;
+
+    const canonical = runWithAttempt(ATTEMPT, () =>
+      toCanonicalResponse(response, 'deepseek-v3'),
+    );
+    expect(canonical.message.content).toEqual([
+      {
+        type: 'reasoning',
+        reasoning: { text: 'thought it through', origin: ORIGIN },
+      },
+      { type: 'text', text: 'answer' },
+    ]);
+  });
+
+  it('reasoning field decodes too', () => {
+    const response = {
+      id: 'chatcmpl-r2',
+      object: 'chat.completion',
+      created: 1,
+      model: 'm',
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: 'a', reasoning: 'r' },
+          finish_reason: 'stop',
+        },
+      ],
+    } as unknown as ChatCompletionResponse;
+    const canonical = runWithAttempt(ATTEMPT, () =>
+      toCanonicalResponse(response, 'deepseek-v3'),
+    );
+    const parts = canonical.message.content as Array<{ type: string }>;
+    expect(parts[0].type).toBe('reasoning');
+  });
+
+  it('passback only with reasoning_passback', () => {
+    // canonicalForTarget strips reasoning parts for openai targets
+    // unless the entry opts in — adapters stay config-free.
+    const canonical = {
+      model: 'deepseek-v3',
+      messages: [
+        { role: 'user' as const, content: 'hi' },
+        {
+          role: 'assistant' as const,
+          content: [
+            {
+              type: 'reasoning' as const,
+              reasoning: { text: 'why', origin: ORIGIN },
+            },
+            { type: 'text' as const, text: 'answer' },
+          ],
+        },
+      ],
+    };
+    const target = { provider: 'openai', model: 'deepseek-v3' };
+    const base: ProviderEntry = {
+      name: 'deep',
+      type: 'openai',
+      baseUrl: 'http://x',
+    };
+
+    const stripped = canonicalForTarget(canonical, base, target);
+    expect(
+      (stripped.messages[1].content as Array<{ type: string }>).every(
+        (p) => p.type !== 'reasoning',
+      ),
+    ).toBe(true);
+
+    const kept = canonicalForTarget(
+      canonical,
+      { ...base, reasoningPassback: true },
+      target,
+    );
+    const wire = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest(kept),
+    ) as unknown as {
+      messages: Array<Record<string, unknown>>;
+    };
+    const assistant = wire.messages[1];
+    expect(assistant.reasoning_content).toBe('why');
+  });
+
+  it('foreign reasoning is dropped even with passback', () => {
+    const canonical = {
+      model: 'deepseek-v3',
+      messages: [
+        {
+          role: 'assistant' as const,
+          content: [
+            {
+              type: 'reasoning' as const,
+              reasoning: {
+                text: 'other brain',
+                origin: { provider: 'other', model: 'other-m' },
+              },
+            },
+            { type: 'text' as const, text: 'answer' },
+          ],
+        },
+      ],
+    };
+    const trace = traced(() => {
+      const wire = runWithAttempt(ATTEMPT, () =>
+        fromCanonicalRequest(canonical),
+      ) as unknown as { messages: Array<Record<string, unknown>> };
+      expect(wire.messages[0].reasoning_content).toBeUndefined();
+    });
+    expect(trace.notes).toContainEqual({
+      stage: 'encode',
+      adapter: 'openai',
+      code: 'reasoning_dropped',
+      path: 'reasoning_content',
+    });
+  });
+
+  it('a matching part with no text emits no reasoning_content', () => {
+    const wire = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest({
+        model: 'deepseek-v3',
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'reasoning',
+                reasoning: { redacted: true, origin: ORIGIN },
+              },
+              { type: 'text', text: 'answer' },
+            ],
+          },
+        ],
+      }),
+    ) as unknown as { messages: Array<Record<string, unknown>> };
+    expect(wire.messages[0]).not.toHaveProperty('reasoning_content');
   });
 });

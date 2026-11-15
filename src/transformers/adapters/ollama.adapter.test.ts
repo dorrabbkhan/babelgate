@@ -392,6 +392,62 @@ describe("Ollama Adapter", () => {
       expect(fromCanonicalResponse(stopResponse).done).toBe(true);
       expect(fromCanonicalResponse(lengthResponse).done).toBe(false);
     });
+
+    it("ollama client gets the text when the upstream reasons", () => {
+      // Task 8 fix: a parts array may carry reasoning — an Ollama
+      // client receives only the joined text parts.
+      const result = fromCanonicalResponse({
+        id: "ollama-r",
+        model: "m",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "reasoning",
+              reasoning: {
+                text: "hmm",
+                origin: { provider: "", model: "m" },
+              },
+            },
+            { type: "text", text: "the answer" },
+          ],
+        },
+        finishReason: "stop",
+      });
+
+      expect(result.message.content).toBe("the answer");
+      const body = JSON.stringify(result);
+      expect(body).not.toContain("hmm");
+      expect(body).not.toContain("thinking");
+    });
+
+    it("ollama client gets the text of a signed text part", () => {
+      // Task 7a: a Gemini text part may carry a thoughtSignature —
+      // the client gets the text, never the signature.
+      const result = fromCanonicalResponse({
+        id: "ollama-s",
+        model: "m",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "1, 2",
+              signature: {
+                origin: { provider: "", model: "gemini-3.5-flash-lite" },
+                data: "SIG",
+              },
+            },
+          ],
+        },
+        finishReason: "stop",
+      });
+
+      expect(result.message.content).toBe("1, 2");
+      const body = JSON.stringify(result);
+      expect(body).not.toContain("SIG");
+      expect(body).not.toContain("thinking");
+    });
   });
 
   describe("cached usage (spec §3.2)", () => {
@@ -1060,5 +1116,92 @@ describe("cache hints on tool results (Task 17a)", () => {
         path: "format",
       });
     });
+  });
+});
+
+// ===== v1.4 Task 8: thinking decode + passback (spec §3.3) =====
+
+import { runWithAttempt } from "../../observe/context";
+import { canonicalForTarget } from "../../services/attempt-targets";
+import type { ProviderEntry } from "../../routing/registry";
+import type { CanonicalReasoningOrigin } from "../../types/canonical.types";
+
+describe("thinking (v1.4 spec §3.3)", () => {
+  const ATTEMPT = { providerName: "oll", upstreamModel: "qwen3:8b" };
+  const ORIGIN: CanonicalReasoningOrigin = {
+    provider: "oll",
+    model: "qwen3:8b",
+  };
+
+  it("thinking decoded; passback only with the flag", () => {
+    const response = {
+      model: "qwen3:8b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: { role: "assistant", content: "answer", thinking: "hmm" },
+      done: true,
+    } as unknown as OllamaChatResponse;
+
+    const canonical = runWithAttempt(ATTEMPT, () =>
+      toCanonicalResponse(response, "qwen3:8b"),
+    );
+    expect(canonical.message.content).toEqual([
+      {
+        type: "reasoning",
+        reasoning: { text: "hmm", origin: ORIGIN },
+      },
+      { type: "text", text: "answer" },
+    ]);
+
+    // Passback gated on the entry flag — same reasoning part encodes
+    // as `thinking` only when the entry opts in.
+    const request = {
+      model: "qwen3:8b",
+      messages: [
+        { role: "user" as const, content: "hi" },
+        {
+          role: "assistant" as const,
+          content: canonical.message.content,
+        },
+      ],
+    };
+    const target = { provider: "oll", model: "qwen3:8b" };
+    const base: ProviderEntry = {
+      name: "oll",
+      type: "ollama",
+      baseUrl: "http://x",
+    };
+
+    const stripped = canonicalForTarget(request, base, target);
+    const wireOff = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest(stripped),
+    );
+    expect(wireOff.messages?.[1]).not.toHaveProperty("thinking");
+
+    const kept = canonicalForTarget(request, { ...base, reasoningPassback: true }, target);
+    const wireOn = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest(kept),
+    );
+    expect(wireOn.messages?.[1].thinking).toBe("hmm");
+  });
+
+  it("a matching part with no text emits no thinking", () => {
+    const wire = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest({
+        model: "qwen3:8b",
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "reasoning",
+                reasoning: { redacted: true, origin: ORIGIN },
+              },
+              { type: "text", text: "answer" },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(wire.messages?.[0]).not.toHaveProperty("thinking");
   });
 });

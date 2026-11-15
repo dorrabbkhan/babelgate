@@ -393,11 +393,13 @@ describe("stream decoders", () => {
     ]);
   });
 
-  it("ollama decoder ignores thinking", () => {
+  it("ollama decoder maps thinking to reasoning events", () => {
     // Thinking content arrives in `message.thinking`, not
     // `message.content` (docs.ollama.com/api/chat — think:true models);
-    // it produces no canonical events. Built inline: no fixture carries
-    // it (the corpus model doesn't think).
+    // spec §3.3 (v1.4 Task 8, owner decision D9) maps each contiguous
+    // thinking run to a reasoning block — reasoning_start + delta(s) —
+    // before the text it precedes. Built inline: no fixture carries
+    // thinking (the corpus model doesn't think).
     const ndjson = [
       '{"model":"qwen3:0.6b","created_at":"2026-10-27T00:00:00Z","message":{"role":"assistant","content":"","thinking":"let me think"},"done":false}',
       '{"model":"qwen3:0.6b","created_at":"2026-10-27T00:00:01Z","message":{"role":"assistant","content":"Hi","thinking":""},"done":false}',
@@ -410,6 +412,12 @@ describe("stream decoders", () => {
     ]);
     expect(events).toEqual([
       { type: "message_start", id: "call_0", model: "qwen3:0.6b" },
+      {
+        type: "reasoning_start",
+        index: 0,
+        origin: { provider: "", model: "qwen3:0.6b" },
+      },
+      { type: "reasoning_delta", index: 0, text: "let me think" },
       { type: "text_delta", text: "Hi" },
       {
         type: "usage",

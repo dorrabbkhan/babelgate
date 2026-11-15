@@ -1676,3 +1676,243 @@ routes:
     expect(res.body.model).toBe("");
   });
 });
+
+describe("reasoning carry-over (v1.4 spec §3.2, Task 8)", () => {
+  const REASONING_YAML = `default: gem
+providers:
+  gem:
+    type: gemini
+    base_url: ${MOCK_BASE_URLS.gemini}
+    api_key_env: GEMINI_API_KEY
+  ant:
+    type: anthropic
+    base_url: ${MOCK_BASE_URLS.anthropic}
+    api_key_env: ANTHROPIC_API_KEY
+routes:
+  - match: "*"
+    to: gem/gem-1
+    fallback: [ant/ant-m]
+`;
+
+  const userMsg = (text: string) => ({
+    type: "message",
+    role: "user",
+    content: [{ type: "input_text", text }],
+  });
+  const reasoningConf = { reasoning: { effort: "medium" } };
+
+  /** Turn-1 Gemini reply: a signed thought part + a signed call. */
+  const GEMINI_TURN1 = {
+    candidates: [
+      {
+        content: {
+          role: "model",
+          parts: [
+            {
+              text: "thinking about weather",
+              thought: true,
+              thoughtSignature: "sig-gem-turn1",
+            },
+            {
+              functionCall: {
+                name: "get_weather",
+                args: { city: "Paris" },
+              },
+              thoughtSignature: "sig-gem-call1",
+            },
+          ],
+        },
+        finishReason: "STOP",
+        index: 0,
+      },
+    ],
+    modelVersion: "gem-1",
+  };
+
+  it("provider switch mid-session drops foreign reasoning", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    process.env.ANTHROPIC_API_KEY = "test-key";
+    useTarget("gemini", REASONING_YAML);
+
+    // ── Turn 1: served by Gemini, returns a signed reasoning turn ──
+    responseOverrides.gemini = { body: GEMINI_TURN1 };
+    const t1 = await request(app)
+      .post("/v1/responses")
+      .send({
+        model: "gem-1",
+        input: [userMsg("weather?")],
+        store: false,
+        ...reasoningConf,
+      });
+    expect(t1.status, JSON.stringify(t1.body)).toBe(200);
+    const reasoningItem1 = (t1.body.output as Array<{ type: string }>).find(
+      (i) => i.type === "reasoning",
+    );
+    expect(reasoningItem1).toBeDefined();
+
+    // ── Turn 2: client replays turn 1; Gemini 500 → Anthropic hop ──
+    const t1Call = (t1.body.output as Array<{ type: string }>).find(
+      (i) => i.type === "function_call",
+    );
+    responseOverrides.gemini = { status: 500, body: { error: "down" } };
+    responseOverrides.anthropic = {
+      body: {
+        id: "msg_t2",
+        type: "message",
+        role: "assistant",
+        model: "ant-m",
+        content: [
+          {
+            type: "thinking",
+            thinking: "anthropic thinks",
+            signature: "sig-ant-turn2",
+          },
+          { type: "text", text: "fallback answer" },
+        ],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 1, output_tokens: 2 },
+      },
+    };
+    const t2 = await request(app)
+      .post("/v1/responses")
+      .send({
+        model: "gem-1",
+        input: [
+          userMsg("weather?"),
+          reasoningItem1,
+          t1Call,
+          userMsg("try again"),
+        ],
+        store: false,
+        ...reasoningConf,
+      });
+    expect(t2.status, JSON.stringify(t2.body)).toBe(200);
+
+    // The Anthropic hop saw no Gemini data and no `thinking` — the
+    // continuity guard disabled it (foreign tool-call turn).
+    const antBody = JSON.stringify(capturedRequests.anthropic[0]);
+    expect(antBody).not.toContain("sig-gem-turn1");
+    expect(antBody).not.toContain("sig-gem-call1");
+    expect(antBody).not.toContain("thinking about weather");
+    expect(antBody).not.toContain('"thinking"');
+
+    const reasoningItem2 = (t2.body.output as Array<{ type: string }>).find(
+      (i) => i.type === "reasoning",
+    );
+    expect(reasoningItem2).toBeDefined();
+
+    // ── Turn 3: back on Gemini; turn-1 signature reaches it ──
+    delete responseOverrides.gemini;
+    const t2Text = (t2.body.output as Array<{ type: string }>).find(
+      (i) => i.type === "message",
+    );
+    capturedRequests.gemini.length = 0;
+    const t3 = await request(app)
+      .post("/v1/responses")
+      .send({
+        model: "gem-1",
+        input: [
+          userMsg("weather?"),
+          reasoningItem1,
+          t1Call,
+          reasoningItem2,
+          t2Text,
+          userMsg("once more"),
+        ],
+        store: false,
+        ...reasoningConf,
+      });
+    expect(t3.status, JSON.stringify(t3.body)).toBe(200);
+
+    const gem3 = JSON.stringify(capturedRequests.gemini[0]);
+    expect(gem3).toContain("sig-gem-turn1");
+    expect(gem3).not.toContain("sig-ant-turn2");
+    expect(gem3).not.toContain("anthropic thinks");
+  });
+
+  it("openai client via gemini keeps the answer text", async () => {
+    // Task 8 fix round 1: a Gemini upstream reply that carries a
+    // thought part and a signed text part decodes to a parts array —
+    // the OpenAI client gets the joined text parts only (this bug was
+    // already on main via the Task 7/7a Gemini decode path).
+    process.env.GEMINI_API_KEY = "test-key";
+    useTarget("gemini", REASONING_YAML);
+    responseOverrides.gemini = {
+      body: {
+        candidates: [
+          {
+            content: {
+              role: "model",
+              parts: [
+                { text: "thinking…", thought: true },
+                { text: "the answer", thoughtSignature: "SIG" },
+              ],
+            },
+            finishReason: "STOP",
+            index: 0,
+          },
+        ],
+        modelVersion: "gem-1",
+      },
+    };
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        model: "gem-1",
+        messages: [{ role: "user", content: "hi" }],
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.choices[0].message.content).toBe("the answer");
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain("thinking…");
+    expect(body).not.toContain("SIG");
+  });
+
+  it("envelope over cap is omitted with a note (request)", async () => {
+    // Review Focus 3: the request-level 200 — a >1MB reasoning text
+    // from the upstream still answers, with the reasoning item's
+    // `encrypted_content` omitted and the drop noted on the trace.
+    useTarget("openai");
+    responseOverrides.openai = {
+      body: {
+        id: "chatcmpl-big",
+        object: "chat.completion",
+        created: 1,
+        model: "m",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "the answer",
+              reasoning_content: "x".repeat(1_200_000),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    };
+
+    const before = traces.length;
+    const res = await request(app)
+      .post("/v1/responses")
+      .send({ model: "m", input: [userMsg("hi")], store: false });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    const reasoningItem = (
+      res.body.output as Array<Record<string, unknown>>
+    ).find((i) => i.type === "reasoning");
+    expect(reasoningItem).toBeDefined();
+    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+
+    const trace = traces[before];
+    expect(trace).toBeDefined();
+    expect(trace.notes).toContainEqual({
+      stage: "encode",
+      adapter: "responses",
+      code: "reasoning_dropped",
+      path: "envelope_too_large",
+    });
+  });
+});

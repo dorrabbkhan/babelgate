@@ -71,12 +71,90 @@ export function canonicalForTarget(
   // same copy carries the lowered call history).
   const lowered =
     entry.type === "responses" ? out : lowerCustomTools(out, entry.type);
+  // §3.3 (Task 8): `reasoning_content`/`thinking` passback is opt-in
+  // per provider (`reasoning_passback`) — an openai/ollama entry
+  // without it sees no reasoning parts, and signatures (no wire slot)
+  // go either way. Anthropic/Gemini/Responses encoders keep and
+  // origin-filter them themselves.
+  const reasoned = stripReasoningForTarget(lowered, entry);
   // §3.2: Anthropic and providers with cache_hints honour hints;
   // everywhere else they are removed from the copy before encode.
   if (entry.type !== "anthropic" && entry.cacheHints !== true) {
-    return stripCacheHints(lowered, entry.type);
+    return stripCacheHints(reasoned, entry.type);
   }
-  return lowered;
+  return reasoned;
+}
+
+/**
+ * Task 8 (spec §3.3): for `openai`/`ollama` targets, drop reasoning
+ * parts unless the entry opted into passback, and drop signatures
+ * always (neither dialect carries them). Parts come out of message
+ * content; `signature` fields come off remaining parts and tool
+ * calls — a single `reasoning_dropped` note per request covers the
+ * strip (the encoders note nothing they never saw).
+ */
+function stripReasoningForTarget(
+  canonical: CanonicalRequest,
+  entry: ProviderEntry,
+): CanonicalRequest {
+  if (entry.type !== "openai" && entry.type !== "ollama") {
+    return canonical;
+  }
+  const stripParts = entry.reasoningPassback !== true;
+  let stripped = false;
+  const messages = canonical.messages.map((m) => {
+    if (!Array.isArray(m.content)) {
+      if ((m.toolCalls ?? []).some((c) => c.signature !== undefined)) {
+        stripped = true;
+        return {
+          ...m,
+          toolCalls: m.toolCalls?.map((c) => {
+            const { signature: _s, ...rest } = c;
+            return rest;
+          }),
+        };
+      }
+      return m;
+    }
+    const content = m.content.filter(
+      (p) => !(stripParts && p.type === "reasoning"),
+    );
+    const cleaned = content.map((p) => {
+      if (p.signature === undefined) return p;
+      stripped = true;
+      const { signature: _s, ...rest } = p;
+      return rest;
+    });
+    const droppedParts = content.length !== m.content.length;
+    if (droppedParts) stripped = true;
+    const toolCalls = m.toolCalls?.map((c) => {
+      if (c.signature === undefined) return c;
+      stripped = true;
+      const { signature: _s, ...rest } = c;
+      return rest;
+    });
+    if (!droppedParts && cleaned.every((p, i) => p === m.content[i])) {
+      // Nothing changed in content — keep the message object when
+      // toolCalls are unchanged too.
+      if (toolCalls === m.toolCalls) return m;
+      return { ...m, toolCalls };
+    }
+    return {
+      ...m,
+      content: cleaned.length === 0 ? "" : cleaned,
+      toolCalls,
+    };
+  });
+  if (!stripped) return canonical;
+  recordNote(
+    {
+      stage: "encode",
+      adapter: entry.type,
+      code: "reasoning_dropped",
+    },
+    `Dropping reasoning content (target "${entry.type}" has no reasoning_passback slot)`,
+  );
+  return { ...canonical, messages };
 }
 
 /** Return `part` without its cache hint; shares the object when unhinted. */

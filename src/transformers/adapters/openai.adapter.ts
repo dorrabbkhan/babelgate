@@ -28,6 +28,7 @@ import type {
   OpenAICompatibleUsage,
 } from "../../types/openai.types";
 import { isSchemaObject } from "../response-format";
+import { decodeOrigin, originMatchesCurrent } from "../reasoning-origin";
 import {
   createStreamDecoder,
   createStreamEncoder,
@@ -479,6 +480,17 @@ function convertFromCanonicalMessage(
       role: "assistant" as const,
       content: typeof content === "string" ? content : null,
     };
+    // v1.4 spec §3.3 (Task 8): reasoning parts become
+    // `reasoning_content` when they survive canonicalForTarget — only
+    // reasoning_passback entries keep them. Origin-checked like every
+    // encoder: a foreign part drops with `reasoning_dropped`.
+    // Field name per DeepSeek (https://api-docs.deepseek.com/guides/reasoning_model)
+    // and OpenRouter (https://openrouter.ai/docs/use-cases/reasoning-tokens).
+    const reasoningText = reasoningContent(msg);
+    if (reasoningText !== undefined) {
+      (assistantMsg as { reasoning_content?: string }).reasoning_content =
+        reasoningText;
+    }
     if (msg.toolCalls && msg.toolCalls.length > 0) {
       (assistantMsg as { tool_calls?: unknown }).tool_calls = msg.toolCalls.map(
         (tc) => ({
@@ -566,6 +578,64 @@ function toolResultText(content: string | CanonicalContentPart[]): string {
     .join("\n");
 }
 
+/**
+ * An assistant message's visible reasoning text: matching-origin
+ * reasoning parts joined in order (`reasoning_content` /
+ * DeepSeek-style). Foreign parts — and signatures, which have no
+ * OpenAI slot — drop with `reasoning_dropped` (spec §3.2).
+ */
+function reasoningContent(msg: CanonicalMessage): string | undefined {
+  if (!Array.isArray(msg.content)) return undefined;
+  let text = "";
+  let seen = false;
+  for (const part of msg.content) {
+    if (part.type === "reasoning" && part.reasoning) {
+      if (originMatchesCurrent(part.reasoning.origin)) {
+        text += part.reasoning.text ?? "";
+        seen = true;
+      } else {
+        recordNote(
+          {
+            stage: "encode",
+            adapter: "openai",
+            code: "reasoning_dropped",
+            path: "reasoning_content",
+          },
+          "Dropping reasoning part (origin does not match the current attempt)",
+        );
+      }
+      continue;
+    }
+    if (part.signature !== undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "openai",
+          code: "reasoning_dropped",
+          path: "signature",
+        },
+        "Dropping signature (no OpenAI equivalent)",
+      );
+    }
+  }
+  for (const call of msg.toolCalls ?? []) {
+    if (call.signature !== undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "openai",
+          code: "reasoning_dropped",
+          path: "signature",
+        },
+        "Dropping signature (no OpenAI equivalent)",
+      );
+    }
+  }
+  // A matching part with no text (redacted, signature-only) emits no
+  // empty `reasoning_content`.
+  return seen && text !== "" ? text : undefined;
+}
+
 function convertFromCanonicalContent(
   content: string | CanonicalContentPart[],
 ):
@@ -580,7 +650,9 @@ function convertFromCanonicalContent(
     > {
   if (typeof content === "string") return content;
 
-  return content.map((part) => {
+  return content
+    .filter((part) => part.type !== "reasoning")
+    .map((part) => {
     const cacheControl = toCacheControl(part.cache);
     if (part.type === "text") {
       return {
@@ -610,9 +682,35 @@ export function toCanonicalResponse(
 ): CanonicalResponse {
   const choice = response.choices[0];
 
+  // v1.4 spec §3.3 (Task 8): `reasoning_content` / `reasoning`
+  // (DeepSeek, OpenRouter, vLLM) decode to a reasoning part with no
+  // signature, tagged with the attempt's origin. Field names per
+  // https://api-docs.deepseek.com/guides/reasoning_model (`reasoning_content`)
+  // and https://openrouter.ai/docs/use-cases/reasoning-tokens (`reasoning`).
+  const wire = choice?.message as
+    | { content?: string | null; reasoning_content?: unknown; reasoning?: unknown }
+    | undefined;
+  const reasoningText =
+    typeof wire?.reasoning_content === "string"
+      ? wire.reasoning_content
+      : typeof wire?.reasoning === "string"
+        ? wire.reasoning
+        : undefined;
   const message: CanonicalMessage = {
     role: "assistant",
-    content: choice?.message?.content ?? "",
+    content:
+      reasoningText !== undefined && reasoningText !== ""
+        ? [
+            {
+              type: "reasoning",
+              reasoning: {
+                text: reasoningText,
+                origin: decodeOrigin(model || response.model),
+              },
+            },
+            { type: "text", text: wire?.content ?? "" },
+          ]
+        : (wire?.content ?? ""),
   };
 
   if (choice?.message?.tool_calls) {
@@ -749,6 +847,16 @@ export function fromCanonicalResponse(
       },
     }));
 
+  // A parts array may carry reasoning and signatures — an OpenAI
+  // client never receives them, so only text parts are rendered.
+  const text =
+    typeof response.message.content === "string"
+      ? response.message.content
+      : (response.message.content ?? [])
+          .filter((p) => p.type === "text")
+          .map((p) => p.text)
+          .join("");
+
   return {
     id: response.id || `chatcmpl-${randomUUID()}`,
     object: "chat.completion",
@@ -759,10 +867,7 @@ export function fromCanonicalResponse(
         index: 0,
         message: {
           role: "assistant",
-          content:
-            typeof response.message.content === "string"
-              ? response.message.content
-              : "",
+          content: text,
           refusal: null,
           ...(toolCalls && { tool_calls: toolCalls }),
         },
