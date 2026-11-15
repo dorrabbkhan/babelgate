@@ -13,6 +13,7 @@ import { makeCanonicalError } from "../../utils/canonical-error";
 import { parseToolArguments } from "../../utils/tool-args";
 import { createLineSplitter, createUtf8Decoder } from "../../utils/sse";
 import { logger } from "../../utils/logger";
+import { decodeOrigin } from "../reasoning-origin";
 import { fromCanonicalError, toCanonicalError } from "./ollama.adapter";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -58,6 +59,9 @@ export function createStreamDecoder(
   let finished = false;
   let nextIndex = 0;
   let sawToolCalls = false;
+  let thinkingIndex = -1;
+  let thinkingOpen = false;
+  const origin = decodeOrigin(model);
 
   function handleObject(obj: Obj, out: CanonicalStreamEvent[]): void {
     if (typeof obj.error === "string") {
@@ -74,10 +78,32 @@ export function createStreamDecoder(
       });
     }
     const message = obj.message;
+    // Task 8 (spec §3.3): `message.thinking` fragments decode to
+    // reasoning deltas — one block per contiguous thinking run.
+    if (
+      typeof message?.thinking === "string" &&
+      message.thinking.length > 0
+    ) {
+      if (!thinkingOpen) {
+        thinkingOpen = true;
+        thinkingIndex += 1;
+        out.push({
+          type: "reasoning_start",
+          index: thinkingIndex,
+          origin,
+        });
+      }
+      out.push({
+        type: "reasoning_delta",
+        index: thinkingIndex,
+        text: message.thinking,
+      });
+    }
     if (
       typeof message?.content === "string" &&
       message.content.length > 0
     ) {
+      thinkingOpen = false;
       out.push({ type: "text_delta", text: message.content });
     }
     const toolCalls = message?.tool_calls;

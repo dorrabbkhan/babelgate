@@ -22,7 +22,8 @@ import type {
   CanonicalUsage,
 } from "../../types/canonical.types";
 import { recordNote } from "../../observe/context";
-import { toOutputContent } from "./responses.items";
+import { decodeOrigin } from "../reasoning-origin";
+import { toOutputContent, toReasoningItem } from "./responses.items";
 import type {
   ResponsesOutputItem,
   ResponsesResponse,
@@ -85,6 +86,30 @@ export function toCanonicalResponse(
       });
       continue;
     }
+    if (typed.type === "reasoning") {
+      // v1.4 spec §3.3 (Task 8): an upstream `reasoning` item is a
+      // reasoning part whose signature is `encrypted_content` — the
+      // opaque blob the same upstream wants replayed verbatim.
+      // `summary` carries the visible reasoning text.
+      const r = item as {
+        summary?: Array<{ type?: string; text?: string }>;
+        encrypted_content?: unknown;
+      };
+      const text = (r.summary ?? [])
+        .filter((s) => s.type === "summary_text")
+        .map((s) => s.text ?? "")
+        .join("");
+      const origin = decodeOrigin(model);
+      parts.push({
+        type: "reasoning",
+        reasoning: { text, origin },
+        ...(typeof r.encrypted_content === "string" &&
+          r.encrypted_content !== "" && {
+            signature: { origin, data: r.encrypted_content },
+          }),
+      });
+      continue;
+    }
     if (typed.type === "custom_tool_call") {
       // `custom_tool_call` output items per
       // https://platform.openai.com/docs/api-reference/responses/object
@@ -113,7 +138,7 @@ export function toCanonicalResponse(
       });
       continue;
     }
-    // reasoning (Task 8), server-side calls.
+    // Server-side calls and unknown items.
     note(
       "field_dropped",
       `output[${i}]`,
@@ -246,6 +271,17 @@ export function fromCanonicalResponse(
   const status = toResponsesStatus(response.finishReason);
   const output: Array<Record<string, unknown>> = [];
   let itemSeq = 0;
+
+  // Task 8 (spec §3.3): one `reasoning` output item before the
+  // message/call items when the turn carries reasoning parts or
+  // signatures — the `bg1.` envelope returns them to the client
+  // verbatim (no origin filter: the client owns its history).
+  const reasoningItem = toReasoningItem(
+    response.message,
+    () => `rs_${itemSeq++}`,
+    true,
+  );
+  if (reasoningItem !== undefined) output.push(reasoningItem);
 
   const content = toOutputContent(response.message.content);
   if (content.length > 0) {

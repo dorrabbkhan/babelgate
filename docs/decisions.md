@@ -4880,3 +4880,53 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   (stream via `expectedEvents`; non-stream via the new
   `"max_tokens nonStreaming text signature decoded verbatim"` test).
   No other assertion changed.
+
+## v1.4 Task 8: reasoning envelope + passback (OpenAI/Ollama/Responses); Anthropic continuity guard
+
+- **Envelope (`responses.envelope.ts`, new):** `packEnvelope`/`unpackEnvelope`
+  per the task's Interfaces — `"bg1." + base64url(JSON{v:1, reasoning, signatures})`,
+  `undefined` when the encoded JSON exceeds 1 048 576 bytes or the input isn't a
+  valid `bg1.` payload. No runtime deps (`Buffer` base64url).
+- **Responses items (`responses.items.ts`):** `InputDecodeState` buffers
+  `reasoning` input items (unpacked `encrypted_content`) until the following
+  assistant item attaches them; signatures resolve by `toolCallId`, else
+  `textIndex` within that turn. Trailing envelopes resolve against the
+  *preceding* assistant run (`attachIndex`) so multi-turn Codex bodies decode.
+  Non-`bg1.` `encrypted_content` → `reasoning_dropped` (spec §3.3). Encode side:
+  `toReasoningItem(message, id, clientFacing)` emits one `reasoning` item before
+  the message/function_call items it explains — `summary` text parts plus
+  `encrypted_content` when the pack fits; over the cap the item goes out without
+  it + `reasoning_dropped` (`envelope_too_large`). Upstream-bound encoding
+  origin-filters parts/signatures; client-facing response encoding keeps them.
+- **Responses stream:** decoder emits `reasoning_start`/`reasoning_delta`/
+  `reasoning_signature` for `reasoning` output items (summary text + packed
+  envelope signature); encoder emits the spec §3.3 event order
+  (`output_item.added` → `reasoning_summary_part.added` →
+  `reasoning_summary_text.delta`* → `.done` → `output_item.done` with
+  `encrypted_content` on the part done).
+- **OpenAI-compatible:** `message.reasoning_content`/`message.reasoning` and the
+  same delta fields decode to reasoning parts (`decodeOrigin(model)`); encode
+  writes `reasoning_content` back on assistant messages that carry parts —
+  reached only when `reasoning_passback` kept them (below).
+- **Ollama:** `message.thinking` ↔ reasoning part, same decode origin;
+  `think`/`thinking` wire shape unchanged. Signatures have no Ollama wire slot —
+  always stripped for the target.
+- **`reasoning_passback`:** `ProviderEntry.reasoningPassback?: boolean` ⇐ YAML
+  `reasoning_passback` (gateway schema + `yaml-config.ts`). `canonicalForTarget`
+  strips reasoning parts and all signatures for `openai`/`ollama` targets unless
+  the entry opts in (`reasoning_dropped` note) — adapters stay config-free.
+- **Anthropic continuity guard:** after `applyReasoning`, if `thinking` is
+  enabled and the last assistant turn with `toolCalls` has no reasoning part
+  matching the current origin **with** a matching signature, `thinking` (and an
+  effort-only `output_config`) is removed + `reasoning_dropped`
+  (`thinking_disabled_no_prior_block`).
+- **Files outside the Files block:** none yet — but see the open item below.
+- **Open item (escalated, not resolved):** `tests/contracts/stream-decoders.test.ts`
+  `"ollama decoder ignores thinking"` (added 2026-10-27, commit `572d9c8`,
+  pre-Task-2 reasoning parts) asserts `message.thinking` produces no canonical
+  events — the exact v1.3 behaviour spec §3.3 replaces ("Ollama `thinking` →
+  reasoning part"). The file is outside Task 8's Files block and the plan allows
+  no existing expected-value changes beyond D7/D8, so the conflict was stopped
+  and reported rather than resolved in-session. Needed decision: approve updating
+  that test's expected events to include `reasoning_start` + `reasoning_delta`
+  (origin `{provider:"", model:"qwen3:0.6b"}` per the non-attempt convention).

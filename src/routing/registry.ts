@@ -33,6 +33,11 @@ export interface ProviderEntry {
    * client (spec §3.7, D5) — opt-in per provider, default off.
    */
   repairToolCalls?: boolean;
+  /**
+   * Send reasoning parts back as `reasoning_content`/`thinking`
+   * (openai/ollama targets only, spec §3.3) — opt-in, default off.
+   */
+  reasoningPassback?: boolean;
   timeoutMs?: number;
   streamIdleMs?: number;
 }

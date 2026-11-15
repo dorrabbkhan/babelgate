@@ -1062,3 +1062,69 @@ describe("cache hints on tool results (Task 17a)", () => {
     });
   });
 });
+
+// ===== v1.4 Task 8: thinking decode + passback (spec §3.3) =====
+
+import { runWithAttempt } from "../../observe/context";
+import { canonicalForTarget } from "../../services/attempt-targets";
+import type { ProviderEntry } from "../../routing/registry";
+import type { CanonicalReasoningOrigin } from "../../types/canonical.types";
+
+describe("thinking (v1.4 spec §3.3)", () => {
+  const ATTEMPT = { providerName: "oll", upstreamModel: "qwen3:8b" };
+  const ORIGIN: CanonicalReasoningOrigin = {
+    provider: "oll",
+    model: "qwen3:8b",
+  };
+
+  it("thinking decoded; passback only with the flag", () => {
+    const response = {
+      model: "qwen3:8b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: { role: "assistant", content: "answer", thinking: "hmm" },
+      done: true,
+    } as unknown as OllamaChatResponse;
+
+    const canonical = runWithAttempt(ATTEMPT, () =>
+      toCanonicalResponse(response, "qwen3:8b"),
+    );
+    expect(canonical.message.content).toEqual([
+      {
+        type: "reasoning",
+        reasoning: { text: "hmm", origin: ORIGIN },
+      },
+      { type: "text", text: "answer" },
+    ]);
+
+    // Passback gated on the entry flag — same reasoning part encodes
+    // as `thinking` only when the entry opts in.
+    const request = {
+      model: "qwen3:8b",
+      messages: [
+        { role: "user" as const, content: "hi" },
+        {
+          role: "assistant" as const,
+          content: canonical.message.content,
+        },
+      ],
+    };
+    const target = { provider: "oll", model: "qwen3:8b" };
+    const base: ProviderEntry = {
+      name: "oll",
+      type: "ollama",
+      baseUrl: "http://x",
+    };
+
+    const stripped = canonicalForTarget(request, base, target);
+    const wireOff = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest(stripped),
+    );
+    expect(wireOff.messages?.[1]).not.toHaveProperty("thinking");
+
+    const kept = canonicalForTarget(request, { ...base, reasoningPassback: true }, target);
+    const wireOn = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest(kept),
+    );
+    expect(wireOn.messages?.[1].thinking).toBe("hmm");
+  });
+});

@@ -51,6 +51,8 @@ import { systemText } from "../system-text";
 import {
   decodeInputItem,
   encodeMessage,
+  createInputDecodeState,
+  flushPendingReasoning,
 } from "./responses.items";
 import {
   toCanonicalTool,
@@ -163,9 +165,11 @@ export function toCanonicalRequest(
   if (typeof input === "string") {
     messages.push({ role: "user", content: input });
   } else if (Array.isArray(input)) {
+    const state = createInputDecodeState();
     input.forEach((item, i) =>
-      decodeInputItem(item, i, messages, systemTexts),
+      decodeInputItem(item, i, messages, systemTexts, state),
     );
+    flushPendingReasoning(state, messages);
   }
 
   for (const field of DROPPED_REQUEST_FIELDS) {
@@ -421,8 +425,10 @@ export function fromCanonicalRequest(
         .map((c) => c.id),
     ),
   );
+  let itemSeq = 0;
+  const itemId = () => `rs_${itemSeq++}`;
   for (const message of request.messages) {
-    input.push(...encodeMessage(message, customCallIds));
+    input.push(...encodeMessage(message, customCallIds, itemId));
   }
 
   const result: Record<string, unknown> = {

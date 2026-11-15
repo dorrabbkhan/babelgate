@@ -10,6 +10,7 @@ import type {
 import type { ChatCompletionRequest } from "../../types/openai.types";
 import { createIdGenerator } from "../../utils/ids";
 import { makeCanonicalError } from "../../utils/canonical-error";
+import { decodeOrigin } from "../reasoning-origin";
 import {
   createLineSplitter,
   createUtf8Decoder,
@@ -58,6 +59,11 @@ export function createStreamDecoder(
   let nextIndex = 0;
   const callsByWire = new Map<number, number>();
   const openCalls: number[] = [];
+  // Task 8 (spec §3.3): `reasoning_content`/`reasoning` deltas —
+  // one reasoning block per contiguous run (DeepSeek, OpenRouter).
+  let reasoningIndex = -1;
+  let reasoningOpen = false;
+  const origin = decodeOrigin(model);
 
   function closeAll(out: CanonicalStreamEvent[]): void {
     for (const index of openCalls.splice(0)) {
@@ -82,10 +88,34 @@ export function createStreamDecoder(
     }
     for (const choice of chunk.choices ?? []) {
       const delta = choice?.delta;
+      const reasoning =
+        typeof delta?.reasoning_content === "string"
+          ? delta.reasoning_content
+          : typeof delta?.reasoning === "string"
+            ? delta.reasoning
+            : undefined;
+      if (reasoning !== undefined && reasoning.length > 0) {
+        if (!reasoningOpen) {
+          reasoningOpen = true;
+          reasoningIndex += 1;
+          out.push({
+            type: "reasoning_start",
+            index: reasoningIndex,
+            origin,
+          });
+        }
+        out.push({
+          type: "reasoning_delta",
+          index: reasoningIndex,
+          text: reasoning,
+        });
+      }
       if (typeof delta?.content === "string" && delta.content.length > 0) {
+        reasoningOpen = false;
         out.push({ type: "text_delta", text: delta.content });
       }
       for (const tc of delta?.tool_calls ?? []) {
+        reasoningOpen = false;
         const wireIndex = typeof tc.index === "number" ? tc.index : 0;
         let index = callsByWire.get(wireIndex);
         if (index === undefined) {

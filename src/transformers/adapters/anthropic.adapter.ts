@@ -18,7 +18,11 @@ import {
 import { recordNote } from "../../observe/context";
 import { UnsupportedResponseFormatError } from "../../utils/errors";
 import { budgetFor } from "../reasoning-effort";
-import { decodeOrigin } from "../reasoning-origin";
+import {
+  decodeOrigin,
+  originMatchesCurrent,
+  signatureMatchesCurrent,
+} from "../reasoning-origin";
 import {
   DEFAULT_RESPONSE_FORMAT_NAME,
   isSchemaObject,
@@ -503,9 +507,62 @@ export function fromCanonicalRequest(
   }
 
   applyReasoning(result, request);
+  applyContinuityGuard(result, request);
   applyResponseFormat(result, request);
 
   return result;
+}
+
+/**
+ * Task 8 (spec §3.2): a thinking-enabled request whose last
+ * tool-calling assistant turn carries no reasoning part of THIS
+ * attempt's origin (provider + model, signature included) 400s
+ * upstream — Anthropic expects a thinking block on that turn. The
+ * guard removes `thinking` (and `output_config.effort`, which would
+ * imply it) and records `reasoning_dropped`/
+ * `thinking_disabled_no_prior_block`.
+ */
+function applyContinuityGuard(
+  result: MessageCreateParams,
+  request: CanonicalRequest,
+): void {
+  if ((result as { thinking?: unknown }).thinking === undefined) return;
+  const lastCallTurn = [...request.messages]
+    .reverse()
+    .find((m) => m.role === "assistant" && (m.toolCalls ?? []).length > 0);
+  if (lastCallTurn === undefined) return;
+  const parts = Array.isArray(lastCallTurn.content)
+    ? lastCallTurn.content
+    : [];
+  const hasOwnBlock = parts.some(
+    (p) =>
+      p.type === "reasoning" &&
+      p.reasoning !== undefined &&
+      originMatchesCurrent(p.reasoning.origin) &&
+      p.signature !== undefined &&
+      signatureMatchesCurrent(p.signature),
+  );
+  if (hasOwnBlock) return;
+  delete (result as { thinking?: unknown }).thinking;
+  const outputConfig = (result as { output_config?: Record<string, unknown> })
+    .output_config;
+  if (outputConfig !== undefined && "effort" in outputConfig) {
+    const { effort: _e, ...rest } = outputConfig;
+    if (Object.keys(rest).length === 0) {
+      delete (result as { output_config?: unknown }).output_config;
+    } else {
+      (result as { output_config?: unknown }).output_config = rest;
+    }
+  }
+  recordNote(
+    {
+      stage: "encode",
+      adapter: "anthropic",
+      code: "reasoning_dropped",
+      path: "thinking_disabled_no_prior_block",
+    },
+    "Disabling thinking: the last tool-call turn has no reasoning block of this origin",
+  );
 }
 
 /**

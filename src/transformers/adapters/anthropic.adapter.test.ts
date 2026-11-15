@@ -2327,3 +2327,128 @@ describe('Anthropic Adapter', () => {
     });
   });
 });
+
+// ===== v1.4 Task 8: continuity guard (spec §3.2) =====
+
+describe('continuity guard (v1.4 spec §3.2)', () => {
+  const ATTEMPT = {
+    providerName: 'claude',
+    upstreamModel: 'claude-opus-4-5',
+  };
+
+  const foreignMsg = {
+    role: 'assistant' as const,
+    content: [
+      {
+        type: 'reasoning' as const,
+        reasoning: {
+          text: 'gemini thought',
+          origin: { provider: 'gem', model: 'gem-1' },
+        },
+        signature: {
+          origin: { provider: 'gem', model: 'gem-1' },
+          data: 'sig-foreign',
+        },
+      },
+    ],
+    toolCalls: [
+      {
+        id: 'call_1',
+        type: 'function' as const,
+        function: { name: 'get_weather', arguments: '{}' },
+        signature: {
+          origin: { provider: 'gem', model: 'gem-1' },
+          data: 'sig-foreign',
+        },
+      },
+    ],
+  };
+
+  it('continuity guard disables thinking after a foreign turn', () => {
+    // Task 8: a thinking-enabled tool loop whose last tool-calling
+    // assistant turn carries no reasoning block of THIS origin must
+    // not enable Anthropic thinking — the upstream 400s the pair.
+    const request = {
+      model: 'claude-opus-4-5',
+      messages: [
+        { role: 'user' as const, content: 'hi' },
+        foreignMsg,
+        { role: 'tool' as const, content: 'sunny', toolCallId: 'call_1' },
+        { role: 'user' as const, content: 'next' },
+      ],
+      config: {
+        maxTokens: 4096,
+        reasoning: { effort: 'medium' as const },
+      },
+    };
+
+    let wire: ReturnType<typeof fromCanonicalRequest> | undefined;
+    const trace = traced(() => {
+      wire = runWithAttempt(ATTEMPT, () => fromCanonicalRequest(request));
+    });
+
+    expect(wire?.thinking).toBeUndefined();
+    expect(
+      trace.notes.some(
+        (n) =>
+          n.code === 'reasoning_dropped' &&
+          n.path === 'thinking_disabled_no_prior_block',
+      ),
+    ).toBe(true);
+  });
+
+  it('guard passes with a same-origin reasoning block on the last tool-call turn', () => {
+    const request = {
+      model: 'claude-opus-4-5',
+      messages: [
+        { role: 'user' as const, content: 'hi' },
+        {
+          role: 'assistant' as const,
+          content: [
+            {
+              type: 'reasoning' as const,
+              reasoning: {
+                text: 'own thought',
+                origin: { provider: 'claude', model: 'claude-opus-4-5' },
+              },
+              signature: {
+                origin: { provider: 'claude', model: 'claude-opus-4-5' },
+                data: 'sig-own',
+              },
+            },
+          ],
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function' as const,
+              function: { name: 'get_weather', arguments: '{}' },
+            },
+          ],
+        },
+        { role: 'tool' as const, content: 'sunny', toolCallId: 'call_1' },
+        { role: 'user' as const, content: 'next' },
+      ],
+      config: {
+        maxTokens: 8192,
+        reasoning: { effort: 'medium' as const },
+      },
+    };
+
+    const wire = runWithAttempt(ATTEMPT, () => fromCanonicalRequest(request));
+    expect(wire.thinking).toEqual({ type: 'enabled', budget_tokens: expect.any(Number) });
+  });
+
+  it('no tool-call turn → guard does not apply', () => {
+    const wire = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest({
+        model: 'claude-opus-4-5',
+        messages: [{ role: 'user', content: 'hi' }],
+        config: {
+          maxTokens: 8192,
+          reasoning: { effort: 'medium' as const },
+        },
+      }),
+    );
+    expect(wire.thinking).toBeDefined();
+  });
+});

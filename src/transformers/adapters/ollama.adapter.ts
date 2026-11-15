@@ -23,6 +23,7 @@ import {
   noteDroppedFormatExtras,
 } from "../response-format";
 import { systemText } from "../system-text";
+import { decodeOrigin, originMatchesCurrent } from "../reasoning-origin";
 import type {
   OllamaChatRequest,
   OllamaChatResponse,
@@ -374,6 +375,13 @@ function convertToOllamaMessage(
     if (images.length > 0) {
       result.images = images;
     }
+    // v1.4 spec §3.3 (Task 8): reasoning parts become `thinking`
+    // when they survive canonicalForTarget — only reasoning_passback
+    // entries keep them. Origin-checked like every encoder.
+    if (msg.role === "assistant") {
+      const thinking = thinkingText(msg);
+      if (thinking !== undefined) result.thinking = thinking;
+    }
   }
 
   if (msg.toolCalls && msg.toolCalls.length > 0) {
@@ -389,6 +397,46 @@ function convertToOllamaMessage(
   return result;
 }
 
+/**
+ * An assistant message's reasoning text — matching-origin parts
+ * joined in order for `message.thinking`; foreign parts and
+ * signatures (no Ollama slot) drop with `reasoning_dropped` (spec
+ * §3.2).
+ */
+function thinkingText(msg: CanonicalMessage): string | undefined {
+  if (!Array.isArray(msg.content)) return undefined;
+  let text = "";
+  let seen = false;
+  for (const part of msg.content) {
+    if (part.type === "reasoning" && part.reasoning) {
+      if (originMatchesCurrent(part.reasoning.origin)) {
+        text += part.reasoning.text ?? "";
+        seen = true;
+      } else {
+        dropReasoning("thinking");
+      }
+      continue;
+    }
+    if (part.signature !== undefined) dropReasoning("signature");
+  }
+  for (const call of msg.toolCalls ?? []) {
+    if (call.signature !== undefined) dropReasoning("signature");
+  }
+  return seen ? text : undefined;
+}
+
+function dropReasoning(path: string): void {
+  recordNote(
+    {
+      stage: "encode",
+      adapter: "ollama",
+      code: "reasoning_dropped",
+      path,
+    },
+    `Dropping ${path} (no Ollama slot or foreign origin)`,
+  );
+}
+
 // ============ RESPONSE: Ollama → Canonical ============
 
 export function toCanonicalResponse(
@@ -396,9 +444,23 @@ export function toCanonicalResponse(
   model: string,
   ids: IdGenerator = createIdGenerator(),
 ): CanonicalResponse {
+  // v1.4 spec §3.3 (Task 8): `message.thinking` decodes to a
+  // reasoning part with no signature, tagged with the attempt's
+  // origin.
+  const thinking = (response.message as { thinking?: unknown } | undefined)
+    ?.thinking;
   const message: CanonicalMessage = {
     role: "assistant",
-    content: response.message?.content ?? "",
+    content:
+      typeof thinking === "string" && thinking !== ""
+        ? [
+            {
+              type: "reasoning",
+              reasoning: { text: thinking, origin: decodeOrigin(model) },
+            },
+            { type: "text", text: response.message?.content ?? "" },
+          ]
+        : (response.message?.content ?? ""),
   };
   const wireCalls = response.message?.tool_calls as
     | OllamaWireToolCall[]

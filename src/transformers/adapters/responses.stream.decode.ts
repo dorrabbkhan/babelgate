@@ -29,6 +29,7 @@ import { createIdGenerator } from "../../utils/ids";
 import { makeCanonicalError } from "../../utils/canonical-error";
 import { createSseParser, createUtf8Decoder } from "../../utils/sse";
 import { logger } from "../../utils/logger";
+import { decodeOrigin } from "../reasoning-origin";
 import { toCanonicalResponse } from "./responses.response";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -77,6 +78,15 @@ export function createStreamDecoder(
   const seenItemIds = new Set<string>();
   const textItems = new Set<string>();
   const loggedTypes = new Set<string>();
+  // Task 8 (spec §3.3): reasoning output items decode to canonical
+  // reasoning events — summary deltas stream as reasoning_delta and
+  // `encrypted_content` becomes the part's signature, verbatim.
+  const origin = decodeOrigin(model);
+  let nextReasoningIndex = 0;
+  const reasoningByItem = new Map<
+    string,
+    { index: number; text: string; signed: boolean }
+  >();
 
   function ensureStarted(out: CanonicalStreamEvent[], response?: Obj): void {
     if (started) return;
@@ -190,8 +200,64 @@ export function createStreamDecoder(
     );
   }
 
+  /**
+   * `reasoning` output items (Task 8, spec §3.3): `output_item.added`
+   * opens a canonical reasoning block; summary deltas stream as
+   * `reasoning_delta`; the done item's `encrypted_content` becomes
+   * the block's signature — verbatim, it is the blob the same
+   * upstream wants replayed.
+   */
+  function reasoningBlock(item: Obj, out: CanonicalStreamEvent[]): void {
+    if (typeof item.id !== "string" || item.id === "") return;
+    if (reasoningByItem.has(item.id)) return;
+    const block = { index: nextReasoningIndex++, text: "", signed: false };
+    reasoningByItem.set(item.id, block);
+    out.push({ type: "reasoning_start", index: block.index, origin });
+  }
+
+  function reasoningItemDone(
+    item: Obj,
+    out: CanonicalStreamEvent[],
+  ): void {
+    ensureStarted(out);
+    if (typeof item.id !== "string" || item.id === "") return;
+    if (!reasoningByItem.has(item.id)) reasoningBlock(item, out);
+    const block = reasoningByItem.get(item.id)!;
+    // Summary text that never streamed arrives complete on the item.
+    const summary = Array.isArray(item.summary)
+      ? (item.summary as Array<{ type?: string; text?: string }>)
+      : [];
+    const full = summary
+      .filter((s) => s.type === "summary_text")
+      .map((s) => s.text ?? "")
+      .join("");
+    if (full !== "" && full !== block.text) {
+      const delta = full.startsWith(block.text)
+        ? full.slice(block.text.length)
+        : full;
+      block.text = full;
+      out.push({ type: "reasoning_delta", index: block.index, text: delta });
+    }
+    if (
+      typeof item.encrypted_content === "string" &&
+      item.encrypted_content !== "" &&
+      !block.signed
+    ) {
+      block.signed = true;
+      out.push({
+        type: "reasoning_signature",
+        index: block.index,
+        signature: { origin, data: item.encrypted_content },
+      });
+    }
+  }
+
   /** Emit the events of one terminal `output[]` item never streamed. */
   function reconcileItem(item: Obj, out: CanonicalStreamEvent[]): void {
+    if (item.type === "reasoning") {
+      reasoningItemDone(item, out);
+      return;
+    }
     if (item.type === "message") {
       // A message item is reconciled unless its item_id already
       // produced text (delta or done); `output_item.added` alone does
@@ -268,6 +334,11 @@ export function createStreamDecoder(
       case "response.output_item.added": {
         const item = event.item ?? {};
         if (typeof item.id === "string") seenItemIds.add(item.id);
+        if (item.type === "reasoning") {
+          ensureStarted(out);
+          reasoningBlock(item, out);
+          break;
+        }
         if (isCallItem(item)) {
           ensureStarted(out);
           const call = openCall(item, out);
@@ -280,6 +351,10 @@ export function createStreamDecoder(
       case "response.output_item.done": {
         const item = event.item ?? {};
         if (typeof item.id === "string") seenItemIds.add(item.id);
+        if (item.type === "reasoning") {
+          reasoningItemDone(item, out);
+          break;
+        }
         if (!isCallItem(item)) break;
         let call =
           typeof item.id === "string"
@@ -379,6 +454,55 @@ export function createStreamDecoder(
         }
         break;
       }
+      case "response.reasoning_summary_text.delta": {
+        const block =
+          typeof event.item_id === "string"
+            ? reasoningByItem.get(event.item_id)
+            : undefined;
+        if (
+          block !== undefined &&
+          typeof event.delta === "string" &&
+          event.delta !== ""
+        ) {
+          ensureStarted(out);
+          block.text += event.delta;
+          out.push({
+            type: "reasoning_delta",
+            index: block.index,
+            text: event.delta,
+          });
+        }
+        break;
+      }
+      case "response.reasoning_text.delta": {
+        const block =
+          typeof event.item_id === "string"
+            ? reasoningByItem.get(event.item_id)
+            : undefined;
+        if (
+          block !== undefined &&
+          typeof event.delta === "string" &&
+          event.delta !== ""
+        ) {
+          ensureStarted(out);
+          block.text += event.delta;
+          out.push({
+            type: "reasoning_delta",
+            index: block.index,
+            text: event.delta,
+          });
+        }
+        break;
+      }
+      case "response.reasoning_summary_part.added":
+      case "response.reasoning_summary_part.done":
+      case "response.reasoning_summary_text.done":
+      case "response.reasoning_text.done":
+      case "response.reasoning_summary.delta":
+        // Reasoning lifecycle frames carry no new payload —
+        // summary_text deltas and the done item's encrypted_content
+        // cover the reasoning data.
+        break;
       case "response.completed":
       case "response.incomplete": {
         const response = (event.response ?? {}) as Obj;
