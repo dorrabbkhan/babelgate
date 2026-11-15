@@ -61,6 +61,8 @@ export function createStreamDecoder(
   const openCalls: number[] = [];
   // Task 8 (spec §3.3): `reasoning_content`/`reasoning` deltas —
   // one reasoning block per contiguous run (DeepSeek, OpenRouter).
+  // Field names per https://api-docs.deepseek.com/guides/reasoning_model
+  // and https://openrouter.ai/docs/use-cases/reasoning-tokens.
   let reasoningIndex = -1;
   let reasoningOpen = false;
   const origin = decodeOrigin(model);

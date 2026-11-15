@@ -1793,7 +1793,7 @@ routes:
     const antBody = JSON.stringify(capturedRequests.anthropic[0]);
     expect(antBody).not.toContain("sig-gem-turn1");
     expect(antBody).not.toContain("sig-gem-call1");
-    expect(antBody).not.toContain("gemini thought");
+    expect(antBody).not.toContain("thinking about weather");
     expect(antBody).not.toContain('"thinking"');
 
     const reasoningItem2 = (t2.body.output as Array<{ type: string }>).find(
@@ -1828,5 +1828,91 @@ routes:
     expect(gem3).toContain("sig-gem-turn1");
     expect(gem3).not.toContain("sig-ant-turn2");
     expect(gem3).not.toContain("anthropic thinks");
+  });
+
+  it("openai client via gemini keeps the answer text", async () => {
+    // Task 8 fix round 1: a Gemini upstream reply that carries a
+    // thought part and a signed text part decodes to a parts array —
+    // the OpenAI client gets the joined text parts only (this bug was
+    // already on main via the Task 7/7a Gemini decode path).
+    process.env.GEMINI_API_KEY = "test-key";
+    useTarget("gemini", REASONING_YAML);
+    responseOverrides.gemini = {
+      body: {
+        candidates: [
+          {
+            content: {
+              role: "model",
+              parts: [
+                { text: "thinking…", thought: true },
+                { text: "the answer", thoughtSignature: "SIG" },
+              ],
+            },
+            finishReason: "STOP",
+            index: 0,
+          },
+        ],
+        modelVersion: "gem-1",
+      },
+    };
+
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        model: "gem-1",
+        messages: [{ role: "user", content: "hi" }],
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.choices[0].message.content).toBe("the answer");
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain("thinking…");
+    expect(body).not.toContain("SIG");
+  });
+
+  it("envelope over cap is omitted with a note (request)", async () => {
+    // Review Focus 3: the request-level 200 — a >1MB reasoning text
+    // from the upstream still answers, with the reasoning item's
+    // `encrypted_content` omitted and the drop noted on the trace.
+    useTarget("openai");
+    responseOverrides.openai = {
+      body: {
+        id: "chatcmpl-big",
+        object: "chat.completion",
+        created: 1,
+        model: "m",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "the answer",
+              reasoning_content: "x".repeat(1_200_000),
+            },
+            finish_reason: "stop",
+          },
+        ],
+      },
+    };
+
+    const before = traces.length;
+    const res = await request(app)
+      .post("/v1/responses")
+      .send({ model: "m", input: [userMsg("hi")], store: false });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    const reasoningItem = (
+      res.body.output as Array<Record<string, unknown>>
+    ).find((i) => i.type === "reasoning");
+    expect(reasoningItem).toBeDefined();
+    expect(reasoningItem).not.toHaveProperty("encrypted_content");
+
+    const trace = traces[before];
+    expect(trace).toBeDefined();
+    expect(trace.notes).toContainEqual({
+      stage: "encode",
+      adapter: "responses",
+      code: "reasoning_dropped",
+      path: "envelope_too_large",
+    });
   });
 });

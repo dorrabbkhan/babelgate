@@ -4907,7 +4907,11 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
 - **OpenAI-compatible:** `message.reasoning_content`/`message.reasoning` and the
   same delta fields decode to reasoning parts (`decodeOrigin(model)`); encode
   writes `reasoning_content` back on assistant messages that carry parts —
-  reached only when `reasoning_passback` kept them (below).
+  reached only when `reasoning_passback` kept them (below). Field names per
+  DeepSeek https://api-docs.deepseek.com/guides/reasoning_model and OpenRouter
+  https://openrouter.ai/docs/use-cases/reasoning-tokens.
+- OpenAI/Ollama non-stream client encoders render text parts (also fixes the
+  Task 7/7a Gemini-upstream path).
 - **Ollama:** `message.thinking` ↔ reasoning part, same decode origin;
   `think`/`thinking` wire shape unchanged. Signatures have no Ollama wire slot —
   always stripped for the target.

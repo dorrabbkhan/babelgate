@@ -422,7 +422,9 @@ function thinkingText(msg: CanonicalMessage): string | undefined {
   for (const call of msg.toolCalls ?? []) {
     if (call.signature !== undefined) dropReasoning("signature");
   }
-  return seen ? text : undefined;
+  // A matching part with no text (redacted, signature-only) emits no
+  // empty `thinking`.
+  return seen && text !== "" ? text : undefined;
 }
 
 function dropReasoning(path: string): void {
@@ -493,10 +495,15 @@ export function toCanonicalResponse(
 export function fromCanonicalResponse(
   response: CanonicalResponse,
 ): OllamaChatResponse {
+  // A parts array may carry reasoning and signatures — an Ollama
+  // client never receives them, so only text parts are rendered.
   const content =
     typeof response.message.content === "string"
       ? response.message.content
-      : "";
+      : (response.message.content ?? [])
+          .filter((p) => p.type === "text")
+          .map((p) => p.text)
+          .join("");
   const toolCalls = response.message.toolCalls;
   // "stop" covers canonical "tool_call": recorded Ollama answers that
   // end in tool calls report done_reason "stop".

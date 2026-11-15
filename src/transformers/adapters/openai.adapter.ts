@@ -484,6 +484,8 @@ function convertFromCanonicalMessage(
     // `reasoning_content` when they survive canonicalForTarget — only
     // reasoning_passback entries keep them. Origin-checked like every
     // encoder: a foreign part drops with `reasoning_dropped`.
+    // Field name per DeepSeek (https://api-docs.deepseek.com/guides/reasoning_model)
+    // and OpenRouter (https://openrouter.ai/docs/use-cases/reasoning-tokens).
     const reasoningText = reasoningContent(msg);
     if (reasoningText !== undefined) {
       (assistantMsg as { reasoning_content?: string }).reasoning_content =
@@ -629,7 +631,9 @@ function reasoningContent(msg: CanonicalMessage): string | undefined {
       );
     }
   }
-  return seen ? text : undefined;
+  // A matching part with no text (redacted, signature-only) emits no
+  // empty `reasoning_content`.
+  return seen && text !== "" ? text : undefined;
 }
 
 function convertFromCanonicalContent(
@@ -680,7 +684,9 @@ export function toCanonicalResponse(
 
   // v1.4 spec §3.3 (Task 8): `reasoning_content` / `reasoning`
   // (DeepSeek, OpenRouter, vLLM) decode to a reasoning part with no
-  // signature, tagged with the attempt's origin.
+  // signature, tagged with the attempt's origin. Field names per
+  // https://api-docs.deepseek.com/guides/reasoning_model (`reasoning_content`)
+  // and https://openrouter.ai/docs/use-cases/reasoning-tokens (`reasoning`).
   const wire = choice?.message as
     | { content?: string | null; reasoning_content?: unknown; reasoning?: unknown }
     | undefined;
@@ -841,6 +847,16 @@ export function fromCanonicalResponse(
       },
     }));
 
+  // A parts array may carry reasoning and signatures — an OpenAI
+  // client never receives them, so only text parts are rendered.
+  const text =
+    typeof response.message.content === "string"
+      ? response.message.content
+      : (response.message.content ?? [])
+          .filter((p) => p.type === "text")
+          .map((p) => p.text)
+          .join("");
+
   return {
     id: response.id || `chatcmpl-${randomUUID()}`,
     object: "chat.completion",
@@ -851,10 +867,7 @@ export function fromCanonicalResponse(
         index: 0,
         message: {
           role: "assistant",
-          content:
-            typeof response.message.content === "string"
-              ? response.message.content
-              : "",
+          content: text,
           refusal: null,
           ...(toolCalls && { tool_calls: toolCalls }),
         },

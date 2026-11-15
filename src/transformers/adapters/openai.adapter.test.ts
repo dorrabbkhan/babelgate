@@ -465,6 +465,60 @@ describe('OpenAI Adapter', () => {
 
       expect(result.id).toMatch(/^chatcmpl-/);
     });
+
+    it('openai client gets the text when the upstream reasons', () => {
+      // Task 8 fix: a parts array may carry reasoning — an OpenAI
+      // client receives only the joined text parts.
+      const result = fromCanonicalResponse({
+        id: 'chatcmpl-r',
+        model: 'm',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'reasoning',
+              reasoning: {
+                text: 'hmm',
+                origin: { provider: '', model: 'm' },
+              },
+            },
+            { type: 'text', text: 'the answer' },
+          ],
+        },
+        finishReason: 'stop',
+      });
+
+      expect(result.choices[0].message.content).toBe('the answer');
+      const body = JSON.stringify(result);
+      expect(body).not.toContain('hmm');
+      expect(body).not.toContain('reasoning_content');
+    });
+
+    it('openai client gets the text of a signed text part', () => {
+      // Task 7a: a Gemini text part may carry a thoughtSignature —
+      // the client gets the text, never the signature.
+      const result = fromCanonicalResponse({
+        id: 'chatcmpl-s',
+        model: 'm',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: '1, 2',
+              signature: {
+                origin: { provider: '', model: 'gemini-3.5-flash-lite' },
+                data: 'SIG',
+              },
+            },
+          ],
+        },
+        finishReason: 'stop',
+      });
+
+      expect(result.choices[0].message.content).toBe('1, 2');
+      expect(JSON.stringify(result)).not.toContain('SIG');
+    });
   });
 
   describe('cached usage (spec §3.2)', () => {
@@ -1197,5 +1251,26 @@ describe('reasoning_content (v1.4 spec §3.3)', () => {
       code: 'reasoning_dropped',
       path: 'reasoning_content',
     });
+  });
+
+  it('a matching part with no text emits no reasoning_content', () => {
+    const wire = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest({
+        model: 'deepseek-v3',
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'reasoning',
+                reasoning: { redacted: true, origin: ORIGIN },
+              },
+              { type: 'text', text: 'answer' },
+            ],
+          },
+        ],
+      }),
+    ) as unknown as { messages: Array<Record<string, unknown>> };
+    expect(wire.messages[0]).not.toHaveProperty('reasoning_content');
   });
 });
