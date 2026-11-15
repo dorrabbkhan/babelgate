@@ -4702,6 +4702,29 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   signatures); outside one — unit tests, the fixture harness — the
   plan's `{provider: "", model}` convention. D7's fixture signature
   therefore carries `provider: ""`.
+- **Wire-format evidence (provider doc URLs)** —
+  - Anthropic `thinking {thinking, signature}` and
+    `redacted_thinking {data}`:
+    https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+    — the URL the code and test comments cite; that page defers the
+    response-shape detail to the Thinking page (`signature` at
+    `.../build-with-claude/thinking#thinking-encryption`,
+    `redacted_thinking`'s `data` at
+    `.../build-with-claude/thinking#redacted-thinking-blocks`).
+  - Anthropic stream `thinking_delta` / `signature_delta`: the
+    streaming section of the same doc set,
+    https://platform.claude.com/docs/en/build-with-claude/thinking#streaming-thinking
+    (a thinking block streams `thinking_delta`s inside
+    `content_block_delta`, then one `signature_delta` just before
+    `content_block_stop`).
+  - Gemini `thought: true`:
+    https://ai.google.dev/gemini-api/docs/thinking; part-level
+    `thoughtSignature` and the `skip_thought_signature_validator`
+    placeholder: https://ai.google.dev/gemini-api/docs/thought-signatures
+    (unsigned current-turn functionCall parts 400 with "missing a
+    `thought_signature`"). Both pages' generateContent variant is
+    the same URL under `?generate-content=true`; the code comments
+    cite the base URL.
 - **Text-part `thoughtSignature` dropped on decode (deviation)** —
   §3.3 names "a text part's `thoughtSignature` → that text part's
   signature", and the encode side honours signed text parts
@@ -4716,7 +4739,17 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   it in the non-stream decoder would break an oracle test that may
   not change. Both Gemini decoders therefore drop text-part
   signatures — stream: once per stream, non-stream: per part — with
-  a `reasoning_dropped` decode note. A canonical event for
+  a `reasoning_dropped` decode note. The doc backs the drop on
+  non-`functionCall` (text) parts: returning those signatures is
+  only recommended, never validated — "Returning these signatures
+  is **recommended** to ensure the model maintains high-quality
+  reasoning, especially for complex instruction following or
+  simulated agentic workflows" and "**Validation**: The API does
+  **not** strictly enforce validation. You won't receive a
+  blocking error if you omit them, though performance may
+  degrade."
+  (https://ai.google.dev/gemini-api/docs/thought-signatures,
+  "Signatures in non `functionCall` parts"). A canonical event for
   text-part signatures is follow-up work if Codex traffic needs it.
 - **Encode requires a matching signature** — a reasoning part is
   reinserted only when it carries a signature whose origin matches
