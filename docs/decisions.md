@@ -4920,13 +4920,15 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   matching the current origin **with** a matching signature, `thinking` (and an
   effort-only `output_config`) is removed + `reasoning_dropped`
   (`thinking_disabled_no_prior_block`).
-- **Files outside the Files block:** none yet — but see the open item below.
-- **Open item (escalated, not resolved):** `tests/contracts/stream-decoders.test.ts`
+- **Files outside the Files block:** `tests/contracts/stream-decoders.test.ts` —
+  the D9 change below.
+- **D9 (owner-approved 2026-11-15, PR #102, option 1):**
+  `tests/contracts/stream-decoders.test.ts`
   `"ollama decoder ignores thinking"` (added 2026-10-27, commit `572d9c8`,
-  pre-Task-2 reasoning parts) asserts `message.thinking` produces no canonical
-  events — the exact v1.3 behaviour spec §3.3 replaces ("Ollama `thinking` →
-  reasoning part"). The file is outside Task 8's Files block and the plan allows
-  no existing expected-value changes beyond D7/D8, so the conflict was stopped
-  and reported rather than resolved in-session. Needed decision: approve updating
-  that test's expected events to include `reasoning_start` + `reasoning_delta`
-  (origin `{provider:"", model:"qwen3:0.6b"}` per the non-attempt convention).
+  pre-Task-2 reasoning parts) was renamed `"ollama decoder maps thinking to
+  reasoning events"` and its expected events now include `reasoning_start` +
+  `reasoning_delta` (index 0, origin `{provider:"", model:"qwen3:0.6b"}` per the
+  non-attempt convention) before the `text_delta`, keeping `toEqual` and the
+  byte-identical NDJSON input. The decoder's real order matched the approved
+  expectation exactly (message_start → reasoning_start → reasoning_delta →
+  text_delta → usage → message_end).
