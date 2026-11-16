@@ -6,6 +6,7 @@ import {
   useOpenRouterAnthropic,
   useOpenRouterResponses,
   liveModel,
+  outputText,
   OPENROUTER_ANTHROPIC_MODEL,
   USAGE_CHECKS,
 } from './live.helpers';
@@ -97,7 +98,7 @@ function codexCases(configure: () => string) {
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.object).toBe('response');
-    expect(res.body.output_text).toBeTruthy();
+    expect(outputText(res.body)).toBeTruthy();
     USAGE_CHECKS.responses(res.body);
   });
 
@@ -111,9 +112,18 @@ function codexCases(configure: () => string) {
 
     expect(res.status, res.text).toBe(200);
     expect(res.headers['content-type']).toMatch(/text\/event-stream/);
-    // `event: <type>` lines per the Responses streaming reference.
-    expect(res.text).toContain('event: response.created');
-    expect(res.text).toContain('event: response.completed');
+    // OpenRouter's Responses SSE carries no `event:` lines (E19) and
+    // pass-through relays them verbatim, so the event type is read
+    // from each `data:` JSON — valid on all three targets.
+    const types = res.text
+      .split('\n')
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim())
+      .filter((data) => data !== '[DONE]')
+      .map((data) => (JSON.parse(data) as { type?: string }).type);
+    expect(types[0]).toBe('response.created');
+    expect(types).toContain('response.output_text.delta');
+    expect(types[types.length - 1]).toBe('response.completed');
   });
 
   it('tools', async () => {
@@ -136,13 +146,17 @@ function codexCases(configure: () => string) {
     const second = await request(app)
       .post('/v1/responses')
       .send(
-        codexBody(model, [...items, ...toolOutputs(items)], {
-          tools: [WEATHER_TOOL],
-          tool_choice: 'auto',
-        }),
+        codexBody(
+          model,
+          [userMsg('What is the weather in Paris?'), ...items, ...toolOutputs(items)],
+          {
+            tools: [WEATHER_TOOL],
+            tool_choice: 'auto',
+          },
+        ),
       );
     expect(second.status, JSON.stringify(second.body)).toBe(200);
-    expect(second.body.output_text).toBeTruthy();
+    expect(outputText(second.body)).toBeTruthy();
   });
 
   it('three-turn tool loop with reasoning', async () => {
@@ -171,7 +185,7 @@ function codexCases(configure: () => string) {
         items.filter((i) => i.type === 'function_call').length,
         `turn ${turn}: no function_call in output`,
       ).toBeGreaterThan(0);
-      input = [...items, ...toolOutputs(items)];
+      input = [...input, ...items, ...toolOutputs(items)];
     }
   });
 
@@ -210,7 +224,7 @@ function codexCases(configure: () => string) {
       );
 
     expect(res.status, JSON.stringify(res.body)).toBe(200);
-    const parsed = JSON.parse(res.body.output_text as string) as Record<
+    const parsed = JSON.parse(outputText(res.body)) as Record<
       string,
       unknown
     >;

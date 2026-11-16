@@ -408,6 +408,27 @@ export const MODEL_LIST_CHECKS: Record<Provider, (body: unknown) => void> = {
   },
 };
 
+/**
+ * The assistant text of a Responses-shaped body: every `output_text`
+ * content part of every `message` output item, concatenated (the
+ * Responses object reference). Pass-through bodies have no top-level
+ * `output_text` — that's a convenience field the bridge's encoder
+ * adds — so read the parts, not the field.
+ */
+export function outputText(body: unknown): string {
+  const output = (
+    body as {
+      output?: { type?: string; content?: { type?: string; text?: string }[] }[];
+    }
+  ).output;
+  return (output ?? [])
+    .filter((item) => item.type === 'message')
+    .flatMap((item) => item.content ?? [])
+    .filter((part) => part.type === 'output_text')
+    .map((part) => part.text ?? '')
+    .join('');
+}
+
 /** Pull the assistant text out of a source-shaped chat response. */
 export const ASSISTANT_TEXT: Record<
   Provider,
@@ -424,7 +445,7 @@ export const ASSISTANT_TEXT: Record<
     (b as { content?: { type?: string; text?: string }[] }).content?.find(
       (c) => c.type === 'text',
     )?.text,
-  responses: (b) => (b as { output_text?: string }).output_text,
+  responses: (b) => outputText(b) || undefined,
 };
 
 /**
