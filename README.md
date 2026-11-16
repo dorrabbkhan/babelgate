@@ -19,10 +19,10 @@ provider also gets byte-preserving pass-through to Responses-native
 upstreams (OpenRouter's Responses API, vLLM, Ollama's Responses endpoint,
 …): [docs/recipes/codex.md](docs/recipes/codex.md).
 
-![Claude Code fixing a failing test through babelgate on a free OpenRouter model](docs/assets/demo.gif)
+![Codex CLI fixing a failing test through babelgate, bridged to Claude on OpenRouter](docs/assets/demo-codex.gif)
 *Recorded with [scripts/demo](scripts/demo/); the model's thinking time is cut.*
 
-![Codex CLI fixing the same failing test through babelgate, bridged to Claude on OpenRouter](docs/assets/demo-codex.gif)
+![Claude Code fixing the same failing test through babelgate on a free OpenRouter model](docs/assets/demo.gif)
 *Recorded with [scripts/demo](scripts/demo/); the model's thinking time is cut.*
 
 ## Quick start: Claude Code on a local model
