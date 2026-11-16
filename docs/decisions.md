@@ -5230,19 +5230,23 @@ a past result.
   decision (options: gate without apply_patch; support responses-lite
   on the bridge; something else).
 
-**Gate results — OWNER to fill (do not write "Owner sign-off"):**
+**Gate results** (run by the owner on 2026-11-16 on branch `v1.4/task-14-codex-gates`, codex-cli 0.169.0, `model = "babelgate"`, `model_reasoning_effort = "medium"`, `examples/codex-model-catalog.json`; numbers copied from the `codex-edit.sh` output). `codex-edit.sh` does not print a cost figure; `--expect-cost` asserted that every gate had at least one priced row (`cost_usd` present):
 
 | Gate | Codex version | Model (config) | Duration | Cost | Result |
 |---|---|---|---|---|---|
-| A (Gemini bridge, `codex-gemini.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) |  |  |  |  |  |
-| B (Anthropic bridge, `codex-anthropic.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) |  |  |  |  |  |
-| C (OpenRouter `type: responses` pass-through, `codex-openrouter.yaml`, `--expect-cost --expect-passthrough`) |  |  |  |  |  |
+| A (Gemini bridge, `codex-gemini.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) | 0.169.0 | `gemini/gemini-3.8-flash` | 27s, 8 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (8 rows, gemini). Run at `10f9ff8`, before the observe-check fix (`fba4caf`, gate scripts only) and the continuity-guard fix (`11d31b3`, Anthropic adapter only). |
+| B (Anthropic bridge, `codex-anthropic.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) | 0.169.0 | `anthropic/anthropic/claude-haiku-4.5` (OpenRouter `/api/v1/messages`, E18) | 21s, 8 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (8 rows, anthropic) at `11d31b3`. First run (before the guard fix): GATE FAIL, `reasoning_dropped` from turn 3; see the entry below. |
+| C (OpenRouter `type: responses` pass-through, `codex-openrouter.yaml`, `--expect-cost --expect-passthrough`) | 0.169.0 | `openrouter/qwen/qwen3-coder` | 24s, 10 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (10 rows, openrouter, all pass-through) at `11d31b3`. First run: GATE FAIL, observe-check required a canonical stage (fixed in `fba4caf`). |
 
-- Catalog-shape recording (pre-gate check above): `jsonl: `,
-  `top-level tools with custom apply_patch: `, `responses-lite header
-  absent: `.
-- Live suite (`npm run test:live`, `tests/live/codex.live.test.ts`):
-  `summary: `.
+- Catalog-shape recording (pre-gate check above, conductor, 2026-11-16,
+  `record-codex.sh --model babelgate --catalog examples/codex-model-catalog.json --effort medium`):
+  1 request recorded (OpenRouter then 400'd the unknown model id `babelgate`, as expected);
+  top-level tools with custom apply_patch: **yes** (`custom:apply_patch`, `format: grammar/lark`);
+  responses-lite header absent: **yes** (no `additional_tools` input item);
+  `reasoning: {effort: medium, summary: auto}`, `include: ["reasoning.encrypted_content"]`.
+- Live suite (`tests/live/codex.live.test.ts` only, conductor, real keys, at `10f9ff8` and again at `11d31b3`):
+  `summary: Tests 16 passed (16)`: Gemini bridge, Anthropic bridge (direct `ANTHROPIC_API_KEY`) and
+  OpenRouter pass-through, five cases each, plus the offline shape pin. The full `npm run test:live` was not run.
 
 ### Continuity guard checks the loop start (owner decision 2026-11-16, PR #108 gate B)
 
