@@ -1,0 +1,14 @@
+diff --git a/assets/logo.png b/assets/logo.png
+index 1111111..2222222 100644
+Binary files a/assets/logo.png and b/assets/logo.png differ
+diff --git a/src/old.test.ts b/src/new.test.ts
+similarity index 100%
+rename from src/old.test.ts
+rename to src/new.test.ts
+diff --git a/src/foo.ts b/src/foo.ts
+index 3333333..4444444 100644
+--- a/src/foo.ts
++++ b/src/foo.ts
+@@ -1,10 +1,12 @@
+ line1
++added

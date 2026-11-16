@@ -54,4 +54,13 @@ restore_checkout() {
   fi
 }
 trap restore_checkout EXIT
-( cd "$REPO_DIR" && "${DEVIN_CMD[@]}" --prompt-file "$PROMPT" ) 2>&1 | tee "$OUT"
+# spec §3.0.2: stdout is only the session's last 30 lines plus its
+# PR_URL:/STOP: line; the full output stays in the saved .out.md.
+set +e
+( cd "$REPO_DIR" && "${DEVIN_CMD[@]}" --prompt-file "$PROMPT" ) >"$OUT" 2>&1
+rc=$?
+set -e
+restore_checkout
+trap - EXIT
+{ tail -30 "$OUT"; grep -E '^(PR_URL|STOP):' "$OUT" || true; } | awk '!seen[$0]++'
+exit "$rc"

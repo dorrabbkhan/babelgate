@@ -1,0 +1,11 @@
+diff --git a/tests/fixtures/openai/chat.request.json b/tests/fixtures/openai/chat.request.json
+index 1234567..89abcde 100644
+--- a/tests/fixtures/openai/chat.request.json
++++ b/tests/fixtures/openai/chat.request.json
+@@ -2,5 +2,5 @@
+   "model": "gpt-4o",
+   "messages": [
+-    {"role": "user", "content": "old"}
++    {"role": "user", "content": "new"}
+   ]
+ }

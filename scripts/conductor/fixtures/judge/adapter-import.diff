@@ -1,0 +1,10 @@
+diff --git a/src/transformers/adapters/openai.adapter.ts b/src/transformers/adapters/openai.adapter.ts
+index 1111111..2222222 100644
+--- a/src/transformers/adapters/openai.adapter.ts
++++ b/src/transformers/adapters/openai.adapter.ts
+@@ -1,4 +1,5 @@
+ import { x } from "../canonical";
++import { fromAnthropic } from "./anthropic.adapter";
+ import { y } from "./openai.messages";
+ const a = 1;
+ export { a };
