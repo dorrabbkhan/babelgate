@@ -1992,6 +1992,7 @@ function hydrateItem(item: RecordedItem): RecordedItem {
 function replayBody(
   recorded: RecordedItem,
   priors: LiveTurn[],
+  stream = false,
 ): RecordedItem {
   const input: RecordedItem[] = [];
   let k = 0;
@@ -2018,7 +2019,7 @@ function replayBody(
     if (key !== "input") body[key] = hydrateValue(v, key);
   }
   body.input = input;
-  body.stream = false;
+  body.stream = stream;
   body.store = false;
   body.parallel_tool_calls = true;
   body.reasoning = {
@@ -2091,6 +2092,97 @@ describe("codex replay three turns (v1.4 spec §4.2)", () => {
         .slice(traceStarts[0])
         .flatMap((t) => t.notes.map((n) => n.code));
       expect(notes).not.toContain("reasoning_dropped");
+    },
+  );
+
+  /**
+   * The same replay streamed — the path real Codex takes (it always
+   * sends `stream: true`, spec §2 E1, `codex-rs/core/src/client.rs`
+   * `build_responses_request`). The live items resent each turn are
+   * the `item`s of every `response.output_item.done` event in order
+   * — what Codex's parser accumulates (spec §2 E2,
+   * `codex-rs/codex-api/src/sse/responses.rs`).
+   */
+  it.each(CASES)(
+    "codex replay three turns on $target, streamed",
+    async ({ target, sigs }) => {
+      useTarget(target);
+      reasoningReply[target] = true;
+      // Gemini asks for a stream by URL (`:streamGenerateContent`),
+      // not a body flag — capture upstream URLs like
+      // stream.test.ts's captureUpstreamUrls.
+      const urls: string[] = [];
+      const onRequest = ({ request: req }: { request: Request }) => {
+        if (req.url.startsWith(MOCK_BASE_URLS[target])) urls.push(req.url);
+      };
+      server.events.on("request:start", onRequest);
+
+      try {
+        const priors: LiveTurn[] = [];
+        const traceStarts: number[] = [];
+        for (const recorded of TURNS) {
+          traceStarts.push(traces.length);
+          const res = await postResponsesStream(
+            replayBody(recorded, priors, true),
+          );
+          expect(res.status).toBe(200);
+          expect(res.headers["content-type"]).toContain(
+            "text/event-stream",
+          );
+          const wire = res.body as unknown as string;
+          expect(wire).toContain("response.completed");
+          const items = parseSseFrames(wire)
+            .filter((f) => f.type === "response.output_item.done")
+            .map((f) => f.item as RecordedItem);
+          const call = items.find((i) => i.type === "function_call");
+          priors.push({
+            items,
+            callId: call?.call_id as string | undefined,
+          });
+          await waitForTracesLocal(traceStarts.at(-1)! + 1);
+        }
+
+        // At least one resent item is a reasoning envelope.
+        expect(
+          priors
+            .flatMap((p) => p.items)
+            .some(
+              (i) =>
+                i.type === "reasoning" &&
+                typeof i.encrypted_content === "string" &&
+                i.encrypted_content.startsWith("bg1."),
+            ),
+        ).toBe(true);
+
+        const upstream = capturedRequests[target].map((b) =>
+          JSON.stringify(b),
+        );
+        expect(upstream).toHaveLength(3);
+        // Every upstream request asked for a stream.
+        if (target === "gemini") {
+          expect(urls).toHaveLength(3);
+          for (const u of urls) {
+            expect(u).toContain(":streamGenerateContent");
+          }
+        } else {
+          for (const b of capturedRequests.anthropic) {
+            expect((b as { stream?: unknown }).stream).toBe(true);
+          }
+        }
+        // Turn 2's upstream body carries turn 1's signatures; turn
+        // 3's carries both prior turns' (spec §4.2).
+        for (const s of sigs(1)) expect(upstream[1]).toContain(s);
+        for (const s of [...sigs(1), ...sigs(2)]) {
+          expect(upstream[2]).toContain(s);
+        }
+
+        const notes = traces
+          .slice(traceStarts[0])
+          .flatMap((t) => t.notes.map((n) => n.code));
+        expect(notes).not.toContain("reasoning_dropped");
+      } finally {
+        server.events.removeListener("request:start", onRequest);
+      }
     },
   );
 });

@@ -4972,6 +4972,24 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   and rewrites `function_call_output.call_id` to the live call id. `reasoning`
   gains `effort:"medium"` over the recorded `{summary:"auto"}` so the
   target-side reasoning encoders engage.
+- **Codex replay runs both non-streamed and streamed** (Codex always sends
+  `stream:true`, spec §1.2 E1 — `codex-rs/core/src/client.rs`
+  `build_responses_request`): the same `replayBody` drives a `stream:false`
+  pass and a `stream:true` pass that resends the `item` of every
+  `response.output_item.done` event (what Codex's parser accumulates, spec §1.2
+  E2 — `codex-rs/codex-api/src/sse/responses.rs`). `reasoningReplyStream`
+  serves the streamed twin of `reasoningReplyBody` for the dialects whose
+  streams carry signatures: Gemini `:streamGenerateContent?alt=sse` `data:`
+  frames — a `{text, thought:true, thoughtSignature}` part, a `functionCall`
+  part with its own `thoughtSignature`, then `finishReason:"STOP"` +
+  `usageMetadata` (https://ai.google.dev/gemini-api/docs/thought-signatures,
+  https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent);
+  Anthropic `message_start` → `content_block_start{thinking}` →
+  `thinking_delta` → `signature_delta` → `content_block_stop` →
+  `content_block_start{tool_use}` → `input_json_delta` → `content_block_stop`
+  → `message_delta` (`stop_reason:"tool_use"` + usage) → `message_stop`
+  (https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+  "Streaming thinking", https://docs.anthropic.com/en/api/messages-streaming).
 - **Privacy canary:** four new sentinels (reasoning text, thought signature,
   custom tool input, schema content) asserted absent from the log stream,
   `/metrics`, OTel spans, `/ui/api/live`, `/ui/api/routing` and `requests`

@@ -413,8 +413,11 @@ function cachedUsageStreamText(provider: Provider): string {
  * a call to `exec_command` (the tool the recorded Codex turns in
  * tests/fixtures/codex/turns.json drive). Signatures embed the
  * 1-based request ordinal (`sig-gem-2-…`) so a multi-turn test can
- * tell turn N's signature from turn N+1's. Non-streaming only — a
- * `stream: true` request falls through to the recorded corpus.
+ * tell turn N's signature from turn N+1's. Streaming requests get the
+ * same reply as provider SSE/NDJSON via reasoningReplyStream
+ * (implemented for the dialects whose streams carry signatures —
+ * Gemini, Anthropic); providers without a streamed twin still fall
+ * through to the recorded corpus.
  */
 export const reasoningReply: Partial<Record<Provider, boolean>> = {};
 
@@ -691,13 +694,104 @@ function cachedUsageResponse(
   return HttpResponse.json(cachedUsageBody(provider));
 }
 
+/**
+ * The streamed twin of reasoningReplyBody, served in 7-byte chunks
+ * like the recorded corpus: the same ordinal-marked signatures
+ * (`sig-gem-${n}-think`, `sig-gem-${n}-call`, `sig-ant-${n}-think`)
+ * and the same `exec_command` call, carried on each dialect's stream
+ * events. Providers whose stream can't carry a signature the corpus
+ * doesn't already have keep returning undefined — the request falls
+ * through to the recorded stream fixtures as before.
+ */
+function reasoningReplyStream(
+  provider: Provider,
+  n: number,
+): HttpResponse | undefined {
+  switch (provider) {
+    // `data:` frames of GenerateContentResponse per
+    // https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent
+    // (`:streamGenerateContent?alt=sse`); `thought: true` +
+    // `thoughtSignature` on the thought part and the signature on the
+    // `functionCall` part per
+    // https://ai.google.dev/gemini-api/docs/thought-signatures; the
+    // terminal frame carries `finishReason` + cumulative
+    // `usageMetadata`.
+    case "gemini":
+      return textStreamResponse(
+        [
+          `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"reasoning about turn ${n}","thought":true,"thoughtSignature":"sig-gem-${n}-think"}]},"index":0}],"modelVersion":"m"}`,
+          "",
+          `data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"exec_command","args":{"cmd":"ls"}},"thoughtSignature":"sig-gem-${n}-call"}]},"index":0}],"modelVersion":"m"}`,
+          "",
+          'data: {"candidates":[{"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":8,"totalTokenCount":18},"modelVersion":"m"}',
+          "",
+        ].join("\n"),
+        STREAM_CONTENT_TYPE.gemini,
+      );
+    // Event-typed SSE per
+    // https://docs.anthropic.com/en/api/messages-streaming and the
+    // "Streaming thinking" section of
+    // https://platform.claude.com/docs/en/build-with-claude/extended-thinking:
+    // a `thinking` block (index 0) streams `thinking_delta` then its
+    // `signature_delta`; a `tool_use` block (index 1) streams
+    // `input_json_delta.partial_json`; `message_delta` carries the
+    // stop reason and output usage; `message_stop` is terminal.
+    case "anthropic":
+      return textStreamResponse(
+        [
+          "event: message_start",
+          `data: {"type":"message_start","message":{"id":"msg_r${n}","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}`,
+          "",
+          "event: content_block_start",
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
+          "",
+          "event: content_block_delta",
+          `data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reasoning about turn ${n}"}}`,
+          "",
+          "event: content_block_delta",
+          `data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-ant-${n}-think"}}`,
+          "",
+          "event: content_block_stop",
+          'data: {"type":"content_block_stop","index":0}',
+          "",
+          "event: content_block_start",
+          `data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_${n}","name":"exec_command","input":{}}}`,
+          "",
+          "event: content_block_delta",
+          'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"cmd\\":\\"ls\\"}"}}',
+          "",
+          "event: content_block_stop",
+          'data: {"type":"content_block_stop","index":1}',
+          "",
+          "event: message_delta",
+          'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":8}}',
+          "",
+          "event: message_stop",
+          'data: {"type":"message_stop"}',
+          "",
+        ].join("\n"),
+        STREAM_CONTENT_TYPE.anthropic,
+      );
+    default:
+      return undefined;
+  }
+}
+
 /** Opt-in replies win over the corpus but never over responseOverrides. */
 function optinReply(
   provider: Provider,
   url: string,
   body: unknown,
 ): HttpResponse | undefined {
-  if (wantsStream(url, body)) return undefined;
+  if (wantsStream(url, body)) {
+    if (reasoningReply[provider]) {
+      return reasoningReplyStream(
+        provider,
+        capturedRequests[provider].length,
+      );
+    }
+    return undefined;
+  }
   if (reasoningReply[provider]) {
     return HttpResponse.json(
       reasoningReplyBody(provider, capturedRequests[provider].length),
