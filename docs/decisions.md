@@ -5568,3 +5568,102 @@ conductor prefers to run the recordings from a similar session.)
 session (E13+ lands with the recording output, per the conductor's
 instruction). `package.json`/`package-lock.json` unchanged —
 `@google/generative-ai@^0.24.1` was already a devDependency on main.
+
+**Fix round 1 (2026-11-16, PR #115)** — two bugs found only on the
+conductor's real run, one reviewer finding, and the recording evidence
+(E13–E16) landed:
+
+- **`record-claude-code.sh` prompt swallowed.** `--allowedTools` is
+  variadic (`<tools...>`); the prompt passed as a trailing positional
+  after it was consumed as a tool name — Claude Code exited "Input
+  must be provided either through stdin or as a prompt argument when
+  using --print" and only the `HEAD /api/hello` probes reached the
+  recorder. `-p` is now out of `claude_args`; the call is
+  `claude -p "$prompt" <flags...> --allowedTools ...` with a comment
+  explaining the variadic flag. Regression coverage:
+  `scripts/gates/record-claude-code.test.ts` runs `media` mode offline
+  (fake `CLAUDE_BIN` that mimics the variadic parse and fails when no
+  prompt positional survives + a stub upstream) — verified it fails on
+  the old argv order and passes on the new one. **File outside the
+  Files block:** that test file.
+- **`record-gemini-sdk.ts` — `startChat()` abandoned.** Real-run
+  findings: `gemini-2.5-flash` answers 404 (retired — default is now
+  `gemini-3.8-flash`, the live suite's slug) and the legacy SDK's
+  `chat()` sends function-response turns with `role:"function"`, which
+  Gemini 3.x rejects (`400 Role 'function' is not supported. Please
+  use a valid role: user, model.` — roles per
+  https://ai.google.dev/api/generate-content#Resource:Content). The
+  script now keeps `contents` itself: the model's candidate content is
+  appended unchanged (what `startChat` carried — keeps `thought`,
+  `thoughtSignature` and the functionCall `id`), and each
+  functionResponse goes back in a `role:"user"` turn echoing the
+  call's `id` when present (`functionResponse.id`:
+  https://ai.google.dev/api/generate-content — untyped in 0.24.1, so
+  via casts). Verified against a local stub: 3 generateContent
+  requests, all 200, contents 1→3→5, `role:"user"` on the response
+  turns, `id` echoed, `thoughtSignature` preserved on the model parts.
+  Errors now print through `describeError` (name + `status`/`statusText`
+  when present + message with `key=` redacted, 300 chars) in both the
+  inner and outer catch — the bare `err.name` hid the 400. Reviewer
+  fix: the spawned recorder gets only `PATH`, `HOME` and
+  `RECORD_KEEP_ENUMS`, not `...process.env` post-dotenv.
+- **Wire-format doc URLs (plan Global Constraint).** Cited in script
+  comments and here: Ollama's Anthropic surface
+  https://docs.ollama.com/api/anthropic-compatibility (E7); Anthropic
+  Messages API https://platform.claude.com/docs/en/api/messages
+  (`tool_choice`, `stream:true` SSE events) and
+  .../api/messages/count_tokens; prompt caching
+  https://platform.claude.com/docs/en/build-with-claude/prompt-caching;
+  vision `source.type` url/base64/file
+  https://platform.claude.com/docs/en/build-with-claude/vision; PDF
+  `document` blocks
+  https://platform.claude.com/docs/en/build-with-claude/pdf-support;
+  extended thinking (`thinking` blocks, `signature`)
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking;
+  OpenRouter's Anthropic endpoint
+  https://openrouter.ai/docs/api/api-reference/anthropic-messages/create-a-message
+  (already in check-openrouter-anthropic.sh); Claude Code env vars
+  (`MAX_THINKING_TOKENS`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
+  `ANTHROPIC_MODEL`) https://code.claude.com/docs/en/env-vars; Gemini
+  `thinkingConfig`/`thoughtSignature`
+  https://ai.google.dev/gemini-api/docs/thinking; Gemini
+  `generateContent` (Content roles, `functionCall.id`,
+  `functionResponse.id`, `thoughtSignature`)
+  https://ai.google.dev/api/generate-content and the function-calling
+  loop https://ai.google.dev/gemini-api/docs/function-calling. All
+  fetched and confirmed 2026-11-16.
+- **Recordings (conductor ran the scripts on this branch; shapes-only,
+  grep-verified free of keys/base64 runs).**
+  `tests/fixtures/recordings/claude-code-thinking.jsonl` — Claude Code
+  2.1.322, `claude -p`, `ANTHROPIC_BASE_URL` → recorder → OpenRouter
+  `/api/v1/messages`, `anthropic/claude-haiku-4.5`,
+  `MAX_THINKING_TOKENS=1024`: 10 lines (2 `HEAD /api/hello`
+  connectivity probes answered 404, then a tools-less side request
+  with `thinking:{type:"disabled"}` and an `output_config` JSON-schema
+  format, then 7 loop requests). Every loop request carries
+  `thinking:{type:"enabled",budget_tokens,display:"<string:7>"}` —
+  `display` is an extra field Claude Code sends (7-char string, exact
+  value not recorded). Prior assistant turns come back as
+  `{type:"thinking",thinking:"" (0 chars),signature:"<string:N>"}`,
+  one per turn, signature lengths 804, 660, 544, 536, 736, 564, all
+  blocks kept in order on every later request (none dropped while
+  messages grow 3→13; per-turn signature length constant). Caveat:
+  shapes-only proves presence, order and length — not byte-identity;
+  no compaction occurred, so drop-on-compaction is "not observed".
+  `tests/fixtures/recordings/claude-code-media.jsonl` — 9 lines, same
+  setup: no URL image and no `document` block; Claude Code read the
+  PDF and PNG with its Read tool and sent them as base64 `image`
+  blocks inside `tool_result` content (2-page PDF → two images of
+  22,980 and 22,916 chars at `messages[4].content[1].content[1..2]`;
+  PNG → one 92-char image at `messages[10].content[0].content[0]`;
+  `tool_reference` blocks also ride `tool_result` content). Consequence
+  recorded on E14 for Tasks 6/7. Scope check (Step 3): not a client
+  rewriting reasoning — no STOP.
+- **Still outstanding.** `gemini-sdk-thinking.jsonl`: the Devin
+  sandbox has no direct route to generativelanguage.googleapis.com
+  (the recorder's raw `https.request` does not use the HTTP proxy), so
+  the real run is again a conductor step — the fixed script is
+  stub-verified only; do not commit a Gemini fixture from this
+  session. Ollama probes: the conductor's machine has no `ollama`
+  binary — E16 records "not measured, owner decision pending"; the
+  Task 9 note stands.

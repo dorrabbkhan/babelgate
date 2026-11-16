@@ -12,20 +12,25 @@
 #     [--model <slug>]
 #
 # `thinking` runs the edit-task fixture copy with MAX_THINKING_TOKENS
-# set (extended thinking on for every request — the Anthropic SDK env
-# knob Claude Code passes through) so the second and later /v1/messages
-# bodies show whether thinking blocks and their signatures come back
-# unchanged. `media` instead runs in a scratch dir holding a generated
-# 2-page PDF and serves a generated PNG over a second local port, then
-# prompts Claude Code to read both — the recorded body shapes show how
-# it sends a URL image and a document (block types, source.type).
+# set (extended thinking on for every request — the env knob Claude
+# Code reads: https://code.claude.com/docs/en/env-vars) so the second
+# and later /v1/messages bodies show whether thinking blocks and their
+# signatures come back unchanged (block shapes per
+# https://platform.claude.com/docs/en/build-with-claude/extended-thinking).
+# `media` instead runs in a scratch dir holding a generated 2-page PDF
+# and serves a generated PNG over a second local port, then prompts
+# Claude Code to read both — the recorded body shapes show how it sends
+# images and documents (block types, source.type; the Anthropic shapes
+# are per https://platform.claude.com/docs/en/build-with-claude/vision
+# and .../pdf-support).
 #
 # --model is the slug written to ANTHROPIC_MODEL (default
 # anthropic/claude-haiku-4.5); --upstream is the Anthropic API base the
 # recorder forwards to (default https://openrouter.ai/api — Claude Code
 # appends /v1/messages, so requests land at <upstream>/v1/messages,
-# https://openrouter.ai/api/v1/messages for the default; the
-# check-openrouter-anthropic.sh probe uses the same endpoint).
+# https://openrouter.ai/api/v1/messages for the default, documented at
+# https://openrouter.ai/docs/api/api-reference/anthropic-messages/create-a-message;
+# the check-openrouter-anthropic.sh probe uses the same endpoint).
 #
 # The recorder runs with RECORD_KEEP_ENUMS=1 (record-shapes.ts): type
 # values (Anthropic content blocks carry `type` everywhere — the
@@ -245,7 +250,13 @@ fi
 # --permission-prompts none denies anything that would prompt,
 # --strict-mcp-config and --setting-sources local keep the owner's
 # ~/.claude and project config from widening the tool set).
-claude_args=(-p --permission-prompts none --strict-mcp-config --setting-sources local)
+# --allowedTools is variadic (`<tools...>`): it consumes every non-flag
+# argument after it, so the prompt can never follow it — it is passed
+# as the positional right after -p at the call site instead (a trailing
+# "$prompt" was swallowed as a tool name: claude exited "Input must be
+# provided either through stdin or as a prompt argument" and only the
+# /api/hello HEAD probes reached the recorder).
+claude_args=(--permission-prompts none --strict-mcp-config --setting-sources local)
 extra_env=()
 if [ "$mode" = "thinking" ]; then
   prompt="Make the failing test pass. Run npm test to check your work."
@@ -262,8 +273,9 @@ fi
 # Non-interactive Claude Code run against the recorder.
 # ANTHROPIC_BASE_URL points the Anthropic SDK at the recorder;
 # ANTHROPIC_AUTH_TOKEN is forwarded as `authorization: Bearer` — what
-# OpenRouter's /api/v1/messages expects. ANTHROPIC_API_KEY is unset so
-# no x-api-key header competes with it. timeout + </dev/null: a dead
+# OpenRouter's /api/v1/messages expects (both env vars:
+# https://code.claude.com/docs/en/env-vars). ANTHROPIC_API_KEY is unset
+# so no x-api-key header competes with it. timeout + </dev/null: a dead
 # upstream makes Claude Code retry, so the run gets a hard cap and no
 # stdin to block on. Scratch HOME keeps the owner's ~/.claude state
 # (auth, sessions, project history) out of the recording.
@@ -277,7 +289,7 @@ fi
     ANTHROPIC_MODEL="$MODEL" \
     "${extra_env[@]+"${extra_env[@]}"}" \
     timeout -k 30 "${CLAUDE_TIMEOUT_S:-600}" \
-      "${claude_cmd[@]}" "${claude_args[@]}" "$prompt" \
+      "${claude_cmd[@]}" -p "$prompt" "${claude_args[@]}" \
       </dev/null >"$work/claude.log" 2>&1
 ) || true
 

@@ -9,15 +9,23 @@
 #
 #   scripts/gates/probe-ollama-anthropic.sh [baseUrl]
 #
-# baseUrl defaults to http://localhost:11434. Probes:
+# baseUrl defaults to http://localhost:11434. Probes (field and event
+# names per the cited provider docs; Ollama's declared Anthropic surface
+# is https://docs.ollama.com/api/anthropic-compatibility, spec E7):
 #   tool_choice_any  POST /v1/messages with tool_choice {type:"any"}
+#                    (platform.claude.com/docs/en/api/messages)
 #   count_tokens     POST /v1/messages/count_tokens
+#                    (platform.claude.com/docs/en/api/messages/count_tokens)
 #   cache_control    POST /v1/messages, system block cache_control ephemeral
+#                    (platform.claude.com/docs/en/build-with-claude/prompt-caching)
 #   url_image        POST /v1/messages, image block source.type "url"
+#                    (platform.claude.com/docs/en/build-with-claude/vision)
 #   pdf_base64       POST /v1/messages, document block source.type "base64"
-#                    (a generated 2-page PDF, ~1 kB)
+#                    (platform.claude.com/docs/en/build-with-claude/pdf-support;
+#                    a generated 2-page PDF, ~1 kB)
 #   stream_usage     POST /v1/messages stream:true — SSE event names and
 #                    whether a usage object rides the message events
+#                    (platform.claude.com/docs/en/api/messages)
 #
 # Env overrides: PROBE_MODEL (default qwen3-coder:30b — pick a
 # tool-capable model from `ollama list`), PROBE_PNG_URL (default
