@@ -5691,3 +5691,31 @@ caveat: one short run on `gemini-3.8-flash`. The signatures survive
 because the script passes the candidate's parts back unchanged — the
 legacy `chat()` path was not usable (`role:"function"` → 400, fix
 round 1). Only the Ollama probes remain outstanding.
+
+**Fix round 3 (2026-11-16, PR #115)** — the conductor ran
+`scripts/gates/probe-ollama-anthropic.sh` for real against the owner's
+Dockerised Ollama 0.40.11 (`PROBE_MODEL=qwen3:0.6b`, the live suite's
+model; output in `tmp/ollama-probe.txt`). Results, now on E16:
+`tool_choice:{type:"any"}` → 200 (`stop_reason=tool_use`, content
+types `thinking,tool_use`); `POST /v1/messages/count_tokens` →
+**404** — not served by Ollama 0.40.11; ephemeral `cache_control` on a
+system block → 200, usage keys
+`input_tokens|cache_read_input_tokens|output_tokens` (no
+`cache_creation_input_tokens`); image `source.type:"url"` → **400**
+`invalid_request_error`; base64 `document` → 200 — caveat: accepted
+is not supported, the 0.6B text model's reply (a `thinking` block,
+`stop_reason=max_tokens`) cannot show the PDF was used, so it may be
+silently dropped; `stream:true` → 200, events `message_start,
+content_block_start, content_block_delta, content_block_stop,
+message_delta, message_stop`, `usage` rides the stream. A `thinking`
+block came back although the probe did not ask for thinking (qwen3
+thinks by default on this endpoint); single run on a 0.6B model — a
+larger model's tool/thinking output may differ. **Note for Task 9:**
+candidate `ollama-anthropic` preset gaps from this measurement are
+`count_tokens` (404) and `url_images` (400 — the gateway must fetch
+URL images to base64); `tool_choice` (`any` accepted) and
+`prompt_cache` (`cache_control` accepted) need no gap fix;
+`documents` needs a decision (accepted but unproven); `stream_usage`
+is not a gap (usage rides the stream)
+(https://docs.ollama.com/api/anthropic-compatibility). Docs-only
+commit — E16 and this entry; nothing remains outstanding from Task 1.
