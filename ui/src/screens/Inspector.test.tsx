@@ -436,6 +436,89 @@ describe("Inspector screen", () => {
     expect(text).toContain("data: [DONE]");
   });
 
+  it("plain strings in bodies render unchanged", async () => {
+    getMock.mockResolvedValue({
+      row: makeRow({ notes: [], diagnostics: [], repairs: [] }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [
+          {
+            value: {
+              model: "m",
+              tools: [
+                {
+                  type: "function",
+                  name: "get_weather",
+                  parameters: { type: "object", required: ["city"] },
+                },
+              ],
+              include: ["reasoning.encrypted_content"],
+              stop: ["END"],
+              input: "hello world",
+            },
+          },
+        ],
+        response: { wire: { value: { id: "resp_1" } } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    // Expand every collapsed JsonTree node so every nested and
+    // array-element string is painted.
+    for (let round = 0; round < 6; round++) {
+      const closed = [...container.querySelectorAll(".twisty")].filter(
+        (t) => t.textContent?.includes("▸"),
+      );
+      if (closed.length === 0) break;
+      await act(async () => {
+        for (const t of closed) {
+          t.parentElement!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true }),
+          );
+        }
+      });
+    }
+
+    const text = container.textContent ?? "";
+    for (const s of [
+      "city",
+      "reasoning.encrypted_content",
+      "END",
+      "hello world",
+    ]) {
+      expect(text).toContain(s);
+    }
+    expect(text).not.toContain("<truncated:");
+  });
+
+  it("single-line non-stream string snapshot renders unchanged", async () => {
+    getMock.mockResolvedValue({
+      row: makeRow({ notes: [], diagnostics: [], repairs: [] }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: "Bad Gateway" } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Bad Gateway");
+    expect(text).not.toContain("<truncated:");
+  });
+
   it("pass-through badge", async () => {
     getMock.mockResolvedValue({
       row: makeRow({

@@ -5060,3 +5060,15 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   still pass through, `data: [DONE]` as a last line is unchanged, and
   an NDJSON body whose *earlier* line fails to parse still returns the
   text verbatim (it isn't NDJSON).
+- **Stream masking scoped to the snapshot's own string** (fix round 3):
+  the round-1 keyless-string branch masked every unkeyed string, so
+  plain strings nested in bodies — array elements like
+  `required: ["city"]` or `include: ["reasoning.encrypted_content"]` —
+  rendered `<truncated: N bytes>`. `displayStreamText` now runs only
+  on `snapshot.value` when it is itself a string (a raw stream is
+  never nested); nested and array-element strings render unchanged.
+  `displayStreamText` also treats text as NDJSON only with at least
+  two non-blank lines: a lone line that doesn't parse as JSON ("Bad
+  Gateway") renders verbatim, a lone line that parses as JSON is still
+  masked. The SSE path, the truncation rule, and keyed masking are
+  unchanged.

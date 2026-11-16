@@ -41,9 +41,10 @@ function byteLen(s: string): number {
  * `<signature: N bytes, origin provider/model>`; wire-level
  * `signature`/`thoughtSignature` strings, a `data` string inside a
  * `redacted_thinking` block, and `encrypted_content` (the bg1
- * envelope or an upstream blob) become byte-count placeholders. A
- * keyless string that holds a raw stream (SSE or NDJSON) is masked
- * line by line — the bytes never reach the DOM.
+ * envelope or an upstream blob) become byte-count placeholders.
+ * Nested and array-element strings are content and render unchanged;
+ * raw-stream masking happens only on the snapshot's own top-level
+ * string (see displaySnapshot).
  */
 function displayValue(value: unknown, key?: string): unknown {
   if (typeof value === "string") {
@@ -54,11 +55,6 @@ function displayValue(value: unknown, key?: string): unknown {
       return value.startsWith("bg1.")
         ? `<envelope: ${byteLen(value)} bytes>`
         : `<encrypted_content: ${byteLen(value)} bytes>`;
-    }
-    if (key === undefined) {
-      // A raw upstream stream snapshot is a bare string on the
-      // snapshot itself (or nested in an array): mask each line.
-      return displayStreamText(value);
     }
     return value;
   }
@@ -121,15 +117,19 @@ function displayValue(value: unknown, key?: string): unknown {
  * a client abort or the wire cap can cut the stream mid-line, and the
  * partial payload may carry the first bytes of a signature, so it
  * renders as `<truncated: N bytes>` instead. A multi-line string that
- * isn't a stream is returned as-is.
+ * isn't a stream is returned as-is. Text counts as NDJSON only with
+ * at least two non-blank lines: a lone line that doesn't parse as
+ * JSON is a plain string (e.g. "Bad Gateway"), not a cut stream, and
+ * renders unchanged.
  */
 function displayStreamText(text: string): string {
   const lines = text.split("\n");
   let lastNonBlank = -1;
+  let nonBlank = 0;
   for (let i = lines.length - 1; i >= 0; i--) {
     if (lines[i].trim() !== "") {
-      lastNonBlank = i;
-      break;
+      if (lastNonBlank === -1) lastNonBlank = i;
+      nonBlank++;
     }
   }
   if (lines.some((l) => l.startsWith("data:"))) {
@@ -148,6 +148,19 @@ function displayStreamText(text: string): string {
         }
       })
       .join("\n");
+  }
+  if (nonBlank < 2) {
+    // A lone line isn't a stream: mask it only when it parses as
+    // JSON, otherwise render the plain string unchanged.
+    if (lastNonBlank === -1) return text;
+    try {
+      lines[lastNonBlank] = JSON.stringify(
+        displayValue(JSON.parse(lines[lastNonBlank])),
+      );
+      return lines.join("\n");
+    } catch {
+      return text;
+    }
   }
   const masked: string[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -175,5 +188,11 @@ export function displaySnapshot(
   snapshot: BodySnapshot | undefined,
 ): BodySnapshot | undefined {
   if (snapshot === undefined) return undefined;
-  return { ...snapshot, value: displayValue(snapshot.value) };
+  return {
+    ...snapshot,
+    value:
+      typeof snapshot.value === "string"
+        ? displayStreamText(snapshot.value)
+        : displayValue(snapshot.value),
+  };
 }
