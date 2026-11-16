@@ -5049,3 +5049,14 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   omitted on `row.passthrough`, the target stage diffs against the
   source (showing the `model` rewrite), and a `pass-through` badge
   appears in the meta line and in the Requests list's routed cell.
+- **Cut-off final stream line masked** (fix round 2): a client abort
+  or the `STREAM_WIRE_CAP_BYTES` cut can end the wire snapshot
+  mid-line, leaving a partial JSON payload that may hold the first
+  bytes of a `signature`/`thoughtSignature`/`encrypted_content`. In
+  `displayStreamText` the last non-blank line now renders
+  `data: <truncated: N bytes>` (SSE, N = UTF-8 bytes of the payload
+  after `data:`) or `<truncated: N bytes>` (NDJSON, N = UTF-8 bytes of
+  the line) when it fails to parse; interior unparseable `data:` lines
+  still pass through, `data: [DONE]` as a last line is unchanged, and
+  an NDJSON body whose *earlier* line fails to parse still returns the
+  text verbatim (it isn't NDJSON).

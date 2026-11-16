@@ -337,6 +337,105 @@ describe("Inspector screen", () => {
     expect(text).toContain("keep-me");
   });
 
+  it("truncated final stream line is not rendered", async () => {
+    // A client abort or the wire cap can end the snapshot mid-line:
+    // the partial JSON may carry the first bytes of a signature.
+    const lastLine =
+      `data: {"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"bg1.TRUNCSENTINEL-6`;
+    const wire = `data: {"type":"response.created"}\n\n${lastLine}`;
+    getMock.mockResolvedValue({
+      row: makeRow({
+        stream: true,
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: wire } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("TRUNCSENTINEL-6");
+    const n = new TextEncoder().encode(lastLine.slice(5)).length;
+    expect(text).toContain(`data: <truncated: ${n} bytes>`);
+    expect(text).toContain("response.created");
+  });
+
+  it("truncated final ndjson line is not rendered", async () => {
+    const first = `{"message":{"role":"assistant","thinking":"t","content":"first-visible"}}`;
+    const second = `{"message":{"role":"assistant","content":"done"},"done":true}`;
+    const last = `{"message":{"thinking":"NDSENTINEL-7`;
+    const wire = [first, second, last].join("\n");
+    getMock.mockResolvedValue({
+      row: makeRow({
+        stream: true,
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: wire } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("NDSENTINEL-7");
+    const n = new TextEncoder().encode(last).length;
+    expect(text).toContain(`<truncated: ${n} bytes>`);
+    expect(text).toContain("first-visible");
+  });
+
+  it("interior unparseable stream line still renders", async () => {
+    const wire = [
+      "data: not json",
+      `data: {"type":"response.created"}`,
+      "data: [DONE]",
+    ].join("\n");
+    getMock.mockResolvedValue({
+      row: makeRow({
+        stream: true,
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: wire } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("not json");
+    expect(text).toContain("data: [DONE]");
+  });
+
   it("pass-through badge", async () => {
     getMock.mockResolvedValue({
       row: makeRow({

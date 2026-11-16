@@ -117,27 +117,41 @@ function displayValue(value: unknown, key?: string): unknown {
  * object per line, no `data:`). Each `data:` payload or NDJSON line
  * that parses as JSON is masked through displayValue and re-encoded;
  * framing lines (`event:`, blanks, `data: [DONE]`, unparseable
- * payloads) pass through unchanged. A multi-line string that isn't a
- * stream is returned as-is.
+ * payloads) pass through unchanged — except the last non-blank line:
+ * a client abort or the wire cap can cut the stream mid-line, and the
+ * partial payload may carry the first bytes of a signature, so it
+ * renders as `<truncated: N bytes>` instead. A multi-line string that
+ * isn't a stream is returned as-is.
  */
 function displayStreamText(text: string): string {
   const lines = text.split("\n");
+  let lastNonBlank = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i].trim() !== "") {
+      lastNonBlank = i;
+      break;
+    }
+  }
   if (lines.some((l) => l.startsWith("data:"))) {
     return lines
-      .map((l) => {
+      .map((l, i) => {
         if (!l.startsWith("data:")) return l;
+        const payload = l.slice(5);
         try {
           return `data: ${JSON.stringify(
-            displayValue(JSON.parse(l.slice(5))),
+            displayValue(JSON.parse(payload)),
           )}`;
         } catch {
-          return l;
+          return i === lastNonBlank && payload.trim() !== "[DONE]"
+            ? `data: <truncated: ${byteLen(payload)} bytes>`
+            : l;
         }
       })
       .join("\n");
   }
   const masked: string[] = [];
-  for (const l of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
     if (l.trim() === "") {
       masked.push(l);
       continue;
@@ -145,7 +159,8 @@ function displayStreamText(text: string): string {
     try {
       masked.push(JSON.stringify(displayValue(JSON.parse(l))));
     } catch {
-      return text;
+      if (i !== lastNonBlank) return text;
+      masked.push(`<truncated: ${byteLen(l)} bytes>`);
     }
   }
   return masked.join("\n");
