@@ -1,0 +1,34 @@
+# Codex CLI on Claude — the bridge path with thinking carried.
+# Release gate B (spec §4.5) runs this file.
+#
+# Uses OpenRouter's Anthropic-format endpoint (POST /api/v1/messages), proven
+# in v1.4 Task 1: it returns signed thinking blocks for
+# anthropic/claude-haiku-4.5 — the cheapest current Claude model with thinking.
+# One OPENROUTER_API_KEY covers this example and codex-openrouter.yaml.
+# With a direct Anthropic key instead: base_url https://api.anthropic.com,
+# api_key_env ANTHROPIC_API_KEY, and `to: anthropic/claude-haiku-4-5`
+# (Anthropic's own model id, not the OpenRouter catalog id).
+#
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo codex-anthropic.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/codex-anthropic.yaml
+#   OPENROUTER_API_KEY=<key> \
+#     npx babelgate --config codex-anthropic.yaml
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
+#
+# ~/.codex/config.toml: same [model_providers.babelgate] block as
+# docs/recipes/codex.md; model_reasoning_effort = "medium" becomes Anthropic's
+# thinking budget. Thinking blocks and their signatures round-trip to Claude
+# via the bg1 reasoning envelope (spec §3.3).
+default: anthropic
+providers:
+  anthropic:
+    type: anthropic
+    # No /v1: babelgate appends /v1/messages and /v1/models itself —
+    # https://openrouter.ai/api/v1/messages is the proven endpoint.
+    base_url: https://openrouter.ai/api
+    api_key_env: OPENROUTER_API_KEY
+    live_prices: true          # cost from OpenRouter's own /models pricing
+routes:
+  - match: "*"
+    to: anthropic/anthropic/claude-haiku-4.5

@@ -3,8 +3,8 @@
 A small proxy that sits in front of LLM APIs and translates between their
 request/response formats — streaming and tool calls included. Point your
 OpenAI client at it, and it can talk to Gemini, Ollama, or Anthropic behind
-the scenes — and vice versa. Point Claude Code at it, and it runs on any
-tool-capable model you can reach.
+the scenes — and vice versa. Point Claude Code or Codex CLI at it, and it
+runs on any tool-capable model you can reach.
 
 Supported providers right now:
 
@@ -12,6 +12,12 @@ Supported providers right now:
 - Google Gemini
 - Ollama
 - Anthropic (Claude)
+
+…and five client-facing formats, the fifth being the OpenAI **Responses**
+API (`POST /v1/responses`) — what Codex CLI speaks. A `type: responses`
+provider also gets byte-preserving pass-through to Responses-native
+upstreams (OpenRouter's Responses API, vLLM, Ollama's Responses endpoint,
+…): [docs/recipes/codex.md](docs/recipes/codex.md).
 
 ![Claude Code fixing a failing test through babelgate on a free OpenRouter model](docs/assets/demo.gif)
 *Recorded with [scripts/demo](scripts/demo/); the model's thinking time is cut.*
@@ -97,7 +103,8 @@ with `MODEL_MAP`). Recipe: [docs/recipes/openai-sdk.md](docs/recipes/openai-sdk.
 
 Everything above is one target behind one port. With a `babelgate.yaml`
 the same port serves **every client format at once** — OpenAI, Anthropic,
-Gemini and Ollama SDKs all work against it — and routes each request to
+Gemini, Ollama and Responses clients all work against it — and routes each
+request to
 one of several providers by model name, with aliases, a long-context
 condition, and fallbacks before the first byte:
 
@@ -152,6 +159,10 @@ Ollama     http://localhost:3000
 UI         http://localhost:3000/ui
 ```
 
+Responses clients — Codex CLI among them — use the same `/v1` base URL:
+`POST /v1/responses` is the fifth source dialect. Recipe:
+[docs/recipes/codex.md](docs/recipes/codex.md).
+
 ```python
 # OpenAI SDK (Python) — base_url includes /v1
 OpenAI(base_url="http://localhost:3000/v1", api_key="babelgate")
@@ -169,7 +180,8 @@ new GoogleGenAI({ apiKey: "babelgate",
 ```
 
 Raw-HTTP callers use the real paths instead: `/v1/chat/completions`,
-`/v1/messages`, `/v1beta/models/<model>:generateContent`, `/api/chat`.
+`/v1/messages`, `/v1beta/models/<model>:generateContent`, `/api/chat`,
+`/v1/responses`.
 Every proxied reply carries `x-babelgate-provider`, `x-babelgate-model`
 and `x-babelgate-attempts`, and `GET …/models` returns one merged list
 across all providers. Any OpenAI-compatible backend (Groq, DeepSeek,
@@ -194,13 +206,14 @@ Usage: babelgate [--preset <claude-code|openai-apps>] [--target <provider>]
 
 Config file discovery: --config, then BABELGATE_CONFIG,
 then ./babelgate.yaml. Upstream API keys come only from the environment
-(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_API_KEY).
+(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_API_KEY,
+RESPONSES_API_KEY).
 ```
 
 | Flag          | Effect                                                                        |
 | ------------- | ----------------------------------------------------------------------------- |
 | `--preset`    | `claude-code` or `openai-apps` — picks which `export` lines to print; with no config file it also sets the v1.1 env routing |
-| `--target`    | `ollama`, `openai`, `anthropic` or `gemini` — sets `TARGET_API` (env-only mode) |
+| `--target`    | `ollama`, `openai`, `anthropic`, `gemini` or `responses` — sets `TARGET_API` (env-only mode) |
 | `--model`     | `claude-code` preset only: `MODEL_MAP=claude-*=<model>`                         |
 | `--base-url`  | Sets `{TARGET}_API_BASE_URL` (e.g. `https://openrouter.ai/api` for OpenRouter)  |
 | `--config`    | Path to a `babelgate.yaml` — `--target`, `--model` and `--base-url` are then defined by the file |
@@ -217,7 +230,7 @@ Presets are just env values. Everything below works without them.
 ## How it works
 
 The naive way to build this is a transformer per provider pair. That gets
-painful fast — four providers means twelve conversion functions in each
+painful fast — five formats means twenty conversion functions in each
 direction, and every new provider adds another batch.
 
 Instead, every request goes through a **canonical format** in the middle:
@@ -236,8 +249,8 @@ The actual request flow:
 1. Request hits the Express app.
 2. The request path decides the client's format (`/v1/chat/completions`
    is OpenAI, `/v1/messages` Anthropic, `/v1beta/models` Gemini,
-   `/api/chat` Ollama); the route table picks it up. Unknown paths fall
-   through to a 404.
+   `/api/chat` Ollama, `/v1/responses` Responses); the route table picks it
+   up. Unknown paths fall through to a 404.
 3. The body is converted to canonical, routed to a provider (config
    file, or the single `TARGET_API` in env-only mode), then encoded in
    the target's format.
@@ -539,19 +552,21 @@ fixtures/tests — see
   machines can't fit the model). Local models may call tools unreliably,
   and on CPU-only machines a slow model can stall past
   `UPSTREAM_STREAM_IDLE_MS` (default 300 s) and have its stream cut.
-- **Reasoning/thinking is not mapped.** `thinking` and
-  `redacted_thinking` blocks, thinking deltas, the `thinking` request
-  parameter and Ollama's `thinking` field are dropped (debug-logged by
-  type name only). `cache_control` and `metadata` are dropped too.
-  Reasoning mapping is planned for v1.4.
-- **`parallel_tool_calls` is ignored** — providers get their own default
-  parallel behaviour.
+- **Reasoning is mapped only for Responses clients.** From a `/v1/responses`
+  request (Codex), `reasoning` maps to each target's thinking control and the
+  provider's signed thinking is carried back between turns of the same
+  provider/model — but `thinking`/`redacted_thinking` blocks, thinking deltas
+  and `reasoning_effort` from the other four source formats are still dropped
+  (debug-logged by type name only), as is `cache_control`/`metadata`.
+- **`parallel_tool_calls` is honoured only from Responses clients** —
+  decoded on `/v1/responses` and mapped to OpenAI, Anthropic and Responses
+  targets; the other sources can't express it and providers get their own
+  default parallel behaviour.
 - **Not every pair is equally verified.** Streaming and tools are
-  implemented in all four adapters, but the streaming × tools matrix only
-  gates the launch pairs: `anthropic → ollama`, `anthropic → openai`
-  (which is how OpenRouter is reached) and `openai → ollama`. The full
-  16-pair matrix is milestone 2 (v1.1.x). Gemini and Ollama **sources**
-  and the Gemini **target** have not had a clean live run yet.
+  implemented in all five adapters and the full 5×5 pair matrix runs in CI,
+  but the streaming × tools release gates cover only a few launch pairs
+  (`anthropic → ollama`, `anthropic → openai` — which is how OpenRouter is
+  reached — `openai → ollama`, plus the v1.4 Codex gates).
 - **`count_tokens` is an estimate** (chars/4), marked by the
   `x-babelgate-token-estimate: true` header — enough for Claude Code's
   budgeting, not for billing.

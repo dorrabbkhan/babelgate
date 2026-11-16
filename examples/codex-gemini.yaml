@@ -1,0 +1,36 @@
+# Codex CLI on Gemini — the bridge path with reasoning carried.
+# Release gate A (spec §4.5) runs this file.
+#
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo codex-gemini.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/codex-gemini.yaml
+#   GEMINI_API_KEY=<key> \
+#     npx babelgate --config codex-gemini.yaml
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
+#
+# ~/.codex/config.toml (full block in docs/recipes/codex.md):
+#   model = "babelgate"
+#   model_provider = "babelgate"
+#   model_reasoning_effort = "medium"   # gate A's setting — Codex sends
+#                                     # reasoning.effort, babelgate maps it to
+#                                     # Gemini's thinkingConfig.thinkingLevel
+#   web_search = "disabled"
+#   [model_providers.babelgate]
+#   base_url = "http://localhost:3000/v1"
+#   wire_api = "responses"
+#   env_key = "BABELGATE_KEY"
+#
+# Routing: the `*` rule claims every model name Codex sends, so whatever is in
+# config.toml is served as gemini-3.8-flash. Gemini's thought parts and
+# thoughtSignatures are carried back to Codex in the bg1 reasoning envelope and
+# returned to Gemini on later turns (same provider/model only — spec §3.3).
+default: gemini
+providers:
+  gemini:
+    type: gemini
+    # No /v1beta: babelgate appends /v1beta/models/<model>:<method> itself.
+    base_url: https://generativelanguage.googleapis.com
+    api_key_env: GEMINI_API_KEY
+routes:
+  - match: "*"
+    to: gemini/gemini-3.8-flash
