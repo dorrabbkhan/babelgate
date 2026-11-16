@@ -1,0 +1,32 @@
+diff --git a/scripts/conductor/judge.ts b/scripts/conductor/judge.ts
+index 1111111..2222222 100644
+--- a/scripts/conductor/judge.ts
++++ b/scripts/conductor/judge.ts
+@@ -1,2 +1,3 @@
+ const a = 1;
++const b = 2;
+ export { a };
+diff --git a/scripts/conductor/devin.sh b/scripts/conductor/devin.sh
+index 1111111..2222222 100644
+--- a/scripts/conductor/devin.sh
++++ b/scripts/conductor/devin.sh
+@@ -60,2 +60,3 @@
+ ) 2>&1 | tee "$OUT"
++# trimmed output
+ exit 0
+diff --git a/scripts/conductor/wait-ci.sh b/scripts/conductor/wait-ci.sh
+index 1111111..2222222 100644
+--- a/scripts/conductor/wait-ci.sh
++++ b/scripts/conductor/wait-ci.sh
+@@ -9,2 +9,3 @@
+ rc=0
++# wait for checks
+ gh pr checks "$pr" --watch
+diff --git a/docs/decisions.md b/docs/decisions.md
+index 3333333..4444444 100644
+--- a/docs/decisions.md
++++ b/docs/decisions.md
+@@ -200,1 +200,3 @@
+ ## last entry
++
++## v1.5 Task 0a: conductor tooling

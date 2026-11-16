@@ -1,0 +1,9 @@
+diff --git a/src/types/canonical.types.ts b/src/types/canonical.types.ts
+index 1111111..2222222 100644
+--- a/src/types/canonical.types.ts
++++ b/src/types/canonical.types.ts
+@@ -10,3 +10,4 @@
+ export interface Foo {
+   a: string;
++  media?: string;
+ }

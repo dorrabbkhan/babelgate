@@ -5342,3 +5342,59 @@ a past result.
   `v1.4.0`, `npm publish --access public` (staged-version visibility
   can take ~20 min), the GHCR image via the tag, verify
   `npx -y babelgate@1.4.0 --help` and that `/ui` loads.
+
+## v1.5 Task 0a: judge script, waits, trimmed output, usage report (spec §3.0.1–3.0.5)
+
+- **Files outside the Files block:**
+  - `scripts/conductor/usage-report.sh` — the plan's Interfaces block names
+    `usage-report.sh` as the entry point ("run via
+    `scripts/conductor/usage-report.sh`") and Task 0b Consumes it, but it is
+    missing from Task 0a's Create list. Thin `npx ts-node` wrapper matching
+    `judge.sh`.
+  - `scripts/conductor/diff-parse.ts`, `scripts/conductor/judge-checks.ts` —
+    AGENTS.md rule 7 split: diff parsing and the nine checks pulled out of
+    `judge.ts` (would have been ~550 lines). `judge.ts` keeps the CLI/report
+    runner.
+  - `scripts/conductor/fixtures/judge/claimed-clean.out.md` and
+    `scripts/conductor/fixtures/judge/claimed-mismatch.out.md` —
+    seeded Devin-session outputs for the `diff-stat` check; the Files
+    block's `fixtures/judge/*.diff` glob only covers the diff seeds.
+  - `scripts/conductor/fixtures/usage/sess-conduct/subagents/agent-x.jsonl` —
+    subagent sidechain-log seed for `usage-report` (fix round 1); the Files
+    block's `fixtures/usage/*.jsonl` glob only covers top-level files.
+- `docs/conductor/usage-baseline-2026-11-16.md` was not committed in the task
+  session (`~/.claude/projects/` is outside the repository and not readable
+  from the Devin sandbox, and synthetic numbers must never stand in for the
+  real baseline). The conductor ran `usage-report.sh --since 2026-11-04` on
+  the real logs and handed back `tmp/usage-baseline.json`/`.txt`; the doc was
+  written from that JSON in fix round 2 and regenerated in fix round 3 after
+  the digit-only task-id fix attributed the two `taskN` placeholder sessions
+  to real tasks, restricted to `^v1\.[34]-task[0-9]` (30 sessions).
+- Fix round 2 (usage-report): the task-id regexes now require a digit start
+  (`/conduct v1.4 N` / `v1.4-taskN` template placeholders → `unattributed`),
+  `--version` takes a comma list, a `summary` block rolls up per version plus
+  `total` (the version of a task is its `vX.Y` prefix; `unattributed` is its
+  own row), and the sessions table prints the first 8 id characters.
+- Fix round 3 (wait-ci): the check-registration poll runs the required
+  `gh pr checks <PR> --json name --jq length` and falls back to
+  `gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup | length'`
+  — the packaged gh 2.46 has no `--json` on `pr checks` (added in gh 2.50), so
+  the named command alone could never see a check on this machine. The
+  failure listing likewise parses the plain `gh pr checks <PR>` table with
+  `awk -F'\t' '$2=="fail"'` instead of `--json name,bucket,link`, for the
+  same gh 2.46 reason.
+- Interface additions beyond the plan's list, for offline tests: `judge.ts`
+  `--title` (owner-gate without a `gh` call) and `--report-dir` (report dir
+  override in tests); `usage-report.ts` `--projects-dir` /
+  `CLAUDE_PROJECTS_DIR` so tests run on synthetic logs under
+  `scripts/conductor/fixtures/usage/`. Default projects dir derives the slug
+  from the repo's absolute path (`/` → `-`).
+- Resolved interpretations: a **rename-only or binary file entry FLAGS the
+  checks that can't run on it** (assertions/skips for test files, secrets
+  always, adapter-independence outside `src/config/`), per Review Focus 5 —
+  never a silent PASS on uninspectable content. `assertions` flags when a
+  hunk removes more `expect(` lines than it adds, and when an exact matcher
+  (`toEqual`/`toStrictEqual`/`toBe`) is swapped for a partial one in the same
+  hunk. `secrets` flags file:line but never echoes the matched material.
+  "Opus-only and total columns" is rendered as two per-task tables (all
+  models; opus only).

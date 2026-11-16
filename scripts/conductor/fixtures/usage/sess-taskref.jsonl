@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-11-11T09:00:00Z","sessionId":"sess-taskref","message":{"role":"user","content":"continue v1.3-task7 fixes"}}
+{"type":"assistant","timestamp":"2026-11-11T09:00:05Z","sessionId":"sess-taskref","message":{"role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10000,"output_tokens":500}}}

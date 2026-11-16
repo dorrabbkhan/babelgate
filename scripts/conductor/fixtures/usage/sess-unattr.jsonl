@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-11-12T08:00:00Z","sessionId":"sess-unattr","message":{"role":"user","content":"hello there"}}
+{"type":"assistant","timestamp":"2026-11-12T08:00:03Z","sessionId":"sess-unattr","message":{"role":"assistant","model":"claude-sonnet-4-5-20250929","content":[{"type":"tool_use","name":"Bash","input":{"command":"git diff main"}}],"usage":{"input_tokens":300,"cache_read_input_tokens":50000,"cache_creation_input_tokens":1000,"output_tokens":200}}}

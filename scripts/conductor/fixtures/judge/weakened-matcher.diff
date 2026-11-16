@@ -1,0 +1,11 @@
+diff --git a/scripts/conductor/judge.test.ts b/scripts/conductor/judge.test.ts
+index 1111111..2222222 100644
+--- a/scripts/conductor/judge.test.ts
++++ b/scripts/conductor/judge.test.ts
+@@ -1,5 +1,5 @@
+   it("does x", () => {
+     const res = foo();
+-    expect(res.body).toEqual({ a: 1, b: 2 });
++    expect(res.body).toMatchObject({ a: 1 });
+     expect(res.ok).toBe(true);
+   });

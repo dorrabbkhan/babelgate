@@ -1,0 +1,9 @@
+diff --git a/.github/workflows/pr.yml b/.github/workflows/pr.yml
+index 1111111..2222222 100644
+--- a/.github/workflows/pr.yml
++++ b/.github/workflows/pr.yml
+@@ -5,3 +5,4 @@
+ jobs:
+   test:
++    timeout-minutes: 15
+     runs-on: ubuntu-latest
