@@ -2451,4 +2451,189 @@ describe('continuity guard (v1.4 spec §3.2)', () => {
     );
     expect(wire.thinking).toBeDefined();
   });
+
+  // Owner decision 2026-11-16 (PR #108 gate B): Anthropic counts a
+  // tool-use loop as ONE assistant turn, and manual mode requires a
+  // thinking block at the START of the final assistant turn — so the
+  // guard checks the loop's first assistant message, not the last
+  // tool-calling one.
+  const ownReasoningMsg = (toolCalls: { id: string; name: string }[]) => ({
+    role: 'assistant' as const,
+    content: [
+      {
+        type: 'reasoning' as const,
+        reasoning: {
+          text: 'own thought',
+          origin: { provider: 'claude', model: 'claude-opus-4-5' },
+        },
+        signature: {
+          origin: { provider: 'claude', model: 'claude-opus-4-5' },
+          data: 'sig-own',
+        },
+      },
+    ],
+    toolCalls: toolCalls.map((c) => ({
+      id: c.id,
+      type: 'function' as const,
+      function: { name: c.name, arguments: '{}' },
+    })),
+  });
+
+  const toolCallsOnlyMsg = (id: string) => ({
+    role: 'assistant' as const,
+    content: '',
+    toolCalls: [
+      {
+        id,
+        type: 'function' as const,
+        function: { name: 'get_weather', arguments: '{}' },
+      },
+    ],
+  });
+
+  const toolResult = (id: string) => ({
+    role: 'tool' as const,
+    content: 'sunny',
+    toolCallId: id,
+  });
+
+  const baseConfig = {
+    maxTokens: 8192,
+    reasoning: { effort: 'medium' as const },
+  };
+
+  const guardNote = (trace: RequestTrace) =>
+    trace.notes.some(
+      (n) =>
+        n.code === 'reasoning_dropped' &&
+        n.path === 'thinking_disabled_no_prior_block',
+    );
+
+  it('guard keeps thinking when the loop starts with an own block and a later step has none', () => {
+    const request = {
+      model: 'claude-opus-4-5',
+      messages: [
+        { role: 'user' as const, content: 'hi' },
+        ownReasoningMsg([{ id: 'call_1', name: 'get_weather' }]),
+        toolResult('call_1'),
+        {
+          role: 'assistant' as const,
+          content: 'checking',
+          toolCalls: [
+            {
+              id: 'call_2',
+              type: 'function' as const,
+              function: { name: 'get_weather', arguments: '{}' },
+            },
+          ],
+        },
+        toolResult('call_2'),
+      ],
+      config: baseConfig,
+    };
+
+    let wire: ReturnType<typeof fromCanonicalRequest> | undefined;
+    const trace = traced(() => {
+      wire = runWithAttempt(ATTEMPT, () => fromCanonicalRequest(request));
+    });
+
+    expect(wire?.thinking).toEqual({
+      type: 'enabled',
+      budget_tokens: expect.any(Number),
+    });
+    expect(guardNote(trace)).toBe(false);
+  });
+
+  it('guard keeps thinking across an assistant text message inside the loop', () => {
+    const request = {
+      model: 'claude-opus-4-5',
+      messages: [
+        { role: 'user' as const, content: 'hi' },
+        ownReasoningMsg([{ id: 'call_1', name: 'get_weather' }]),
+        toolResult('call_1'),
+        { role: 'assistant' as const, content: 'ok' },
+        toolCallsOnlyMsg('call_2'),
+        toolResult('call_2'),
+      ],
+      config: baseConfig,
+    };
+
+    let wire: ReturnType<typeof fromCanonicalRequest> | undefined;
+    const trace = traced(() => {
+      wire = runWithAttempt(ATTEMPT, () => fromCanonicalRequest(request));
+    });
+
+    expect(wire?.thinking).toEqual({
+      type: 'enabled',
+      budget_tokens: expect.any(Number),
+    });
+    expect(guardNote(trace)).toBe(false);
+  });
+
+  it('guard fires when the loop start has no own block even if the last step does', () => {
+    const request = {
+      model: 'claude-opus-4-5',
+      messages: [
+        { role: 'user' as const, content: 'hi' },
+        toolCallsOnlyMsg('call_1'),
+        toolResult('call_1'),
+        ownReasoningMsg([{ id: 'call_2', name: 'get_weather' }]),
+        toolResult('call_2'),
+      ],
+      config: baseConfig,
+    };
+
+    let wire: ReturnType<typeof fromCanonicalRequest> | undefined;
+    const trace = traced(() => {
+      wire = runWithAttempt(ATTEMPT, () => fromCanonicalRequest(request));
+    });
+
+    expect(wire?.thinking).toBeUndefined();
+    expect(guardNote(trace)).toBe(true);
+  });
+
+  it('guard fires for a new loop after a user message', () => {
+    const request = {
+      model: 'claude-opus-4-5',
+      messages: [
+        { role: 'user' as const, content: 'hi' },
+        ownReasoningMsg([{ id: 'call_1', name: 'get_weather' }]),
+        toolResult('call_1'),
+        { role: 'user' as const, content: 'next' },
+        toolCallsOnlyMsg('call_2'),
+        toolResult('call_2'),
+      ],
+      config: baseConfig,
+    };
+
+    let wire: ReturnType<typeof fromCanonicalRequest> | undefined;
+    const trace = traced(() => {
+      wire = runWithAttempt(ATTEMPT, () => fromCanonicalRequest(request));
+    });
+
+    expect(wire?.thinking).toBeUndefined();
+    expect(guardNote(trace)).toBe(true);
+  });
+
+  it('guard fires when the loop starts with a foreign block', () => {
+    const request = {
+      model: 'claude-opus-4-5',
+      messages: [
+        { role: 'user' as const, content: 'hi' },
+        foreignMsg,
+        toolResult('call_1'),
+        ownReasoningMsg([{ id: 'call_2', name: 'get_weather' }]),
+        toolResult('call_2'),
+      ],
+      config: baseConfig,
+    };
+
+    let wire: ReturnType<typeof fromCanonicalRequest> | undefined;
+    const trace = traced(() => {
+      wire = runWithAttempt(ATTEMPT, () => fromCanonicalRequest(request));
+    });
+
+    expect(wire?.thinking).toBeUndefined();
+    expect(guardNote(trace)).toBe(true);
+  });
 });

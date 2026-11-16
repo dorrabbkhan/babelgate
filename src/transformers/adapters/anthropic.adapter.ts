@@ -514,10 +514,24 @@ export function fromCanonicalRequest(
 }
 
 /**
- * Task 8 (spec §3.2): a thinking-enabled request whose last
- * tool-calling assistant turn carries no reasoning part of THIS
- * attempt's origin (provider + model, signature included) 400s
- * upstream — Anthropic expects a thinking block on that turn. The
+ * Task 8 (spec §3.2; loop-start rule per owner decision 2026-11-16,
+ * PR #108 gate B): a thinking-enabled request whose current tool
+ * loop starts with an assistant message carrying no reasoning part
+ * of THIS attempt's origin (provider + model, signature included)
+ * 400s upstream. Anthropic counts the whole tool loop as ONE
+ * assistant turn — "A tool-use loop is one assistant turn. From the
+ * model's perspective, an assistant turn ends only when Claude
+ * completes its full response, which might include multiple tool
+ * calls and results."
+ * (https://platform.claude.com/docs/en/build-with-claude/thinking#thinking-with-tool-use)
+ * — and manual mode requires that "the final assistant turn of a
+ * thinking-enabled request must start with a thinking block"
+ * (https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+ * §Turn structure in manual mode). The block is therefore required
+ * on the FIRST assistant message of the loop, not the last
+ * tool-calling one: models without interleaved thinking (Claude
+ * Haiku 4.5) think only at the start of the loop, so checking the
+ * last step disabled thinking for the rest of the session. The
  * guard removes `thinking` (and `output_config.effort`, which would
  * imply it) and records `reasoning_dropped`/
  * `thinking_disabled_no_prior_block`.
@@ -527,13 +541,25 @@ function applyContinuityGuard(
   request: CanonicalRequest,
 ): void {
   if ((result as { thinking?: unknown }).thinking === undefined) return;
-  const lastCallTurn = [...request.messages]
-    .reverse()
-    .find((m) => m.role === "assistant" && (m.toolCalls ?? []).length > 0);
-  if (lastCallTurn === undefined) return;
-  const parts = Array.isArray(lastCallTurn.content)
-    ? lastCallTurn.content
-    : [];
+  let lastCallIndex = -1;
+  for (let i = request.messages.length - 1; i >= 0; i--) {
+    const m = request.messages[i];
+    if (m.role === "assistant" && (m.toolCalls ?? []).length > 0) {
+      lastCallIndex = i;
+      break;
+    }
+  }
+  if (lastCallIndex === -1) return;
+  // The tool loop is one assistant turn: walk back over the
+  // contiguous assistant/tool span (a user or system message ends
+  // it) to the loop's first assistant message.
+  let loopStart = request.messages[lastCallIndex];
+  for (let i = lastCallIndex - 1; i >= 0; i--) {
+    const m = request.messages[i];
+    if (m.role !== "assistant" && m.role !== "tool") break;
+    if (m.role === "assistant") loopStart = m;
+  }
+  const parts = Array.isArray(loopStart.content) ? loopStart.content : [];
   const hasOwnBlock = parts.some(
     (p) =>
       p.type === "reasoning" &&

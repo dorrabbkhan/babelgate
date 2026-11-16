@@ -5243,3 +5243,51 @@ a past result.
   absent: `.
 - Live suite (`npm run test:live`, `tests/live/codex.live.test.ts`):
   `summary: `.
+
+### Continuity guard checks the loop start (owner decision 2026-11-16, PR #108 gate B)
+
+- **Evidence (conductor, codex-cli 0.169.0, `examples/codex-anthropic.yaml`):**
+  gate B's Codex edit passed, but every request from turn 3 on
+  carried `reasoning_dropped@thinking_disabled_no_prior_block`. Codex
+  resends the bg1 reasoning item every turn (recorded); Claude Haiku
+  4.5 thinks only at the START of a tool loop — turn 1
+  `[thinking(signed), text, tool_use]`, later loop steps
+  `[text, tool_use]` (no interleaved thinking on Haiku 4.5). The Task
+  8 `applyContinuityGuard` checked the LAST assistant message with
+  `toolCalls`, which from turn 3 has no thinking block, so thinking
+  was deleted for the rest of the session.
+- **Doc basis (fetched 2026-11-16, quoted verbatim):**
+  - https://platform.claude.com/docs/en/build-with-claude/thinking,
+    "Thinking with tool use": "**A tool-use loop is one assistant
+    turn.** From the model's perspective, an assistant turn ends only
+    when Claude completes its full response, which might include
+    multiple tool calls and results." And: "In extended (manual)
+    mode, the API additionally enforces that the final assistant turn
+    of a thinking-enabled request starts with a thinking block."
+  - https://platform.claude.com/docs/en/build-with-claude/extended-thinking,
+    "Turn structure in manual mode": "the final assistant turn of a
+    thinking-enabled request must start with a thinking block".
+- **Change:** `applyContinuityGuard` still finds the last assistant
+  message with `toolCalls`, then walks backward over the contiguous
+  tool loop (assistant/tool messages, stopping at the first user or
+  system message) and applies the unchanged own-origin test
+  (`reasoning` part with attempt origin + matching `signature`) to
+  the EARLIEST assistant message in that span — the loop start.
+  Deletion of `thinking`/`output_config.effort` and the
+  `reasoning_dropped`/`thinking_disabled_no_prior_block` note are
+  unchanged. Spec §3.3's "last assistant turn with tool_use" is read
+  as Anthropic's assistant turn: the whole tool loop.
+- **Files outside the Files block (owner decision 2026-11-16, option
+  1 — the "task says so" exception, scoped to this fix only):**
+  - `src/transformers/adapters/anthropic.adapter.ts` — the
+    loop-start walk and doc comment described above.
+  - `src/transformers/adapters/anthropic.adapter.test.ts` — five new
+    cases in `describe('continuity guard (v1.4 spec §3.2)')`:
+    thinking kept when the loop starts with an own block and a later
+    step has none; kept across an assistant text message inside the
+    loop; fires when the loop start has no own block even if the
+    last step does; fires for a new loop after a user message; fires
+    when the loop starts with a foreign block. Existing tests
+    unchanged (each ends its loop with a new user message).
+- **Follow-up:** the conductor reruns the Codex live file and the
+  owner reruns gate B.
