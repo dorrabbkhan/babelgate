@@ -12,11 +12,15 @@ pr="$1"
 # Right after a push no checks are registered yet and --watch exits at once
 # ("no checks reported"). Poll until at least one check exists, for at most
 # WAIT_CI_MAX_S (default 300) at WAIT_CI_POLL_S (default 10) intervals.
+# `gh pr checks --json` needs gh >= 2.50; the packaged gh 2.46 lacks it, so
+# fall back to the statusCheckRollup length (same "checks registered" count).
 poll_s="${WAIT_CI_POLL_S:-10}"
 max_s="${WAIT_CI_MAX_S:-300}"
 waited=0
 while :; do
-  n="$(gh pr checks "$pr" --json name --jq length 2>/dev/null || echo 0)"
+  n="$(gh pr checks "$pr" --json name --jq length 2>/dev/null \
+    || gh pr view "$pr" --json statusCheckRollup --jq '.statusCheckRollup | length' 2>/dev/null \
+    || echo 0)"
   [ "${n:-0}" -gt 0 ] 2>/dev/null && break
   if [ "$waited" -ge "$max_s" ]; then
     echo "wait-ci: no checks registered after ${max_s}s" >&2

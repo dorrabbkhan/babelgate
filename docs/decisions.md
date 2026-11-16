@@ -5375,6 +5375,11 @@ a past result.
   `--version` takes a comma list, a `summary` block rolls up per version plus
   `total` (the version of a task is its `vX.Y` prefix; `unattributed` is its
   own row), and the sessions table prints the first 8 id characters.
+- Fix round 3 (wait-ci): the check-registration poll runs the required
+  `gh pr checks <PR> --json name --jq length` and falls back to
+  `gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup | length'`
+  — the packaged gh 2.46 has no `--json` on `pr checks` (added in gh 2.50), so
+  the named command alone could never see a check on this machine.
 - Interface additions beyond the plan's list, for offline tests: `judge.ts`
   `--title` (owner-gate without a `gh` call) and `--report-dir` (report dir
   override in tests); `usage-report.ts` `--projects-dir` /
