@@ -318,6 +318,7 @@ export async function finishPassthroughUnary(opts: {
     outputTokens: usage?.outputTokens,
     cacheReadTokens: usage?.cacheReadTokens,
     cacheWriteTokens: usage?.cacheWriteTokens,
+    reasoningTokens: usage?.reasoningTokens,
     finishReason: observed.finishReason,
     maxTokensClamp: maxTokensClampOf(canonical, result.entry),
     ttfbMs:
@@ -404,6 +405,7 @@ export async function finishPassthroughTrace(opts: {
     outputTokens: usage?.outputTokens,
     cacheReadTokens: usage?.cacheReadTokens,
     cacheWriteTokens: usage?.cacheWriteTokens,
+    reasoningTokens: usage?.reasoningTokens,
     finishReason:
       terminal?.type === "response.completed" ||
       terminal?.type === "response.incomplete"

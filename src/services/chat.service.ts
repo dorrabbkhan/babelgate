@@ -288,6 +288,7 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     outputTokens: canonicalResp.usage?.outputTokens,
     cacheReadTokens: canonicalResp.usage?.cacheReadTokens,
     cacheWriteTokens: canonicalResp.usage?.cacheWriteTokens,
+    reasoningTokens: canonicalResp.usage?.reasoningTokens,
     finishReason: canonicalResp.finishReason,
     maxTokensClamp: maxTokensClampOf(canonical, result.entry),
     ttfbMs:

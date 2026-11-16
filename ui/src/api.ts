@@ -72,6 +72,10 @@ export interface RequestRow {
   outputTokens: number | null;
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
+  /** Reasoning tokens inside outputTokens (v1.4); null = none reported. */
+  reasoningTokens: number | null;
+  /** Set only on a pass-through row — absent elsewhere (v1.4 §3.4). */
+  passthrough?: boolean;
   costUsd: number | null;
   wouldCostUsd: number | null;
   costEstimated: boolean;

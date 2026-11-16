@@ -25,6 +25,116 @@ const NOT_RETAINED =
   "bodies not retained — the inspector keeps the last N requests in " +
   "memory; set LOG_BODIES=true to keep them on disk";
 
+// ============ Opaque-artifact rendering (v1.4 spec §3.4) ============
+// Signature and envelope bytes are content: they may sit in the body
+// ring, but the inspector never paints them — a placeholder carries
+// the byte count and the origin instead.
+
+interface ReasoningOrigin {
+  provider: string;
+  model: string;
+}
+
+function isOrigin(v: unknown): v is ReasoningOrigin {
+  return (
+    v !== null &&
+    typeof v === "object" &&
+    typeof (v as Record<string, unknown>).provider === "string" &&
+    typeof (v as Record<string, unknown>).model === "string"
+  );
+}
+
+/** Canonical signature: {origin: {provider, model}, data: string}. */
+function isSignature(
+  v: unknown,
+): v is { origin: ReasoningOrigin; data: string } {
+  return (
+    v !== null &&
+    typeof v === "object" &&
+    isOrigin((v as Record<string, unknown>).origin) &&
+    typeof (v as Record<string, unknown>).data === "string"
+  );
+}
+
+function byteLen(s: string): number {
+  return new TextEncoder().encode(s).length;
+}
+
+/**
+ * The display form of one body value. Canonical reasoning parts become
+ * labelled `reasoning` blocks; canonical signatures become
+ * `<signature: N bytes, origin provider/model>`; wire-level
+ * `signature`/`thoughtSignature` strings and `encrypted_content`
+ * (the bg1 envelope or an upstream blob) become byte-count
+ * placeholders — the bytes never reach the DOM.
+ */
+function displayValue(value: unknown, key?: string): unknown {
+  if (typeof value === "string") {
+    if (key === "signature" || key === "thoughtSignature") {
+      return `<signature: ${byteLen(value)} bytes>`;
+    }
+    if (key === "encrypted_content") {
+      return value.startsWith("bg1.")
+        ? `<envelope: ${byteLen(value)} bytes>`
+        : `<encrypted_content: ${byteLen(value)} bytes>`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((v) => displayValue(v));
+  }
+  if (value !== null && typeof value === "object") {
+    const o = value as Record<string, unknown>;
+    if (isSignature(o)) {
+      return (
+        `<signature: ${byteLen(o.data)} bytes, ` +
+        `origin ${o.origin.provider}/${o.origin.model}>`
+      );
+    }
+    // A canonical reasoning part → one labelled, collapsible block.
+    if (
+      o.type === "reasoning" &&
+      o.reasoning !== null &&
+      typeof o.reasoning === "object"
+    ) {
+      const block: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(
+        o.reasoning as Record<string, unknown>,
+      )) {
+        block[k] =
+          k === "origin" && isOrigin(v)
+            ? `${v.provider}/${v.model}`
+            : displayValue(v, k);
+      }
+      if (o.signature !== undefined) {
+        block.signature = displayValue(o.signature, "signature");
+      }
+      if (o.cache !== undefined) {
+        block.cache = displayValue(o.cache, "cache");
+      }
+      return { reasoning: block };
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(o)) {
+      out[k] = displayValue(v, k);
+    }
+    return out;
+  }
+  return value;
+}
+
+/** A snapshot with its opaque bytes swapped for placeholders. */
+function displaySnapshot(snapshot: BodySnapshot): BodySnapshot;
+function displaySnapshot(
+  snapshot: BodySnapshot | undefined,
+): BodySnapshot | undefined;
+function displaySnapshot(
+  snapshot: BodySnapshot | undefined,
+): BodySnapshot | undefined {
+  if (snapshot === undefined) return undefined;
+  return { ...snapshot, value: displayValue(snapshot.value) };
+}
+
 interface StageProps {
   title: string;
   snapshot: BodySnapshot | undefined;
@@ -74,13 +184,18 @@ function Meta({ row }: { row: RequestRow }) {
   return (
     <div class="inspector-meta">
       <div>
-        <strong>{row.requestedModel}</strong> → {routed} · {row.status} ·
-        http {row.httpStatus} · {row.totalMs} ms ·{" "}
+        <strong>{row.requestedModel}</strong> → {routed}{" "}
+        {row.passthrough === true && (
+          <span class="badge">pass-through</span>
+        )}{" "}
+        · {row.status} · http {row.httpStatus} · {row.totalMs} ms ·{" "}
         {new Date(row.startedAt).toLocaleString()}
       </div>
       <div class="muted">
         {row.client} via {row.sourceApi} · tokens{" "}
         {row.inputTokens ?? 0}/{row.outputTokens ?? 0}
+        {row.reasoningTokens !== null &&
+          ` (+${row.reasoningTokens} reasoning)`}
         {row.costUsd !== null && ` · $${row.costUsd.toFixed(4)}`}
         {row.finishReason !== null && ` · ${row.finishReason}`}
         {row.errorType !== null && ` · ${row.errorType}`}
@@ -152,9 +267,28 @@ function diffBetween(
 function Stages({ detail }: { detail: RequestDetail & { bodies: Bodies } }) {
   const { row, bodies } = detail;
   const [hopIdx, setHopIdx] = useState(0);
-  const targetSnap = bodies.target[hopIdx];
-  const responseSnap =
-    bodies.response?.wire ?? bodies.response?.canonical;
+  // Opaque bytes (signatures, envelopes) render as placeholders; the
+  // diffs between stages run on the same display form.
+  const shown = useMemo(
+    () => ({
+      source: displaySnapshot(bodies.source),
+      canonical: displaySnapshot(bodies.canonical),
+      target: bodies.target.map((s) => displaySnapshot(s)),
+      response:
+        bodies.response === undefined
+          ? undefined
+          : {
+              canonical: displaySnapshot(bodies.response.canonical),
+              wire: displaySnapshot(bodies.response.wire),
+            },
+    }),
+    [bodies],
+  );
+  const targetSnap = shown.target[hopIdx];
+  const responseSnap = shown.response?.wire ?? shown.response?.canonical;
+  // §3.4: a pass-through request was never canonicalized — the
+  // canonical stage is omitted and target diffs against the source.
+  const prevStage = row.passthrough === true ? shown.source : shown.canonical;
 
   const hopCount = Math.max(bodies.target.length, row.hops.length);
   const hopLabel = (i: number): string => {
@@ -168,14 +302,16 @@ function Stages({ detail }: { detail: RequestDetail & { bodies: Bodies } }) {
     <div class="stages">
       <Stage
         title="source"
-        snapshot={bodies.source}
+        snapshot={shown.source}
         diff={[]}
       />
-      <Stage
-        title="canonical"
-        snapshot={bodies.canonical}
-        diff={diffBetween(bodies.source, bodies.canonical)}
-      />
+      {row.passthrough !== true && (
+        <Stage
+          title="canonical"
+          snapshot={shown.canonical}
+          diff={diffBetween(shown.source, shown.canonical)}
+        />
+      )}
       <div class="stage">
         <h3>target</h3>
         {hopCount > 1 && (
@@ -197,11 +333,11 @@ function Stages({ detail }: { detail: RequestDetail & { bodies: Bodies } }) {
           <JsonTree
             value={targetSnap.value}
             highlights={new Map(
-              diffBetween(bodies.canonical, targetSnap)
+              diffBetween(prevStage, targetSnap)
                 .filter((d) => d.kind !== "removed")
                 .map((d) => [d.path, d.kind]),
             )}
-            removed={diffBetween(bodies.canonical, targetSnap)
+            removed={diffBetween(prevStage, targetSnap)
               .filter((d) => d.kind === "removed")
               .map((d) => d.path)}
           />

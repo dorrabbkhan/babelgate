@@ -90,7 +90,15 @@ function Row({ row }: { row: RequestRow }) {
     >
       <td>{fmtTime(row.startedAt)}</td>
       <td>{row.client}</td>
-      <td>{target(row)}</td>
+      <td>
+        {target(row)}
+        {row.passthrough === true && (
+          <>
+            {" "}
+            <span class="badge">pass-through</span>
+          </>
+        )}
+      </td>
       <td class={`status-${row.status}`}>{row.status}</td>
       <td>{fmtTokens(row)}</td>
       <td>{fmtCache(row)}</td>

@@ -119,6 +119,7 @@ describe("createUsageStore", () => {
       outputTokens: 8,
       cacheReadTokens: 4,
       cacheWriteTokens: 2,
+      reasoningTokens: null,
       costUsd: 0.005,
       wouldCostUsd: null,
       costEstimated: true,
@@ -229,7 +230,84 @@ describe("createUsageStore", () => {
     on.close();
   });
 
-  it("migration from an empty file creates schema v1", () => {
+  it("reasoning_tokens stored", () => {
+    const store = createUsageStore({
+      path: dbPath(),
+      logBodies: false,
+    });
+    store.accept(makeTrace({ requestId: "r-tok", reasoningTokens: 33 }));
+    store.accept(makeTrace({ requestId: "r-none" }));
+    store.flush();
+
+    expect(store.getRequest("r-tok")?.reasoningTokens).toBe(33);
+    // Absent on the trace → NULL, never 0.
+    expect(store.getRequest("r-none")?.reasoningTokens).toBeNull();
+    store.close();
+  });
+
+  it("v1 database migrates to v2", () => {
+    // A v1 DB as v1.3 wrote it: the pre-v2 requests/bodies DDL at
+    // schema_version 1 with one existing row.
+    const path = dbPath();
+    const v1 = sqlite.openDatabase(path);
+    v1.exec(`
+CREATE TABLE requests (
+  id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, client TEXT NOT NULL, user_agent TEXT,
+  source_api TEXT NOT NULL, requested_model TEXT NOT NULL, route_reason TEXT NOT NULL,
+  provider TEXT, model TEXT, stream INTEGER NOT NULL,
+  status TEXT NOT NULL, http_status INTEGER NOT NULL, error_type TEXT,
+  input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER,
+  cost_usd REAL, would_cost_usd REAL, cost_estimated INTEGER NOT NULL, price_source TEXT,
+  ttfb_ms INTEGER, total_ms INTEGER NOT NULL, finish_reason TEXT,
+  hops TEXT NOT NULL, notes TEXT NOT NULL, diagnostics TEXT NOT NULL, repairs TEXT NOT NULL
+);
+CREATE INDEX requests_started ON requests(started_at);
+CREATE INDEX requests_model ON requests(model, started_at);
+CREATE INDEX requests_client ON requests(client, started_at);
+CREATE TABLE bodies (id TEXT PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE, snapshots TEXT NOT NULL);
+CREATE TABLE schema_version (version INTEGER NOT NULL);
+INSERT INTO schema_version (version) VALUES (1);
+INSERT INTO requests (
+  id, started_at, client, source_api, requested_model, route_reason,
+  stream, status, http_status, cost_estimated, total_ms,
+  hops, notes, diagnostics, repairs
+) VALUES (
+  'old-row', 1, 'claude-code', 'openai', 'gpt-4', 'default',
+  1, 'ok', 200, 0, 5, '[]', '[]', '[]', '[]'
+);
+`);
+    v1.close();
+
+    const store = createUsageStore({ path, logBodies: false });
+    store.accept(
+      makeTrace({
+        requestId: "new-row",
+        reasoningTokens: 77,
+        passthrough: true,
+      }),
+    );
+    store.flush();
+
+    const db = sqlite.openDatabase(path);
+    const version = db
+      .prepare("SELECT MAX(version) AS v FROM schema_version")
+      .get() as { v: number };
+    expect(version.v).toBe(2);
+    db.close();
+
+    // The pre-existing row survives with NULLs for the new columns.
+    const old = store.getRequest("old-row");
+    expect(old).toBeDefined();
+    expect(old?.reasoningTokens).toBeNull();
+    expect(old?.passthrough).toBeUndefined();
+    const added = store.getRequest("new-row");
+    expect(added?.reasoningTokens).toBe(77);
+    expect(added?.passthrough).toBe(true);
+    expect(store.listRequests({ limit: 10 }).rows).toHaveLength(2);
+    store.close();
+  });
+
+  it("migration from an empty file creates the latest schema", () => {
     const path = dbPath();
     writeFileSync(path, ""); // an empty file is a valid empty db
     const store = createUsageStore({ path, logBodies: false });
@@ -242,7 +320,7 @@ describe("createUsageStore", () => {
     const version = db
       .prepare("SELECT MAX(version) AS v FROM schema_version")
       .get() as { v: number };
-    expect(version.v).toBe(1);
+    expect(version.v).toBe(2);
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",

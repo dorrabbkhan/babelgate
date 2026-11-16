@@ -35,6 +35,7 @@ export type TraceFinish = Pick<
       | "outputTokens"
       | "cacheReadTokens"
       | "cacheWriteTokens"
+      | "reasoningTokens"
       | "finishReason"
       | "maxTokensClamp"
       | "ttfbMs"
