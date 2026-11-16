@@ -5485,3 +5485,86 @@ a past result.
   the plan's dry-run step requires "a test copy of the v1.4 index with a
   Conductor column"; conductor fixtures live under
   `scripts/conductor/fixtures/` (Task 0a pattern).
+
+## v1.5 Task 1 — recordings: Claude Code + Gemini SDK thinking, Claude Code media, Ollama Anthropic gaps (2026-11-16)
+
+Three recorder scripts per the plan's Interfaces; all run
+`record-shapes.ts` in front of the upstream with `RECORD_KEEP_ENUMS=1`
+(the Anthropic and Gemini evidence needs `type`/`source.type`/block-type
+enum values verbatim — everything else stays `"<string:len>"` shapes, so
+signatures, prompt text, completions and keys never reach the JSONL).
+No babelgate in the loop: the client is recorded against the native
+endpoint, same as `record-codex.sh` (v1.4 Task 1).
+
+- **`scripts/gates/record-claude-code.sh thinking|media`.** Claude Code
+  → recorder → `--upstream` (default `https://openrouter.ai/api`, so
+  `POST /v1/messages` lands at `/api/v1/messages` — the endpoint
+  `check-openrouter-anthropic.sh` proved returns signed thinking
+  blocks). `ANTHROPIC_BASE_URL` points at the recorder,
+  `ANTHROPIC_AUTH_TOKEN` carries `OPENROUTER_API_KEY` (forwarded as
+  `authorization: Bearer`, which is what OpenRouter's Anthropic
+  endpoint accepts; `ANTHROPIC_API_KEY` is unset so no `x-api-key`
+  competes), `ANTHROPIC_MODEL` defaults to `anthropic/claude-haiku-4.5`.
+  `thinking` runs the edit-task fixture with
+  `MAX_THINKING_TOKENS=1024` (the SDK env knob that turns extended
+  thinking on for every request; 1024 is the API minimum) — the second
+  and later bodies show whether thinking blocks and signatures come
+  back unchanged. `media` runs in a scratch dir with a generated 2-page
+  PDF (`pdftotext` verified: 2 pages, valid xref) and serves a
+  generated 1×1 PNG on a second local port (`RECORD_PNG_URL` overrides
+  it with a public URL) — the recorded block `type`s and `source.type`s
+  answer how Claude Code sends a URL image and a PDF. The client flags
+  mirror `claude-code-edit.sh` (`-p`, `--permission-prompts none`,
+  `--strict-mcp-config`, `--setting-sources local`) plus a scratch
+  `HOME` so the owner's `~/.claude` state stays out of the recording.
+- **`scripts/gates/record-gemini-sdk.ts`.** Drives the real
+  `@google/generative-ai` 0.24.1 SDK (already a devDependency — no
+  manifest change; the plan's "one plan-approved devDependency" was
+  already satisfied on main) through `startChat` with
+  `thinkingConfig: {thinkingBudget: 1024, includeThoughts: true}` —
+  untyped in 0.24.1 but sent verbatim in `generationConfig` (cast, doc
+  cited in the code). `baseUrl` points the SDK at the recorder, which
+  forwards to `https://generativelanguage.googleapis.com` (env
+  `GEMINI_BASE_URL` overrides — with a non-default base a missing key
+  becomes `dummy` for stub runs). The scripted loop asks for two
+  sequential calls (`lookup_timezone` → `get_time`) so request 2 and 3
+  show the SDK's history carry-over of `thought` parts and
+  `thoughtSignature` — verified end-to-end against a local stub: three
+  `POST /v1beta/models/gemini-2.5-flash:generateContent` lines,
+  `contents` growing 1→3→5, `thought:"<bool>"` and
+  `thoughtSignature:"<string:N>"` parts present verbatim on turns 2–3.
+- **`scripts/gates/probe-ollama-anthropic.sh [baseUrl]`** (default
+  `http://localhost:11434`, model `PROBE_MODEL` default
+  `qwen3-coder:30b`). Six probes printing `<probe> <status> <note>`:
+  `tool_choice_any`, `count_tokens` (`POST /v1/messages/count_tokens`),
+  `cache_control` (ephemeral system block), `url_image`
+  (`source.type:"url"`, `PROBE_PNG_URL` default
+  `https://httpbin.org/image/png`), `pdf_base64` (same generated
+  2-page PDF), `stream_usage` (SSE event names + whether `usage` rides
+  the stream). Notes are enum-only: `error.type`, `type`,
+  `stop_reason`, content block types, usage key names, SSE event names.
+  Verified end-to-end against a local stub Ollama (all six lines and
+  the SSE parse exercised). A 4xx/5xx answer is a measurement (the
+  expected gaps), never a script failure; the script fails only when
+  Ollama is unreachable or a probe can't be sent.
+
+**Recording pending — conductor step.** Verified offline: `bash -n`
+both shell scripts, `tsc --noEmit` the ts one, the fake-client run of
+`record-claude-code.sh media` end-to-end through the real recorder
+(PDF + PNG generation, env wiring, JSONL shape), the Gemini SDK script
+end-to-end against a stub upstream (above), and the Ollama probe
+end-to-end against a stub. The sandbox lacked `claude`/`ollama` and
+upstream network, so per the conductor's instruction Steps 2–4 did not
+run: `tests/fixtures/recordings/{claude-code-thinking,gemini-sdk-thinking,claude-code-media}.jsonl`
+and the spec §1.2 E13+ rows are still open. Conductor step: run the
+three scripts on this branch and hand the output under `tmp/` for the
+follow-up session that writes the E13+ entries and fixtures. (The
+Devin sandbox this ran in did have a readable `.env` with
+`OPENROUTER_API_KEY`/`GEMINI_API_KEY` present — noted in case the
+conductor prefers to run the recordings from a similar session.)
+
+**Files outside the Files block:** none. `docs/decisions.md` and spec
+§1.2 are the Modify entries; §1.2 is intentionally untouched this
+session (E13+ lands with the recording output, per the conductor's
+instruction). `package.json`/`package-lock.json` unchanged —
+`@google/generative-ai@^0.24.1` was already a devDependency on main.
