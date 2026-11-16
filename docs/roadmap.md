@@ -1,9 +1,10 @@
 # babelgate roadmap
 
-**Status:** v1.3 released — see what's happening: one request trace per chat request to the
-log, a SQLite usage store, Prometheus and OpenTelemetry, and the built-in `/ui`; output-token
-cap, prompt caching mapped, Gemini CLI entry point.
-**Next:** v1.4. Last revised 2026-11-13. Reasoning behind this roadmap: the 2026-10-26 roadmap design
+**Status:** v1.4 released — Codex on any model: the OpenAI Responses API as a fifth client and
+provider format, Codex CLI on Gemini, Claude and Chat-only backends with custom tools, reasoning
+carried between turns and structured output across all five formats; byte-preserving pass-through
+to Responses-native upstreams.
+**Next:** v1.5. Last revised 2026-11-16. Reasoning behind this roadmap: the 2026-10-26 roadmap design
 spec and the 2026-11-04 roadmap revision spec in `docs/superpowers/specs/`.
 
 **Positioning:** **every agent and SDK on every model.** A small, typed, contract-tested gateway that
@@ -116,7 +117,7 @@ across every source × target, and a live smoke run against real upstreams befor
   completes the edit task on a non-Gemini model.
 - **Privacy by default.** Prompt bodies are not stored unless `LOG_BODIES=true`; redaction hooks.
 
-### v1.4 Codex on any model (M) · new entry point
+### v1.4 Codex on any model (L) · new entry point
 - **OpenAI Responses API as a fifth adapter**, source and target. Codex CLI speaks only Responses since
   February 2026, so Chat-only backends (Ollama, vLLM, llama.cpp, Gemini, Anthropic) can't serve it
   without a translator. Streaming events, tools and the stateless request shape first; stored
@@ -131,7 +132,9 @@ across every source × target, and a live smoke run against real upstreams befor
 - **Embeddings.** OpenAI ↔ Gemini ↔ Ollama; `501` in the source's dialect for Anthropic.
 - **Media.** PDFs/documents; image URLs fetched and inlined for base64-only providers.
 - **Reasoning.** `reasoning_effort` ↔ Anthropic `thinking.budget` ↔ Gemini `thinkingConfig`; reasoning
-  content mapped across.
+  content mapped across. Includes carrying reasoning for the non-Responses source formats (Claude Code
+  receiving Gemini thinking, Gemini CLI receiving Claude thinking) — moved here from v1.4's scope,
+  where only Responses clients carry reasoning back.
 
 ### v1.6 Resilience and local-first polish (M)
 - **Health and balancing.** Provider health checks, circuit breaker, load balancing across multiple

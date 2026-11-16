@@ -7,6 +7,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-16
+
+"Codex on any model": the OpenAI Responses API becomes the fifth client
+and provider format, so Codex CLI runs through babelgate on Gemini,
+Claude and Chat-only backends — with streaming, custom tools, reasoning
+carried between turns and structured output across all five formats.
+Responses-native upstreams get a byte-preserving pass-through that is
+still routed, traced and priced.
+
+### Added
+
+- **OpenAI Responses API as a fifth adapter**, source and target.
+  `POST /v1/responses` (and `/responses` for clients whose base URL
+  already ends in `/v1`) is detected like the other dialects, with the
+  full SSE event set in both directions. `type: responses` names an
+  upstream that speaks Responses natively (OpenRouter, Ollama, vLLM, LM
+  Studio, Groq, Together, DeepSeek, OpenAI); `TARGET_API=responses` in
+  env-only mode. `GET /v1/models` keeps its OpenAI shape.
+- **Codex CLI entry point.** A `[model_providers.babelgate]` block with
+  `wire_api = "responses"` in `~/.codex/config.toml` runs Codex through
+  babelgate on any backend — recipe in `docs/recipes/codex.md`, working
+  configs in `examples/codex-*.yaml`, release-gated on Gemini and Claude
+  bridges plus an OpenRouter pass-through (tested: codex-cli 0.169.0).
+  A Codex live suite (`tests/live/codex.live.test.ts`) replays the
+  recorded session shapes against real upstreams.
+- **Pass-through to Responses-native upstreams.** A Responses request
+  routed to `type: responses` is forwarded with only `model` rewritten
+  and relayed byte for byte, stream included — still routed, traced and
+  priced from `response.completed`, shown in the Inspector marked
+  "pass-through". Fallbacks behave as before: to any target before the
+  first byte, bridged when the fallback doesn't speak Responses.
+- **Reasoning carried between turns for Codex.** Anthropic `thinking`
+  blocks (with real signatures), Gemini `thoughtSignature` on calls and
+  text, OpenAI-compatible `reasoning_content` and Ollama `thinking`
+  decode into canonical reasoning parts bound to their provider and
+  model. Next turn they return to the same provider/model — or are
+  dropped with a `reasoning_dropped` note: reasoning never crosses
+  origins, so a mid-session fallback or model switch stays clean. On
+  the wire they travel as a `bg1.` `reasoning.encrypted_content`
+  envelope (capped at 1 MB per item; over the cap the item ships
+  without it, noted). `reasoning.effort`/`summary`/`budgetTokens` map
+  to each target's thinking controls, and a continuity guard turns
+  Anthropic thinking off for a request whose current tool loop lacks a
+  signature of this origin, since Anthropic rejects those loops.
+- **Custom tools.** Responses `custom` tools — grammars like Codex's
+  `apply_patch` — lower to a function tool plus one required string
+  `input` parameter on non-Responses targets (grammar verbatim in the
+  description) and raise back to `custom_tool_call` items on the way
+  out; Responses→Responses keeps them native. Custom input is a raw
+  string: never parsed as JSON, never diagnosed, never repaired.
+- **Structured output across all five formats.** Responses
+  `text.format` ↔ OpenAI `response_format` ↔ Anthropic
+  `output_config.format` ↔ Gemini `responseJsonSchema` /
+  `responseMimeType` ↔ Ollama `format` — `json_schema` and
+  `json_object` where the dialect has both. The schema is forwarded
+  unchanged: babelgate never strips or rewrites keywords. A target
+  without schemaless JSON mode (Anthropic `json_object`) gets a 400
+  `unsupported_response_format` in the source's own error shape; an
+  upstream that rejects the schema returns its 400 through the normal
+  error mapping, streamed requests included.
+- **`reasoning_passback`** per-provider flag (default off): sends
+  `reasoning_content` back upstream on assistant messages for
+  OpenAI-compatible providers whose thinking mode needs it (DeepSeek
+  tool loops). Also new: canonical `parallel_tool_calls`, honoured on
+  targets that support it (OpenAI Chat, Responses, Anthropic
+  `disable_parallel_tool_use`), noted as dropped elsewhere.
+- **Reasoning in the Inspector.** Reasoning parts, signatures and
+  pass-through stages show in `/ui`; stream masking covers
+  `redacted_thinking` bytes and cut-off wire lines, so thinking content
+  follows the same privacy rules as everything else.
+
+### Changed
+
+- **Gemini thinking tokens are now counted in `output_tokens`** and
+  priced (`thoughtsTokenCount` was previously dropped), matching the
+  OTel convention and OpenAI/Anthropic billing. Canonical usage gains
+  `reasoningTokens`, carried to replies and stored per request in the
+  usage store.
+
+### Known limitations
+
+- **Stateless Responses only.** `previous_response_id`, `store: true`
+  and `conversation` get a 400 naming the field; `GET`/`DELETE
+  `/v1/responses/{id}` and `POST /v1/responses/compact` get a 404 — in
+  the Responses error envelope, before routing, on both the bridge and
+  pass-through paths.
+- **Built-in OpenAI tools are dropped on the bridge** (`web_search`,
+  `file_search`, `code_interpreter`, `computer_use`,
+  `image_generation`, `tool_search`, MCP server tools) with a
+  `builtin_tool_dropped` note — they are forwarded unchanged on
+  pass-through. The recipe sets `web_search = "disabled"`.
+- **Reasoning is carried only for Responses clients.** Claude Code or
+  Gemini CLI receiving another provider's thinking keeps v1.3
+  behaviour (dropped with a note); mapped across in v1.5.
+- **Responses Lite / `additional_tools`** (GPT-5.6 tool hoisting) is
+  not translated; OpenAI-model-only.
+- **Reasoning never translates across providers** by design: a part
+  from another provider or model is dropped with `reasoning_dropped`,
+  never reinterpreted.
+
 ## [1.3.0] - 2026-11-13
 
 "See what's happening": every chat request produces one request trace —
@@ -416,7 +516,8 @@ gets the repository ready for outside contributors.
 - **Ollama `thinking` output is dropped** by the proxy (the canonical
   format has no field for it); planned for v1.1.
 
-[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.2...v1.2.0
 [1.1.2]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.1...v1.1.2

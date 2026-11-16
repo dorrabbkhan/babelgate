@@ -5295,3 +5295,50 @@ a past result.
     unchanged (each ends its loop with a new user message).
 - **Follow-up:** the conductor reruns the Codex live file and the
   owner reruns gate B.
+
+## v1.4 Task 15 — CHANGELOG, roadmap, 1.4.0 (2026-11-16) · OWNER GATE
+
+- **Bundled prices refreshed** (`src/cost/prices.json`, committed
+  separately as `chore: refresh bundled prices`): LiteLLM
+  `model_prices_and_context_window.json` at commit
+  `6a1f81b9f8bd365718e781c50141fd3164721dbb` (3 423 chat models,
+  bundled 2026-11-13, v1.3 Task 18) → `9a1e3bde9453f9b1316790fc51e6c098d9447d7b`
+  (3 430 chat models, BerriAI/litellm `main` HEAD on 2026-11-16).
+  Diff: 7 models added, 0 removed, 1 price row changed among the
+  3 423 models present in both. As in v1.3, the fetch needed
+  `NODE_USE_ENV_PROXY=1` — the script's plain `fetch` does not read
+  proxy env vars in this sandbox; the script itself is unchanged.
+- **Version `1.4.0`** set via `npm version 1.4.0 --no-git-tag-version`:
+  `package.json` and the two root `"version"` entries of
+  `package-lock.json` only; nothing else in the lockfile moved
+  (verified with `git diff`).
+- **CHANGELOG `## [1.4.0] - 2026-11-16`** with the plan's sections —
+  a "Codex on any model" summary paragraph, then Added (Responses API
+  source and target, Codex entry point + recipe/examples/gates + live
+  suite, pass-through to Responses-native upstreams, reasoning carried
+  for Codex incl. the bg1 envelope / origin binding / continuity guard,
+  custom tools, structured output across all five formats,
+  `type: responses` + `TARGET_API=responses`, `reasoning_passback`,
+  `parallel_tool_calls`, Inspector reasoning view), Changed (Gemini
+  thinking tokens now counted in `output_tokens` and cost; canonical
+  `reasoningTokens` carried to replies and the usage store), Known
+  limitations (spec §2.2: stateless Responses only — the 400/404
+  rejections; built-in OpenAI tools dropped on the bridge, forwarded on
+  pass-through; reasoning carried only for Responses clients;
+  Responses Lite / `additional_tools` not translated; reasoning never
+  crosses providers). Compare links: `[Unreleased]` →
+  `v1.4.0...HEAD`, `[1.4.0]` → `v1.3.0...v1.4.0`.
+- **Roadmap** per the plan: status "v1.4 released … Next: v1.5", Last
+  revised 2026-11-16, v1.4 size (M) → (L) — the version shipped an
+  envelope format, a fifth adapter and pass-through beyond the
+  roadmap's one-line sketch — and the v1.5 reasoning bullet now notes
+  that carrying reasoning for non-Responses source formats moved there
+  from v1.4's scope (spec §2.2).
+- **Files outside the Files block:** none — all five modified files
+  (`CHANGELOG.md`, `package.json`, `package-lock.json`,
+  `docs/roadmap.md`, `src/cost/prices.json`, `docs/decisions.md`) are
+  named in the task's Files block.
+- **Owner steps after merge** (in the PR body, not done here): tag
+  `v1.4.0`, `npm publish --access public` (staged-version visibility
+  can take ~20 min), the GHCR image via the tag, verify
+  `npx -y babelgate@1.4.0 --help` and that `/ui` loads.
