@@ -1,0 +1,2 @@
+{"type":"user","timestamp":"2026-11-12T09:00:00Z","sessionId":"sess-placeholder","message":{"role":"user","content":"run /conduct v1.4 N and log to v1.4-taskN"}}
+{"type":"assistant","timestamp":"2026-11-12T09:00:05Z","sessionId":"sess-placeholder","message":{"role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":2000,"output_tokens":100}}}

@@ -2,7 +2,7 @@
  * usage-report.ts — per-session and per-task Claude Code usage (spec §3.0.5,
  * evidence E9–E11).
  *
- *   scripts/conductor/usage-report.sh [--since YYYY-MM-DD] [--version vX.Y]
+ *   scripts/conductor/usage-report.sh [--since YYYY-MM-DD] [--version vX.Y[,vX.Z…]]
  *                                     [--json] [--projects-dir <dir>]
  *
  * Reads ~/.claude/projects/<repo-slug>/*.jsonl where the slug is the repo's
@@ -109,9 +109,11 @@ function readEvents(file: string): LogEvent[] {
   return out;
 }
 
+// A task id starts with a digit — `<N>`/`$1` placeholders in prompt templates
+// expand to text like "v1.4-taskN" and must stay unattributed.
 const TASK_RES = [
-  /\/conduct\s+(v[\w.]+)\s+(\w+)/,
-  /\b(v\d[\d.]*)-task(\w+)\b/,
+  /\/conduct\s+(v\d[\d.]*)\s+(\d+[a-z]?)\b/,
+  /\b(v\d[\d.]*)-task(\d+[a-z]?)\b/,
 ];
 
 /** The <version>-task<N> a session belongs to, else "unattributed". */
@@ -287,6 +289,55 @@ function aggregate(sessions: Session[], opusOnly: boolean): Agg {
   };
 }
 
+interface SummaryRow {
+  sessions: number;
+  tasks: number;
+  turns: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  usd: number;
+  usdOpus: number;
+  usdPerTaskMedian: number;
+  ctxFirstMedian: number;
+  ctxMeanMedian: number;
+}
+
+/** The version a task rolls up to ("v1.4-task3" → "v1.4"); anything else
+ * (e.g. "unattributed") is its own group so every session lands in a row. */
+const versionKey = (task: string) => {
+  const m = /^(v\d[\d.]*)-task\d/.exec(task);
+  return m ? m[1] : task;
+};
+
+function summarize(sessions: Session[]): SummaryRow {
+  const byTask = new Map<string, Session[]>();
+  const sums = { turns: 0, cacheRead: 0, cacheWrite: 0, output: 0, usd: 0, usdOpus: 0 };
+  for (const s of sessions) {
+    const arr = byTask.get(s.task) ?? [];
+    arr.push(s);
+    byTask.set(s.task, arr);
+    for (const t of allTurns(s)) {
+      sums.turns++;
+      sums.cacheRead += t.cacheRead;
+      sums.cacheWrite += t.cacheWrite;
+      sums.output += t.output;
+      sums.usd += turnCost(t);
+      if (t.modelKey === "opus-5-5") sums.usdOpus += turnCost(t);
+    }
+  }
+  return {
+    sessions: sessions.length,
+    tasks: byTask.size,
+    ...sums,
+    usdPerTaskMedian: median(
+      [...byTask.values()].map((ss) => ss.reduce((a, s) => a + totalCost(s), 0)),
+    ),
+    ctxFirstMedian: median(sessions.map(firstTurnContext)),
+    ctxMeanMedian: median(sessions.map(meanCtx)),
+  };
+}
+
 const fmt = (n: number) =>
   Math.abs(n) >= MILLION
     ? `${(n / MILLION).toFixed(2)}M`
@@ -308,10 +359,15 @@ export interface RenderOpts {
   projectsDir?: string;
 }
 
-/** The --since/--version filter shared by render() and toJson(). */
+/** The --since/--version filter shared by render() and toJson(). --version
+ * takes a comma list: `v1.3,v1.4` keeps tasks under either version. */
 function filterSessions(sessions: Session[], opts: RenderOpts): Session[] {
   const since = opts.since ? new Date(`${opts.since}T00:00:00Z`).getTime() : -Infinity;
   const after = (t: Turn) => !t.ts || new Date(t.ts).getTime() >= since;
+  const versions = (opts.version ?? "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
   return sessions
     .map((s) => ({
       ...s,
@@ -321,7 +377,8 @@ function filterSessions(sessions: Session[], opts: RenderOpts): Session[] {
     .filter(
       (s) =>
         (s.turns.length || s.subagentTurns.length) &&
-        (!opts.version || s.task === opts.version || s.task.startsWith(`${opts.version}-task`)),
+        (!versions.length ||
+          versions.some((v) => s.task === v || s.task.startsWith(`${v}-`))),
     );
 }
 
@@ -336,12 +393,13 @@ export function render(sessions: Session[], opts: RenderOpts): string {
   out.push("");
   out.push("sessions");
   out.push(
-    `${pad("session", 22)}${pad("task", 16)}${rpad("turns", 6)}${rpad("$", 9)}` +
+    `${pad("session", 9)}${pad("task", 16)}${rpad("turns", 6)}${rpad("$", 9)}` +
       `${rpad("ctx-first", 10)}${rpad("ctx-mean", 10)}  tool mix`,
   );
   for (const s of kept)
     out.push(
-      `${pad(s.id, 22)}${pad(s.task, 16)}${rpad(allTurns(s).length, 6)}${rpad(usd(totalCost(s)), 9)}` +
+      `${pad(s.id.slice(0, 8), 9)}${pad(s.task, 16)}${rpad(allTurns(s).length, 6)}` +
+        `${rpad(usd(totalCost(s)), 9)}` +
         `${rpad(fmt(firstTurnContext(s)), 10)}${rpad(fmt(meanCtx(s)), 10)}  ` +
         toolsTop([...s.tools.entries()].sort((a, b) => b[1] - a[1])),
     );
@@ -374,17 +432,52 @@ export function render(sessions: Session[], opts: RenderOpts): string {
       );
     }
   }
+
+  const byVersion = new Map<string, Session[]>();
+  for (const s of kept) {
+    const k = versionKey(s.task);
+    const arr = byVersion.get(k) ?? [];
+    arr.push(s);
+    byVersion.set(k, arr);
+  }
+  out.push("");
+  out.push("summary");
+  out.push(
+    `${pad("version", 14)}${rpad("sess", 5)}${rpad("tasks", 6)}${rpad("turns", 7)}` +
+      `${rpad("cache-rd", 10)}${rpad("cache-wr", 10)}${rpad("output", 9)}${rpad("$", 9)}` +
+      `${rpad("$opus", 9)}${rpad("$/task~", 9)}${rpad("ctx1~", 9)}${rpad("ctxμ~", 9)}`,
+  );
+  const groups: [string, Session[]][] = [...byVersion.entries()].sort();
+  groups.push(["total", kept]);
+  for (const [v, ss] of groups) {
+    const r = summarize(ss);
+    out.push(
+      `${pad(v, 14)}${rpad(r.sessions, 5)}${rpad(r.tasks, 6)}${rpad(r.turns, 7)}` +
+        `${rpad(fmt(r.cacheRead), 10)}${rpad(fmt(r.cacheWrite), 10)}${rpad(fmt(r.output), 9)}` +
+        `${rpad(usd(r.usd), 9)}${rpad(usd(r.usdOpus), 9)}${rpad(usd(r.usdPerTaskMedian), 9)}` +
+        `${rpad(fmt(r.ctxFirstMedian), 9)}${rpad(fmt(r.ctxMeanMedian), 9)}`,
+    );
+  }
   return out.join("\n");
 }
 
 export function toJson(sessions: Session[], opts: RenderOpts): string {
   const kept = filterSessions(sessions, opts);
   const byTask = new Map<string, Session[]>();
+  const byVersion = new Map<string, Session[]>();
   for (const s of kept) {
     const arr = byTask.get(s.task) ?? [];
     arr.push(s);
     byTask.set(s.task, arr);
+    const k = versionKey(s.task);
+    const varr = byVersion.get(k) ?? [];
+    varr.push(s);
+    byVersion.set(k, varr);
   }
+  const summary: Record<string, SummaryRow> = Object.fromEntries(
+    [...byVersion.entries()].sort().map(([v, ss]) => [v, summarize(ss)]),
+  );
+  summary.total = summarize(kept);
   return JSON.stringify(
     {
       projectsDir: opts.projectsDir,
@@ -406,6 +499,7 @@ export function toJson(sessions: Session[], opts: RenderOpts): string {
           { total: aggregate(ss, false), opus: aggregate(ss, true) },
         ]),
       ),
+      summary,
     },
     null,
     2,
@@ -427,7 +521,7 @@ function main(argv: string[]): number {
     else if (a === "--projects-dir") opts.projectsDir = argv[++i];
     else {
       process.stderr.write(
-        "usage: usage-report.ts [--since YYYY-MM-DD] [--version vX.Y] [--json] [--projects-dir <dir>]\n",
+        "usage: usage-report.ts [--since YYYY-MM-DD] [--version vX.Y[,vX.Z…]] [--json] [--projects-dir <dir>]\n",
       );
       return 2;
     }

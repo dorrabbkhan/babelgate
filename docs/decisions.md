@@ -5362,11 +5362,18 @@ a past result.
   - `scripts/conductor/fixtures/usage/sess-conduct/subagents/agent-x.jsonl` —
     subagent sidechain-log seed for `usage-report` (fix round 1); the Files
     block's `fixtures/usage/*.jsonl` glob only covers top-level files.
-- `docs/conductor/usage-baseline-2026-11-16.md` (in the Files block) is **not
-  committed here**: `~/.claude/projects/` is outside the repository and not
-  readable from the Devin sandbox, and synthetic numbers must never stand in
-  for the real baseline. The conductor runs `usage-report.sh --since
-  2026-11-04` and commits the output in a follow-up session.
+- `docs/conductor/usage-baseline-2026-11-16.md` was not committed in the task
+  session (`~/.claude/projects/` is outside the repository and not readable
+  from the Devin sandbox, and synthetic numbers must never stand in for the
+  real baseline). The conductor ran `usage-report.sh --since 2026-11-04` on
+  the real logs and handed back `tmp/usage-baseline.json`/`.txt`; the doc was
+  written from that JSON in fix round 2, restricted to
+  `^v1\.[34]-task[0-9]` (28 sessions).
+- Fix round 2 (usage-report): the task-id regexes now require a digit start
+  (`/conduct v1.4 N` / `v1.4-taskN` template placeholders → `unattributed`),
+  `--version` takes a comma list, a `summary` block rolls up per version plus
+  `total` (the version of a task is its `vX.Y` prefix; `unattributed` is its
+  own row), and the sessions table prints the first 8 id characters.
 - Interface additions beyond the plan's list, for offline tests: `judge.ts`
   `--title` (owner-gate without a `gh` call) and `--report-dir` (report dir
   override in tests); `usage-report.ts` `--projects-dir` /
