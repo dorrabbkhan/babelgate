@@ -18,6 +18,8 @@ import {
   capturedRequests,
   resetCaptured,
   resetOverrides,
+  resetReplyOptins,
+  reasoningReply,
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
 import codexTurns from "../fixtures/codex/turns.json";
@@ -48,6 +50,7 @@ afterEach(() => {
   server.resetHandlers();
   resetCaptured();
   resetOverrides();
+  resetReplyOptins();
 });
 
 afterAll(() => {
@@ -1915,4 +1918,271 @@ routes:
       path: "envelope_too_large",
     });
   });
+});
+
+// ===== v1.4 Task 11: recorded Codex turns replayed (spec §4.2) =====
+
+/**
+ * tests/fixtures/codex/turns.json holds the three recorded Codex
+ * request bodies shape-masked by record-shapes ("<string:N>",
+ * "<bool>"). The replay hydrates them just enough for the bridge —
+ * real roles and flags — and, where the recording echoes a prior
+ * response (a `message` item with `status` plus a `function_call`),
+ * substitutes the live output items the previous turn returned, so
+ * turn N's request carries turn N−1's real reasoning items and call
+ * ids exactly as a stateless Codex client resends them.
+ */
+
+type RecordedItem = Record<string, unknown>;
+
+interface LiveTurn {
+  /** The response's output items, echoed into the next turn's input. */
+  items: RecordedItem[];
+  /** The call_id of the first function_call item, for output pairing. */
+  callId?: string;
+}
+
+function hydrateValue(value: unknown, key: string): unknown {
+  if (typeof value === "string" && /^<string:\d+>$/.test(value)) {
+    // Masked scalars: roles are resolved by the caller; status is
+    // always "completed" in the recording; anything else is content.
+    if (key === "status") return "completed";
+    return "codex";
+  }
+  if (value === "<bool>") return false;
+  if (Array.isArray(value)) {
+    return value.map((v) => hydrateValue(v, key));
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, hydrateValue(v, k)]),
+    );
+  }
+  return value;
+}
+
+function hydrateItem(item: RecordedItem): RecordedItem {
+  const out: RecordedItem = {};
+  for (const [key, v] of Object.entries(item)) {
+    if (key === "role" && typeof v === "string" && v.startsWith("<string:")) {
+      // "<string:4>" is user; the longer developer/assistant roles are
+      // told apart by `status` (only echoed assistant items carry it).
+      out[key] =
+        v === "<string:4>"
+          ? "user"
+          : item.status !== undefined
+            ? "assistant"
+            : "developer";
+      continue;
+    }
+    out[key] = hydrateValue(v, key);
+  }
+  return out;
+}
+
+/**
+ * One replayable request body from a recorded turn: every masked
+ * field hydrated, and each echoed prior-turn block
+ * (message-with-status + function_call + function_call_output)
+ * replaced by the live items from that turn's response — including
+ * its `reasoning` items with bg1 envelopes. `reasoning` gains
+ * `effort: "medium"` on top of the recorded `{summary:"auto"}` so the
+ * reasoning encoders engage on every target.
+ */
+function replayBody(
+  recorded: RecordedItem,
+  priors: LiveTurn[],
+  stream = false,
+): RecordedItem {
+  const input: RecordedItem[] = [];
+  let k = 0;
+  let pendingCallId: string | undefined;
+  for (const item of recorded.input as RecordedItem[]) {
+    if (item.type === "message" && item.status !== undefined) {
+      input.push(...priors[k].items);
+      pendingCallId = priors[k].callId;
+      continue;
+    }
+    if (item.type === "function_call") {
+      // The live call item was already pushed with the prior output.
+      continue;
+    }
+    if (item.type === "function_call_output") {
+      input.push({ ...hydrateItem(item), call_id: pendingCallId });
+      k += 1;
+      continue;
+    }
+    input.push(hydrateItem(item));
+  }
+  const body: RecordedItem = {};
+  for (const [key, v] of Object.entries(recorded)) {
+    if (key !== "input") body[key] = hydrateValue(v, key);
+  }
+  body.input = input;
+  body.stream = stream;
+  body.store = false;
+  body.parallel_tool_calls = true;
+  body.reasoning = {
+    ...(recorded.reasoning as RecordedItem),
+    effort: "medium",
+  };
+  return body;
+}
+
+function liveTurn(res: request.Response): LiveTurn {
+  const items = (res.body.output ?? []) as RecordedItem[];
+  const call = items.find((i) => i.type === "function_call");
+  return { items, callId: call?.call_id as string | undefined };
+}
+
+async function waitForTracesLocal(n: number, ms = 3000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (traces.length < n && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+describe("codex replay three turns (v1.4 spec §4.2)", () => {
+  /**
+   * The signatures each target's reasoningReply mock plants per turn
+   * (the ordinal is the upstream's 1-based request count).
+   */
+  const TURNS = codexTurns.turns as RecordedItem[];
+  const CASES: Array<{
+    target: "gemini" | "anthropic";
+    sigs: (turn: number) => string[];
+  }> = [
+    {
+      target: "gemini",
+      sigs: (n) => [`sig-gem-${n}-think`, `sig-gem-${n}-call`],
+    },
+    { target: "anthropic", sigs: (n) => [`sig-ant-${n}-think`] },
+  ];
+
+  it.each(CASES)(
+    "codex replay three turns on $target",
+    async ({ target, sigs }) => {
+      useTarget(target);
+      reasoningReply[target] = true;
+
+      const priors: LiveTurn[] = [];
+      const traceStarts: number[] = [];
+      for (const recorded of TURNS) {
+        traceStarts.push(traces.length);
+        const res = await request(app)
+          .post("/v1/responses")
+          .send(replayBody(recorded, priors));
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        await waitForTracesLocal(traceStarts.at(-1)! + 1);
+        priors.push(liveTurn(res));
+      }
+
+      const upstream = capturedRequests[target].map((b) =>
+        JSON.stringify(b),
+      );
+      expect(upstream).toHaveLength(3);
+      // Turn 2's upstream body carries turn 1's signatures; turn 3's
+      // carries both prior turns' (spec §4.2).
+      for (const s of sigs(1)) expect(upstream[1]).toContain(s);
+      for (const s of [...sigs(1), ...sigs(2)]) {
+        expect(upstream[2]).toContain(s);
+      }
+
+      const notes = traces
+        .slice(traceStarts[0])
+        .flatMap((t) => t.notes.map((n) => n.code));
+      expect(notes).not.toContain("reasoning_dropped");
+    },
+  );
+
+  /**
+   * The same replay streamed — the path real Codex takes (it always
+   * sends `stream: true`, spec §2 E1, `codex-rs/core/src/client.rs`
+   * `build_responses_request`). The live items resent each turn are
+   * the `item`s of every `response.output_item.done` event in order
+   * — what Codex's parser accumulates (spec §2 E2,
+   * `codex-rs/codex-api/src/sse/responses.rs`).
+   */
+  it.each(CASES)(
+    "codex replay three turns on $target, streamed",
+    async ({ target, sigs }) => {
+      useTarget(target);
+      reasoningReply[target] = true;
+      // Gemini asks for a stream by URL (`:streamGenerateContent`),
+      // not a body flag — capture upstream URLs like
+      // stream.test.ts's captureUpstreamUrls.
+      const urls: string[] = [];
+      const onRequest = ({ request: req }: { request: Request }) => {
+        if (req.url.startsWith(MOCK_BASE_URLS[target])) urls.push(req.url);
+      };
+      server.events.on("request:start", onRequest);
+
+      try {
+        const priors: LiveTurn[] = [];
+        const traceStarts: number[] = [];
+        for (const recorded of TURNS) {
+          traceStarts.push(traces.length);
+          const res = await postResponsesStream(
+            replayBody(recorded, priors, true),
+          );
+          expect(res.status).toBe(200);
+          expect(res.headers["content-type"]).toContain(
+            "text/event-stream",
+          );
+          const wire = res.body as unknown as string;
+          expect(wire).toContain("response.completed");
+          const items = parseSseFrames(wire)
+            .filter((f) => f.type === "response.output_item.done")
+            .map((f) => f.item as RecordedItem);
+          const call = items.find((i) => i.type === "function_call");
+          priors.push({
+            items,
+            callId: call?.call_id as string | undefined,
+          });
+          await waitForTracesLocal(traceStarts.at(-1)! + 1);
+        }
+
+        // At least one resent item is a reasoning envelope.
+        expect(
+          priors
+            .flatMap((p) => p.items)
+            .some(
+              (i) =>
+                i.type === "reasoning" &&
+                typeof i.encrypted_content === "string" &&
+                i.encrypted_content.startsWith("bg1."),
+            ),
+        ).toBe(true);
+
+        const upstream = capturedRequests[target].map((b) =>
+          JSON.stringify(b),
+        );
+        expect(upstream).toHaveLength(3);
+        // Every upstream request asked for a stream.
+        if (target === "gemini") {
+          expect(urls).toHaveLength(3);
+          for (const u of urls) {
+            expect(u).toContain(":streamGenerateContent");
+          }
+        } else {
+          for (const b of capturedRequests.anthropic) {
+            expect((b as { stream?: unknown }).stream).toBe(true);
+          }
+        }
+        // Turn 2's upstream body carries turn 1's signatures; turn
+        // 3's carries both prior turns' (spec §4.2).
+        for (const s of sigs(1)) expect(upstream[1]).toContain(s);
+        for (const s of [...sigs(1), ...sigs(2)]) {
+          expect(upstream[2]).toContain(s);
+        }
+
+        const notes = traces
+          .slice(traceStarts[0])
+          .flatMap((t) => t.notes.map((n) => n.code));
+        expect(notes).not.toContain("reasoning_dropped");
+      } finally {
+        server.events.removeListener("request:start", onRequest);
+      }
+    },
+  );
 });

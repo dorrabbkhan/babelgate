@@ -286,6 +286,8 @@ afterEach(() => {
   delete process.env.OPENAI_API_KEY;
   delete process.env.RESPONSES_API_BASE_URL;
   delete process.env.RESPONSES_API_KEY;
+  delete process.env.GEMINI_API_BASE_URL;
+  delete process.env.GEMINI_API_KEY;
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.USAGE_DB;
   delete process.env.USAGE_STORE;
@@ -534,6 +536,176 @@ describe("privacy canary (spec §4.1)", () => {
       expect(ringText).toContain(canary);
     }
     expect(ringText).not.toContain(CANARY_KEY);
+    expect(detail!.bodies).toBeUndefined();
+  });
+
+  it("v1.4 sentinels (reasoning, signature, custom input, schema) reach only the ring", async () => {
+    // v1.4 spec §4.2 + the Global Constraints privacy line: reasoning
+    // text, signatures, custom-tool input and response schemas are
+    // content. The Gemini reply plants the reasoning/signature
+    // sentinels; the request plants the custom input and schema
+    // sentinels — all four must stay out of every surface but the
+    // body ring.
+    const CANARY_REASONING = "CANARY-REASONING-pW3x8Kq2";
+    const CANARY_SIGNATURE = "CANARY-SIGNATURE-mN7v4Bz1";
+    const CANARY_CUSTOM = "CANARY-CUSTOM-jF9t6Lr3";
+    const CANARY_SCHEMA = "CANARY-SCHEMA-hD2s5Yw8";
+    const NEW_CANARIES = [
+      CANARY_REASONING,
+      CANARY_SIGNATURE,
+      CANARY_CUSTOM,
+      CANARY_SCHEMA,
+    ];
+    const ALL = [...ALL_CANARIES, ...NEW_CANARIES];
+
+    process.env.TARGET_API = "gemini";
+    process.env.GEMINI_API_BASE_URL = MOCK_BASE_URLS.gemini;
+    process.env.GEMINI_API_KEY = CANARY_KEY;
+    // thought part + thoughtSignature per
+    // https://ai.google.dev/gemini-api/docs/thought-signatures
+    responseOverrides.gemini = {
+      status: 200,
+      body: {
+        candidates: [
+          {
+            content: {
+              role: "model",
+              parts: [
+                {
+                  text: `thinking ${CANARY_REASONING}`,
+                  thought: true,
+                  thoughtSignature: CANARY_SIGNATURE,
+                },
+                { text: "done" },
+              ],
+            },
+            finishReason: "STOP",
+            index: 0,
+          },
+        ],
+        modelVersion: "m",
+      },
+    };
+    resetConfig();
+
+    const exporter = new RecordingExporter();
+    const otel = await createOtelSink(exporter);
+    registerSink(otel);
+    const sse = await connectLive();
+    expect(sse.status).toBe(200);
+
+    const before = traces.length;
+    const res = await request(app)
+      .post("/v1/responses")
+      .send({
+        model: "m",
+        store: false,
+        reasoning: { effort: "medium" },
+        include: ["reasoning.encrypted_content"],
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "patch it" }],
+          },
+          {
+            type: "custom_tool_call",
+            call_id: "cc_1",
+            name: "apply_patch",
+            input: CANARY_CUSTOM,
+          },
+          {
+            type: "custom_tool_call_output",
+            call_id: "cc_1",
+            output: "applied",
+          },
+        ],
+        tools: [
+          {
+            type: "custom",
+            name: "apply_patch",
+            format: { type: "grammar", syntax: "lark", definition: "start: p" },
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "extract",
+            schema: {
+              type: "object",
+              properties: {
+                f: { type: "string", description: CANARY_SCHEMA },
+              },
+              required: ["f"],
+            },
+          },
+        },
+      } as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await waitForTraces(before + 1);
+    getUsageStore()!.flush();
+    const requestId = traces[traces.length - 1].requestId;
+    await waitForSseFinished(sse);
+    const liveText = sse.text();
+    sse.close();
+
+    // Sanity: the sentinels really were in flight — the custom input
+    // and the schema reached the upstream body.
+    const upstreamText = JSON.stringify(capturedRequests.gemini);
+    expect(upstreamText).toContain(CANARY_CUSTOM);
+    expect(upstreamText).toContain(CANARY_SCHEMA);
+    // The client reply carries the reasoning text (in the reasoning
+    // item's summary) and the schema is not echoed back.
+    expect(JSON.stringify(res.body)).toContain(CANARY_REASONING);
+
+    const metrics = await request(app).get("/metrics");
+    expect(metrics.status).toBe(200);
+    const routing = await request(app).get("/ui/api/routing").set(UI);
+    expect(routing.status).toBe(200);
+    const requestsApi = await request(app)
+      .get("/ui/api/requests")
+      .set(UI);
+    expect(requestsApi.status).toBe(200);
+
+    await otel.shutdown();
+    const store = getUsageStore()!;
+    const tableRows = store.listRequests({ limit: 500 }).rows;
+    const detail = store.getRequest(requestId);
+    expect(detail).toBeDefined();
+    expect(traces[traces.length - 1].bodies).toBeUndefined();
+
+    const haystacks: Record<string, string> = {
+      log: logText(),
+      metrics: metrics.text,
+      otelSpans: JSON.stringify(
+        exporter.spans.map((s) => ({
+          name: s.name,
+          attributes: s.attributes,
+          status: s.status,
+          events: s.events,
+        })),
+      ),
+      live: liveText,
+      routing: JSON.stringify(routing.body),
+      requestsApi: JSON.stringify(requestsApi.body),
+      requestsTable: JSON.stringify({
+        ...detail,
+        bodies: undefined,
+        rows: tableRows,
+      }),
+    };
+    for (const [surface, text] of Object.entries(haystacks)) {
+      for (const canary of ALL) {
+        expect(text, `${surface} leaked ${canary}`).not.toContain(canary);
+      }
+    }
+
+    const ring = getBodyRing()!.get(requestId);
+    expect(ring).toBeDefined();
+    const ringText = JSON.stringify(ring);
+    for (const canary of NEW_CANARIES) {
+      expect(ringText).toContain(canary);
+    }
     expect(detail!.bodies).toBeUndefined();
   });
 

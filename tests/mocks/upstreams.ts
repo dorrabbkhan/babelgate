@@ -396,7 +396,271 @@ function cachedUsageStreamText(provider: Provider): string {
         "",
         `data: {"type":"response.completed","response":{"id":"resp_c","object":"response","created_at":1,"status":"completed","model":"m","output":[{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hi","annotations":[]}]}],"usage":{"input_tokens":${c.inputTokens},"input_tokens_details":{"cached_tokens":${c.readTokens},"cache_write_tokens":${c.writeTokens}},"output_tokens":${c.outputTokens},"output_tokens_details":{"reasoning_tokens":0},"total_tokens":${c.inputTokens + c.outputTokens}}}}`,
         "",
+        // SSE events end with a blank line — without it the relay
+        // (correctly) treats the last frame as unterminated.
+        "",
       ].join("\n");
+  }
+}
+
+// ===== Reasoning / structured-output replies (opt-in per test, v1.4 §4.2) =====
+
+/**
+ * Providers whose upstream serves a signed reasoning reply when the
+ * test opts in (`reasoningReply.gemini = true`). The bodies below are
+ * hand-written provider wire shapes — the reply a reasoning-capable
+ * model returns for a tool-loop turn: one signed reasoning part plus
+ * a call to `exec_command` (the tool the recorded Codex turns in
+ * tests/fixtures/codex/turns.json drive). Signatures embed the
+ * 1-based request ordinal (`sig-gem-2-…`) so a multi-turn test can
+ * tell turn N's signature from turn N+1's. Streaming requests get the
+ * same reply as provider SSE/NDJSON via reasoningReplyStream
+ * (implemented for the dialects whose streams carry signatures —
+ * Gemini, Anthropic); providers without a streamed twin still fall
+ * through to the recorded corpus.
+ */
+export const reasoningReply: Partial<Record<Provider, boolean>> = {};
+
+/**
+ * Providers whose upstream serves a schema-shaped JSON document when
+ * the test opts in (`structuredReply.gemini = true`). The message
+ * text is the same JSON in every dialect.
+ */
+export const structuredReply: Partial<Record<Provider, boolean>> = {};
+
+export function resetReplyOptins(): void {
+  for (const key of Object.keys(reasoningReply) as Provider[]) {
+    delete reasoningReply[key];
+  }
+  for (const key of Object.keys(structuredReply) as Provider[]) {
+    delete structuredReply[key];
+  }
+}
+
+const STRUCTURED_DOC = '{"name":"Ada","age":36}';
+
+function reasoningReplyBody(provider: Provider, n: number): unknown {
+  switch (provider) {
+    // message.reasoning_content + tool_calls per DeepSeek's Chat
+    // Completions dialect
+    // (https://api-docs.deepseek.com/guides/reasoning_model —
+    // reasoning_content arrives before content on the message).
+    case "openai":
+      return {
+        id: `chatcmpl-r${n}`,
+        object: "chat.completion",
+        created: 1700000000,
+        model: "m",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              reasoning_content: `reasoning about turn ${n}`,
+              tool_calls: [
+                {
+                  id: `call_${n}`,
+                  type: "function",
+                  function: {
+                    name: "exec_command",
+                    arguments: '{"cmd":"ls"}',
+                  },
+                },
+              ],
+            },
+            finish_reason: "tool_calls",
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
+      };
+    // thinking block with `signature` + tool_use per
+    // https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+    case "anthropic":
+      return {
+        id: `msg_r${n}`,
+        type: "message",
+        role: "assistant",
+        model: "m",
+        content: [
+          {
+            type: "thinking",
+            thinking: `reasoning about turn ${n}`,
+            signature: `sig-ant-${n}-think`,
+          },
+          {
+            type: "tool_use",
+            id: `toolu_${n}`,
+            name: "exec_command",
+            input: { cmd: "ls" },
+          },
+        ],
+        stop_reason: "tool_use",
+        usage: { input_tokens: 10, output_tokens: 8 },
+      };
+    // `thought: true` part + `thoughtSignature` on the thought and the
+    // functionCall per
+    // https://ai.google.dev/gemini-api/docs/thought-signatures
+    case "gemini":
+      return {
+        candidates: [
+          {
+            content: {
+              role: "model",
+              parts: [
+                {
+                  text: `reasoning about turn ${n}`,
+                  thought: true,
+                  thoughtSignature: `sig-gem-${n}-think`,
+                },
+                {
+                  functionCall: {
+                    name: "exec_command",
+                    args: { cmd: "ls" },
+                  },
+                  thoughtSignature: `sig-gem-${n}-call`,
+                },
+              ],
+            },
+            finishReason: "STOP",
+            index: 0,
+          },
+        ],
+        modelVersion: "m",
+      };
+    // message.thinking + tool_calls per
+    // https://docs.ollama.com/capabilities/thinking
+    case "ollama":
+      return {
+        model: "m",
+        created_at: "2024-01-01T00:00:00Z",
+        message: {
+          role: "assistant",
+          content: "",
+          thinking: `reasoning about turn ${n}`,
+          tool_calls: [
+            {
+              function: {
+                name: "exec_command",
+                arguments: { cmd: "ls" },
+              },
+            },
+          ],
+        },
+        done: true,
+        done_reason: "stop",
+      };
+    // reasoning + function_call output items per
+    // https://platform.openai.com/docs/api-reference/responses/object
+    // (encrypted_content is an upstream-native blob, not bg1.)
+    case "responses":
+      return {
+        id: `resp_r${n}`,
+        object: "response",
+        created_at: 1700000000,
+        status: "completed",
+        model: "m",
+        output: [
+          {
+            type: "reasoning",
+            id: `rs_${n}`,
+            summary: [
+              { type: "summary_text", text: `reasoning about turn ${n}` },
+            ],
+            encrypted_content: `enc-${n}`,
+          },
+          {
+            type: "function_call",
+            id: `fc_${n}`,
+            call_id: `call_${n}`,
+            name: "exec_command",
+            arguments: '{"cmd":"ls"}',
+            status: "completed",
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 8, total_tokens: 18 },
+      };
+  }
+}
+
+function structuredReplyBody(provider: Provider): unknown {
+  switch (provider) {
+    // response_format json_schema per
+    // https://platform.openai.com/docs/api-reference/chat/create
+    case "openai":
+      return {
+        id: "chatcmpl-so",
+        object: "chat.completion",
+        created: 1700000000,
+        model: "m",
+        choices: [
+          {
+            index: 0,
+            message: { role: "assistant", content: STRUCTURED_DOC },
+            finish_reason: "stop",
+          },
+        ],
+        usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
+      };
+    // output_config.format json_schema per
+    // https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+    case "anthropic":
+      return {
+        id: "msg_so",
+        type: "message",
+        role: "assistant",
+        model: "m",
+        content: [{ type: "text", text: STRUCTURED_DOC }],
+        stop_reason: "end_turn",
+        usage: { input_tokens: 10, output_tokens: 8 },
+      };
+    // generationConfig.responseJsonSchema per
+    // https://ai.google.dev/api/generate-content#GenerationConfig
+    case "gemini":
+      return {
+        candidates: [
+          {
+            content: {
+              role: "model",
+              parts: [{ text: STRUCTURED_DOC }],
+            },
+            finishReason: "STOP",
+            index: 0,
+          },
+        ],
+        modelVersion: "m",
+      };
+    // `format` per https://docs.ollama.com/capabilities/structured-outputs
+    case "ollama":
+      return {
+        model: "m",
+        created_at: "2024-01-01T00:00:00Z",
+        message: { role: "assistant", content: STRUCTURED_DOC },
+        done: true,
+        done_reason: "stop",
+      };
+    // text.format json_schema per
+    // https://platform.openai.com/docs/api-reference/responses/create
+    case "responses":
+      return {
+        id: "resp_so",
+        object: "response",
+        created_at: 1700000000,
+        status: "completed",
+        model: "m",
+        output: [
+          {
+            type: "message",
+            id: "msg_so",
+            status: "completed",
+            role: "assistant",
+            content: [
+              { type: "output_text", text: STRUCTURED_DOC, annotations: [] },
+            ],
+          },
+        ],
+        usage: { input_tokens: 10, output_tokens: 8, total_tokens: 18 },
+      };
   }
 }
 
@@ -430,6 +694,115 @@ function cachedUsageResponse(
   return HttpResponse.json(cachedUsageBody(provider));
 }
 
+/**
+ * The streamed twin of reasoningReplyBody, served in 7-byte chunks
+ * like the recorded corpus: the same ordinal-marked signatures
+ * (`sig-gem-${n}-think`, `sig-gem-${n}-call`, `sig-ant-${n}-think`)
+ * and the same `exec_command` call, carried on each dialect's stream
+ * events. Providers whose stream can't carry a signature the corpus
+ * doesn't already have keep returning undefined — the request falls
+ * through to the recorded stream fixtures as before.
+ */
+function reasoningReplyStream(
+  provider: Provider,
+  n: number,
+): HttpResponse | undefined {
+  switch (provider) {
+    // `data:` frames of GenerateContentResponse per
+    // https://ai.google.dev/api/generate-content#method:-models.streamgeneratecontent
+    // (`:streamGenerateContent?alt=sse`); `thought: true` +
+    // `thoughtSignature` on the thought part and the signature on the
+    // `functionCall` part per
+    // https://ai.google.dev/gemini-api/docs/thought-signatures; the
+    // terminal frame carries `finishReason` + cumulative
+    // `usageMetadata`.
+    case "gemini":
+      return textStreamResponse(
+        [
+          `data: {"candidates":[{"content":{"role":"model","parts":[{"text":"reasoning about turn ${n}","thought":true,"thoughtSignature":"sig-gem-${n}-think"}]},"index":0}],"modelVersion":"m"}`,
+          "",
+          `data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"name":"exec_command","args":{"cmd":"ls"}},"thoughtSignature":"sig-gem-${n}-call"}]},"index":0}],"modelVersion":"m"}`,
+          "",
+          'data: {"candidates":[{"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":8,"totalTokenCount":18},"modelVersion":"m"}',
+          "",
+        ].join("\n"),
+        STREAM_CONTENT_TYPE.gemini,
+      );
+    // Event-typed SSE per
+    // https://docs.anthropic.com/en/api/messages-streaming and the
+    // "Streaming thinking" section of
+    // https://platform.claude.com/docs/en/build-with-claude/extended-thinking:
+    // a `thinking` block (index 0) streams `thinking_delta` then its
+    // `signature_delta`; a `tool_use` block (index 1) streams
+    // `input_json_delta.partial_json`; `message_delta` carries the
+    // stop reason and output usage; `message_stop` is terminal.
+    case "anthropic":
+      return textStreamResponse(
+        [
+          "event: message_start",
+          `data: {"type":"message_start","message":{"id":"msg_r${n}","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":1}}}`,
+          "",
+          "event: content_block_start",
+          'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
+          "",
+          "event: content_block_delta",
+          `data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"reasoning about turn ${n}"}}`,
+          "",
+          "event: content_block_delta",
+          `data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-ant-${n}-think"}}`,
+          "",
+          "event: content_block_stop",
+          'data: {"type":"content_block_stop","index":0}',
+          "",
+          "event: content_block_start",
+          `data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_${n}","name":"exec_command","input":{}}}`,
+          "",
+          "event: content_block_delta",
+          'data: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"cmd\\":\\"ls\\"}"}}',
+          "",
+          "event: content_block_stop",
+          'data: {"type":"content_block_stop","index":1}',
+          "",
+          "event: message_delta",
+          'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":8}}',
+          "",
+          "event: message_stop",
+          'data: {"type":"message_stop"}',
+          "",
+        ].join("\n"),
+        STREAM_CONTENT_TYPE.anthropic,
+      );
+    default:
+      return undefined;
+  }
+}
+
+/** Opt-in replies win over the corpus but never over responseOverrides. */
+function optinReply(
+  provider: Provider,
+  url: string,
+  body: unknown,
+): HttpResponse | undefined {
+  if (wantsStream(url, body)) {
+    if (reasoningReply[provider]) {
+      return reasoningReplyStream(
+        provider,
+        capturedRequests[provider].length,
+      );
+    }
+    return undefined;
+  }
+  if (reasoningReply[provider]) {
+    return HttpResponse.json(
+      reasoningReplyBody(provider, capturedRequests[provider].length),
+    );
+  }
+  if (structuredReply[provider]) {
+    return HttpResponse.json(structuredReplyBody(provider));
+  }
+  return undefined;
+}
+
 export const upstreamHandlers = [
   http.post(
     `${MOCK_BASE_URLS.openai}/v1/chat/completions`,
@@ -443,6 +816,8 @@ export const upstreamHandlers = [
           status: override.status ?? 200,
         });
       }
+      const optin = optinReply("openai", request.url, body);
+      if (optin) return optin;
       if (cachedUsage.openai) {
         return cachedUsageResponse("openai", request.url, body);
       }
@@ -463,6 +838,8 @@ export const upstreamHandlers = [
         status: override.status ?? 200,
       });
     }
+    const optin = optinReply("gemini", request.url, body);
+    if (optin) return optin;
     if (cachedUsage.gemini) {
       return cachedUsageResponse("gemini", request.url, body);
     }
@@ -482,6 +859,8 @@ export const upstreamHandlers = [
         status: override.status ?? 200,
       });
     }
+    const optin = optinReply("ollama", request.url, body);
+    if (optin) return optin;
     if (cachedUsage.ollama) {
       return cachedUsageResponse("ollama", request.url, body);
     }
@@ -505,6 +884,8 @@ export const upstreamHandlers = [
         status: override.status ?? 200,
       });
     }
+    const optin = optinReply("responses", request.url, body);
+    if (optin) return optin;
     if (cachedUsage.responses) {
       return cachedUsageResponse("responses", request.url, body);
     }
@@ -524,6 +905,8 @@ export const upstreamHandlers = [
         status: override.status ?? 200,
       });
     }
+    const optin = optinReply("anthropic", request.url, body);
+    if (optin) return optin;
     if (cachedUsage.anthropic) {
       return cachedUsageResponse("anthropic", request.url, body);
     }
