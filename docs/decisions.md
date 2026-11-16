@@ -5379,7 +5379,10 @@ a past result.
   `gh pr checks <PR> --json name --jq length` and falls back to
   `gh pr view <PR> --json statusCheckRollup --jq '.statusCheckRollup | length'`
   — the packaged gh 2.46 has no `--json` on `pr checks` (added in gh 2.50), so
-  the named command alone could never see a check on this machine.
+  the named command alone could never see a check on this machine. The
+  failure listing likewise parses the plain `gh pr checks <PR>` table with
+  `awk -F'\t' '$2=="fail"'` instead of `--json name,bucket,link`, for the
+  same gh 2.46 reason.
 - Interface additions beyond the plan's list, for offline tests: `judge.ts`
   `--title` (owner-gate without a `gh` call) and `--report-dir` (report dir
   override in tests); `usage-report.ts` `--projects-dir` /

@@ -68,9 +68,39 @@ echo "checks table"
 exit 0
 `;
 
-function runWaitCi(env: Record<string, string>) {
+// Stub gh as 2.46 behaves: every `pr checks --json` fails with
+// "unknown flag: --json"; `pr view --json statusCheckRollup` still answers;
+// `--watch` exits 1 (a red CI); a bare `pr checks` prints one fail row and
+// one pass row; `run view` prints a 50-line log. All calls are recorded to
+// $GH_STUB_CALLS.
+const GH_STUB_FAILING = `#!/usr/bin/env bash
+echo "\$*" >> "\$GH_STUB_CALLS"
+if [[ " \$* " == *" statusCheckRollup "* ]]; then
+  echo 2
+  exit 0
+fi
+if [[ " \$* " == *" --json "* ]]; then
+  echo "unknown flag: --json" >&2
+  exit 1
+fi
+if [[ " \$* " == *" --watch "* ]]; then
+  exit 1
+fi
+if [[ " \$1 \$2 " == " pr checks " ]]; then
+  printf 'lint\\tfail\\t12s\\thttps://github.com/o/r/actions/runs/1/job/111\\n'
+  printf 'check\\tpass\\t1m31s\\thttps://github.com/o/r/actions/runs/2/job/222\\n'
+  exit 0
+fi
+if [[ " \$1 \$2 " == " run view " ]]; then
+  seq 1 50
+  exit 0
+fi
+exit 0
+`;
+
+function runWaitCi(env: Record<string, string>, stub = GH_STUB) {
   const dir = mkdtempSync(join(tmpdir(), "wait-ci-"));
-  writeFileSync(join(dir, "gh"), GH_STUB, { mode: 0o755 });
+  writeFileSync(join(dir, "gh"), stub, { mode: 0o755 });
   return {
     dir,
     r: spawnSync("bash", ["scripts/conductor/wait-ci.sh", "123"], {
@@ -79,6 +109,7 @@ function runWaitCi(env: Record<string, string>) {
         ...process.env,
         PATH: `${dir}:${process.env.PATH}`,
         GH_STUB_COUNT: join(dir, "count"),
+        GH_STUB_CALLS: join(dir, "calls"),
         ...env,
       },
     }),
@@ -320,6 +351,19 @@ describe("judge.ts (spec §3.0.1)", () => {
     });
     expect(r.status).toBe(3);
     expect(r.stderr).toContain("wait-ci: no checks registered after");
+  });
+
+  it("wait-ci prints failing jobs from plain gh output", () => {
+    const { dir, r } = runWaitCi({ WAIT_CI_POLL_S: "0" }, GH_STUB_FAILING);
+    expect(r.status).toBe(1);
+    expect(r.stdout).toMatch(/--- failing checks:\nlint\n/);
+    // the job-111 block is the last output: the header plus exactly lines
+    // 11–50 of the 50-line stub log (tail -40).
+    const tail40 = Array.from({ length: 40 }, (_, i) => `${i + 11}`).join("\n");
+    expect(r.stdout).toContain("--- job 111: last 40 failed-log lines\n" + tail40 + "\n");
+    const calls = readFileSync(join(dir, "calls"), "utf8");
+    expect(calls).toContain("run view --job 111 --log-failed");
+    expect(calls).not.toContain("--job 222");
   });
 
   it("judge.sh and wait-ci.sh argc guards exit 2", () => {

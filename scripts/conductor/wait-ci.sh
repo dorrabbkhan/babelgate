@@ -34,8 +34,10 @@ rc=0
 gh pr checks "$pr" --watch --fail-fast=false >"$log" 2>&1 || rc=$?
 gh pr checks "$pr" || true
 if [ "$rc" -ne 0 ]; then
-  fails="$(gh pr checks "$pr" --json name,bucket,link \
-    --jq '.[] | select(.bucket=="fail") | [.name,.link] | @tsv' 2>/dev/null || true)"
+  # Same gh 2.46 limit as the poll above: `pr checks` has no --json, so the
+  # failing rows come from the plain non-TTY table (name, status, elapsed,
+  # link — tab-separated).
+  fails="$(gh pr checks "$pr" 2>/dev/null | awk -F'\t' '$2=="fail"{print $1"\t"$4}' || true)"
   if [ -n "$fails" ]; then
     echo "--- failing checks:"
     printf '%s\n' "$fails" | cut -f1
