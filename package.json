@@ -22,10 +22,24 @@
     "test:watch": "vitest",
     "prepublishOnly": "./scripts/check.sh"
   },
-  "keywords": [],
+  "keywords": [
+    "llm",
+    "proxy",
+    "gateway",
+    "openai",
+    "anthropic",
+    "gemini",
+    "ollama",
+    "openrouter",
+    "responses-api",
+    "claude-code",
+    "codex",
+    "gemini-cli",
+    "translation"
+  ],
   "author": "Dorrabb Khan",
   "license": "Apache-2.0",
-  "description": "babelgate — proxy that translates between LLM API formats (OpenAI, Gemini, Ollama, Anthropic) via a canonical intermediate format",
+  "description": "LLM API proxy that translates between OpenAI Chat, OpenAI Responses, Anthropic, Gemini and Ollama formats, streaming and tools included — run Claude Code, Codex CLI or Gemini CLI on any model",
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.132.1",
     "@google/generative-ai": "^0.24.1",

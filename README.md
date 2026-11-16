@@ -262,10 +262,12 @@ Endpoint kinds:
 
 - **Chat** — the request/response translation described above (OpenAI
   `/v1/chat/completions`, Gemini `/v1beta/models/{m}:generateContent`,
-  Ollama `/api/chat`, Anthropic `/v1/messages`).
+  Ollama `/api/chat`, Anthropic `/v1/messages`, Responses
+  `/v1/responses`).
 - **Streaming chat** — `stream: true` (and Gemini's
   `:streamGenerateContent?alt=sse`) flows chunk-by-chunk in each side's own
-  wire protocol: SSE for OpenAI, Anthropic and Gemini, NDJSON for Ollama.
+  wire protocol: SSE for OpenAI, Anthropic, Gemini and Responses, NDJSON
+  for Ollama.
   A client disconnect aborts the upstream request; an upstream that dies
   mid-stream produces an in-stream error in the client's dialect, and a
   stream that stalls longer than `UPSTREAM_STREAM_IDLE_MS` is cut rather
@@ -321,7 +323,7 @@ see the section above and [examples/](examples/). With no file,
 | ------------------------- | -------------------------------------------------------------------------------------------- |
 | `BABELGATE_CONFIG`        | Path to a `babelgate.yaml` (same as `--config`)                                               |
 | `SOURCE_API`              | **Deprecated** — ignored in 1.2 (the request path decides the client format); removed in 2.0  |
-| `TARGET_API`              | Format to translate to upstream — same options (env-only mode; ignored when a YAML file is loaded) |
+| `TARGET_API`              | Format to translate to upstream — `openai`, `anthropic`, `gemini`, `ollama` or `responses` (env-only mode; ignored when a YAML file is loaded) |
 | `PORT`                    | Listen port (default `3000`)                                                                 |
 | `{PROVIDER}_API_BASE_URL` | Upstream base URL for the target provider, e.g. `OLLAMA_API_BASE_URL=http://localhost:11434` (env-only; YAML providers use `base_url`) |
 | `{PROVIDER}_API_KEY`      | API key for the target provider (Ollama doesn't need one). With YAML, keys are whichever env vars `api_key_env` names |
@@ -354,7 +356,7 @@ Set `PROXY_API_KEY` and every proxied endpoint requires it, in whichever
 native auth style the client SDK already sends — any one match
 authenticates, and every comparison is timing-safe:
 
-- `Authorization: Bearer <key>` — OpenAI and Ollama SDKs, Anthropic's
+- `Authorization: Bearer <key>` — OpenAI and Ollama SDKs, Codex CLI, Anthropic's
   `ANTHROPIC_AUTH_TOKEN` (the `Bearer` scheme is case-insensitive)
 - `x-api-key: <key>` — Anthropic SDK
 - `x-goog-api-key: <key>` — Gemini SDK
@@ -378,6 +380,7 @@ format, so client SDKs raise their native exceptions:
 | Anthropic | `{"type":"error","error":{"type","message"}}` |
 | Gemini | `{"error":{"code","message","status"}}` |
 | Ollama | `{"error":"<message>"}` |
+| Responses | `{"error":{"message","type","param","code"}}` (the OpenAI envelope) |
 
 The same holds inside a stream: an upstream that fails mid-stream produces
 the source dialect's in-stream error event, never silence or half a JSON
@@ -448,8 +451,8 @@ src/
 ├── cli.ts                  npx babelgate — flags, presets, printed export lines
 ├── app.ts                  Express app wiring (middleware → routes → errors)
 ├── index.ts                Server startup
-├── config/env-config.ts    Env var config (lazy, validated)
-├── middleware/             pino request logging, error handler
+├── config/                 Env-only config + babelgate.yaml loader (zod-validated)
+├── middleware/             Source detection, client auth, pino logging, error handler
 ├── routes/proxy.ts         Thin HTTP adapter — writes streams, aborts on close
 ├── services/
 │   ├── http-client.ts      Upstream transport: timeout, retry, logging, postStream
@@ -462,13 +465,14 @@ src/
 ├── ui-api/                 /ui/api JSON routes + access control
 ├── transformers/
 │   ├── index.ts            transformRequest/transformResponse entry points
-│   └── adapters/           One file per provider (+ .stream.ts codecs) + PROVIDER_ROUTES
+│   └── adapters/           One adapter per provider (+ stream codecs, helpers) + PROVIDER_ROUTES
 ├── types/
 │   ├── canonical.types.ts  The canonical format + CanonicalStreamEvent
 │   ├── canonical.schema.ts Zod schemas for runtime validation
 │   └── *.types.ts          Provider types (mostly SDK re-exports)
 └── utils/                  logger (pino), error classes, SSE/NDJSON parsers,
                             ID generators, stream reassembly, MODEL_MAP
+ui/                         The /ui single-page app (Preact + Vite, Playwright e2e)
 ```
 
 ## Testing
@@ -490,9 +494,9 @@ All fast, no network. Layers:
 - **HTTP integration tests** (`tests/integration/`) — real requests against
   the Express app via supertest, with upstream providers mocked by msw. No
   actual network calls happen. `pairs.test.ts` generates end-to-end tests
-  per provider pair — chat and model list, so all 16 combinations get
+  per provider pair — chat and model list, so all 25 combinations get
   exercised — `stream-pairs.test.ts` runs the streaming × tools matrix
-  over the launch pairs, and `errors.test.ts` runs every pair through the
+  over every pair, and `errors.test.ts` runs every pair through the
   upstream-error mapping table.
 
 The contract tests are what make the adapter approach hold up: you don't need
@@ -524,6 +528,9 @@ npm run test:live
   it answers bad model IDs differently), and a streamed chat asserted on
   chunks, terminal event and usage — all on response *shape*, never on
   generated text.
+
+A Codex live suite (`tests/live/codex.live.test.ts`) replays recorded
+Codex session shapes against real upstreams the same way.
 
 A nightly GitHub Actions job (`.github/workflows/live.yml`) runs the
 suite against a fresh Ollama; paid-provider secrets are off until the
@@ -581,8 +588,11 @@ fixtures/tests — see
 
 ## Roadmap
 
-The version-by-version plan — the 16-pair matrix in v1.1.x, one endpoint
-for many providers in v1.2, and beyond — lives in
+Shipped so far: the 16-pair matrix (v1.1), one endpoint for many
+providers (v1.2), observability and the `/ui` (v1.3), and the Responses
+API / Codex entry point (v1.4). Release notes are in
+[CHANGELOG.md](CHANGELOG.md); the version-by-version plan, including
+reasoning across every client format in v1.5, lives in
 [docs/roadmap.md](docs/roadmap.md).
 
 ## Docker
@@ -596,15 +606,19 @@ Release tags also publish `ghcr.io/dorrabbkhan/babelgate:<version>` and
 `:latest` via `.github/workflows/release.yml`.
 
 Multi-stage build: provider SDKs are `devDependencies` (type-only imports),
-so the runtime image ships `dist/` plus the top-level runtime
-dependencies from `package.json` — `dotenv`, `express`, `pino`,
-`pino-http` and `zod`.
+so the runtime image ships `dist/` (server and built UI) plus the
+runtime dependencies from `package.json` — `express`, `pino`,
+`pino-http`, `zod`, `yaml`, `dotenv`, `prom-client` and the
+OpenTelemetry packages. The usage store uses Node's built-in
+`node:sqlite` and lives on the `/data` volume (`USAGE_DB=/data/usage.db`).
 
 ## Stack
 
-Express 5, TypeScript, pino (logging), zod (schema validation), vitest +
-msw + supertest (tests). Provider types come from the official SDKs wherever
-possible.
+Node ≥ 22.13, Express 5, TypeScript, pino (logging), zod (schema
+validation), yaml (config), `node:sqlite` (usage store), prom-client and
+OpenTelemetry (metrics, traces), Preact + Vite (the `/ui`), vitest + msw +
+supertest + Playwright (tests). Provider types come from the official SDKs
+wherever possible.
 
 ## License
 
