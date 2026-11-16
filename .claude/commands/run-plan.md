@@ -1,8 +1,12 @@
 ---
-description: Work through a range of plan tasks sequentially, pausing at gates.
-argument-hint: <version> <from-task> <to-task>   e.g. v1.2 1 5
+description: Work through a range of plan tasks sequentially, one headless session each, pausing at gates.
+argument-hint: <version> <from-task> <to-task>   e.g. v1.5 1 5
 ---
 Arguments as typed: $ARGUMENTS
-For each task N from $1 to $2 in plan $0: run /conduct $0 N. After each task, wait until the owner has merged
-the PR (poll `gh pr view <PR> --json state` every 5 minutes, and run /inbox while waiting). Stop at owner
-gates and escalations until "conductor: continue". Never merge yourself.
+Run `scripts/conductor/run-plan.sh $0 $1 $2`. It starts one fresh headless `/conduct $0 <id>` session per
+task in Task Index order, on the model named by the index's Conductor column, with the explicit
+`--allowedTools` list in scripts/conductor/headless-tools.txt (D7 — a tool call outside the list fails and
+the session escalates instead of improvising). After each session it reads the `RESULT:` line that
+/conduct appended to the task's conductor-log.md: `READY <PR>` waits for the owner to merge;
+`ESCALATED`, `GATE`, `FAILED` or a missing line stops the run and notifies you. It never merges.
+Watch the first runs and adjust headless-tools.txt by PR if a legitimate call fails closed.

@@ -22,3 +22,7 @@ Run the conductor loop from CLAUDE.md for plan version $0, task $1.
    ~/babelgate-conductor/$0-task$1/conductor-log.md.
 5. Finish with scripts/conductor/status-comment.sh and scripts/conductor/notify.sh, then print a summary:
    PR, verdict, CI, fix rounds used, anything the owner must look at (gates, wire-format evidence, diffs).
+6. End by appending exactly one last line to conductor-log.md — run-plan.sh reads it:
+   `RESULT: READY <PR>` when the PR is up and only merge remains, `RESULT: ESCALATED` on a STOP or
+   owner-decision escalation, `RESULT: GATE` at an owner gate, `RESULT: FAILED` when the task could not
+   complete. No other `RESULT:` values; it must be the file's last line.

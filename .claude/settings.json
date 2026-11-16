@@ -1,4 +1,8 @@
 {
+  "disableClaudeAiConnectors": true,
+  "enabledPlugins": {
+    "superpowers@synced": false
+  },
   "permissions": {
     "allow": [
       "Read", "Grep", "Glob",
