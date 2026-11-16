@@ -14,10 +14,29 @@ const mimeTypeSchema = z.enum([
   "image/webp",
 ]);
 
-const imageSchema = z.object({
-  data: z.string(),
-  mimeType: mimeTypeSchema,
-});
+// Exactly one of data/url (v1.5 spec §3.2.1); strict so both-present
+// fails instead of silently stripping a key.
+const imageSchema = z.union([
+  z.strictObject({
+    data: z.string(),
+    mimeType: mimeTypeSchema,
+  }),
+  z.strictObject({
+    url: z.string(),
+    mimeType: mimeTypeSchema.optional(),
+  }),
+]);
+
+const documentSchema = z
+  .strictObject({
+    data: z.string().optional(),
+    url: z.string().optional(),
+    mimeType: z.enum(["application/pdf", "text/plain"]),
+    name: z.string().optional(),
+  })
+  .refine((d) => (d.data !== undefined) !== (d.url !== undefined), {
+    message: "document needs exactly one of data and url",
+  });
 
 const cacheHintSchema = z.object({
   ttl: z.enum(["5m", "1h"]).optional(),
@@ -35,9 +54,10 @@ const reasoningSignatureSchema = z.object({
 
 const contentPartSchema = z
   .object({
-    type: z.enum(["text", "image", "reasoning"]),
+    type: z.enum(["text", "image", "reasoning", "document"]),
     text: z.string().optional(),
     image: imageSchema.optional(),
+    document: documentSchema.optional(),
     reasoning: z
       .object({
         text: z.string().optional(),
@@ -60,7 +80,18 @@ const contentPartSchema = z
     { message: "reasoning payload only on reasoning parts" },
   )
   .refine(
-    (p) => (p.type === "image" ? p.signature === undefined : true),
+    (p) => (p.type === "document" ? p.document !== undefined : true),
+    { message: "document content part needs document" },
+  )
+  .refine(
+    (p) => (p.type !== "document" ? p.document === undefined : true),
+    { message: "document payload only on document parts" },
+  )
+  .refine(
+    (p) =>
+      p.type === "image" || p.type === "document"
+        ? p.signature === undefined
+        : true,
     { message: "signature only on text and reasoning parts" },
   );
 
@@ -104,6 +135,16 @@ export const canonicalMessageSchema = z
     {
       message:
         "reasoning content parts are only allowed on assistant messages",
+    },
+  )
+  .refine(
+    (m) =>
+      m.role === "user" ||
+      !Array.isArray(m.content) ||
+      m.content.every((p) => p.type !== "document"),
+    {
+      message:
+        "document content parts are only allowed on user messages",
     },
   );
 

@@ -5719,3 +5719,57 @@ URL images to base64); `tool_choice` (`any` accepted) and
 is not a gap (usage rides the stream)
 (https://docs.ollama.com/api/anthropic-compatibility). Docs-only
 commit — E16 and this entry; nothing remains outstanding from Task 1.
+
+## v1.5 Task 2 — canonical media change; shared envelope module (spec §3.2.1, E2, E3) · OWNER REVIEW
+
+- **Canonical changes (types + schema, same commit).** Type diff:
+  `CanonicalImage` goes from `{data: string; mimeType: M}` to the union
+  `{data: string; mimeType: M; url?: never} | {url: string; mimeType?: M;
+  data?: never}` — exactly one of `data`/`url`. New exported alias
+  `CanonicalImageMimeType` (`"image/jpeg" | "image/png" | "image/gif" |
+  "image/webp"`) carries the union the plan writes inline twice; needed so
+  the four decode sites that cast a provider mime string
+  (`anthropic.messages.ts`, `openai.adapter.ts`, `gemini.adapter.ts`,
+  `responses.items.ts`) keep a required-`mimeType` target —
+  `CanonicalImage["mimeType"]` is now `M | undefined` by construction.
+  New `CanonicalDocument = {data?: string; url?: string; mimeType:
+  "application/pdf" | "text/plain"; name?: string}` (exactly one of
+  `data`/`url`, schema-enforced); `CanonicalContentPart.type` gains
+  `"document"` with `document?: CanonicalDocument`.
+- **Schema refinements.** `imageSchema` is a `strictObject` union of the
+  two variants (strict so `{data, url}` fails instead of stripping a
+  key). `documentSchema` is `strictObject` + an exactly-one-of refine.
+  Content parts: `document` payload required on `type:"document"` and
+  absent elsewhere (mirrors the `reasoning` refines); the signature
+  refine now covers `image` **and** `document` parts — the rule it
+  names ("signature only on text and reasoning parts") is unchanged.
+  Messages: `document` parts are only allowed on `role:"user"`
+  (mirrors "reasoning only on assistant") — the plan pins "document on
+  assistant invalid"; user-only also keeps them off `system` (text-only
+  there) and `tool` (spec §3.2.1 scopes tool content to text+image).
+  Ambiguity resolved: the plan names only the assistant case; the
+  tighter rule was chosen because every decode source for documents is
+  user-turn input (OpenAI `file`, Anthropic `document`, Responses
+  `input_file`, Gemini `inlineData` PDF — §3.2.2).
+- **Envelope moved, unchanged.** `packEnvelope`, `unpackEnvelope`,
+  `EnvelopePayload`, `ENVELOPE_PREFIX`, `ENVELOPE_CAP_BYTES` move
+  verbatim to `src/transformers/reasoning-envelope.ts` (spec §3.1: the
+  envelope generalizes to Anthropic/Gemini clients in Task 4).
+  `responses.envelope.ts` now only re-exports; its test file is
+  untouched and still passes.
+- **Files outside the Files block:** `anthropic.messages.ts`,
+  `openai.adapter.ts`, `gemini.adapter.ts`, `responses.items.ts`,
+  `ollama.adapter.ts` — the `CanonicalImage` union is a compile-time
+  interface change: `image.data`/`image.mimeType` are now optional at
+  the type level, so the five encode sites gain a `data === undefined`
+  guard that throws `ValidationError` naming `"url"`/`"data"` (never a
+  silent `data:undefined` byte), and the four decode casts move to the
+  new alias. No url-variant is produced by any decoder yet; real
+  fetch/inline and per-target `MEDIA_SUPPORT` refusals are Task 6 scope.
+- **Tests.** `tests/contracts/canonical.schema.test.ts` gains a
+  `v1.5 canonical media` describe: `url image valid`, `image with both
+  data and url invalid`, `document pdf by data valid`, `document with
+  neither data nor url invalid`, `tool message with image part valid`,
+  `document part on assistant message invalid`. `existing requests
+  still valid` (fixture sweep) is unchanged and still passes; no
+  fixture or snapshot was touched.

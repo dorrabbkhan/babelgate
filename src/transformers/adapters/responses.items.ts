@@ -21,6 +21,7 @@
 import type {
   CanonicalContentPart,
   CanonicalImage,
+  CanonicalImageMimeType,
   CanonicalMessage,
 } from "../../types/canonical.types";
 import { ValidationError } from "../../utils/errors";
@@ -426,7 +427,7 @@ function toCanonicalImage(
       `unsupported_image_url at ${path}.content[${index}]: only data: image URLs are supported`,
     );
   }
-  const mimeType = match[1] as CanonicalImage["mimeType"];
+  const mimeType = match[1] as CanonicalImageMimeType;
   return {
     data: match[2],
     mimeType: [
@@ -557,6 +558,12 @@ function toInputContent(
   const parts = typeof content === "string" ? [{ type: "text" as const, text: content }] : content;
   return parts.map((part) => {
     if (part.type === "image" && part.image) {
+      if (part.image.data === undefined) {
+        // URL images resolve to bytes in the services (v1.5 Task 6).
+        throw new ValidationError(
+          'Unsupported "image" content: "url" without "data"',
+        );
+      }
       return {
         type: "input_image",
         image_url: `data:${part.image.mimeType};base64,${part.image.data}`,
