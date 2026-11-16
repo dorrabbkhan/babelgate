@@ -5030,6 +5030,20 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   `encrypted_content` renders `<envelope: N bytes>` for the `bg1.`
   envelope and `<encrypted_content: N bytes>` for an upstream blob —
   the bytes never reach the DOM.
+- **Streamed `response.wire` masking** (fix round 1): a streaming
+  request snapshots the raw upstream stream as a *string*, so the
+  object walk never saw it. A keyless string that holds a stream is
+  now masked line by line before render: SSE `data:` payloads and
+  NDJSON lines that parse as JSON go through the same display form
+  and are re-encoded; `event:` lines, blanks, `data: [DONE]` and
+  unparseable payloads pass through. The same round masks Anthropic
+  `redacted_thinking.data` parent-aware (`type ===
+  "redacted_thinking"` only — other `data` keys are ordinary
+  content). The masking walk moved to the new
+  `ui/src/screens/inspector-display.ts` (file outside the Files
+  block): the fix pushed `Inspector.tsx` past the ~400-line
+  single-purpose limit, and the display form is a pure transform
+  with no Preact dependency.
 - **Pass-through stages** — §3.4's "source and target stages (no
   canonical stage, marked 'pass-through')": the canonical column is
   omitted on `row.passthrough`, the target stage diffs against the

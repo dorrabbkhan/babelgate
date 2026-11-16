@@ -262,6 +262,81 @@ describe("Inspector screen", () => {
     expect(container.textContent).toContain("thought hard");
   });
 
+  it("signature bytes never rendered in a streamed response", async () => {
+    const GEM = "GEMSIG-SENTINEL-1";
+    const ANT = "ANTSIG-SENTINEL-2";
+    const ENV = "bg1.ENVSENTINEL-3";
+    const RED_TARGET = "REDACTED-SENTINEL-4";
+    const RED_STREAM = "REDACTED-SENTINEL-5";
+    const wire = [
+      `data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"f","args":{}},"thoughtSignature":"${GEM}"}]}}]}`,
+      "event: content_block_delta",
+      `data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"${ANT}"}}`,
+      `data: {"type":"response.output_item.done","item":{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"${ENV}"}}`,
+      `data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"${RED_STREAM}"}}`,
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    getMock.mockResolvedValue({
+      row: makeRow({
+        stream: true,
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: {
+          value: { model: "m", input: [{ data: "keep-me" }] },
+        },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [
+          {
+            value: {
+              model: "m",
+              content: [{ type: "redacted_thinking", data: RED_TARGET }],
+            },
+          },
+        ],
+        response: { wire: { value: wire } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    for (let round = 0; round < 6; round++) {
+      const closed = [...container.querySelectorAll(".twisty")].filter(
+        (t) => t.textContent?.includes("▸"),
+      );
+      if (closed.length === 0) break;
+      await act(async () => {
+        for (const t of closed) {
+          t.parentElement!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true }),
+          );
+        }
+      });
+    }
+
+    const text = container.textContent ?? "";
+    // No signature or envelope bytes — streamed or nested — reach the DOM.
+    for (const s of [GEM, ANT, ENV, RED_TARGET, RED_STREAM]) {
+      expect(text).not.toContain(s);
+    }
+    expect(text).toContain(`<signature: ${GEM.length} bytes>`);
+    expect(text).toContain(`<signature: ${ANT.length} bytes>`);
+    expect(text).toContain(`<envelope: ${ENV.length} bytes>`);
+    expect(text).toContain(`<signature: ${RED_TARGET.length} bytes>`);
+    // SSE framing survives masking; NDJSON/SSE payloads re-serialize.
+    expect(text).toContain("data: [DONE]");
+    expect(text).toContain("content_block_delta");
+    // An ordinary `data` key outside redacted_thinking stays visible.
+    expect(text).toContain("keep-me");
+  });
+
   it("pass-through badge", async () => {
     getMock.mockResolvedValue({
       row: makeRow({
