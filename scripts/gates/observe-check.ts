@@ -2,7 +2,9 @@
  * The release gates' observability half (spec §4.5): after a gate's
  * edit task, assert the running babelgate instance recorded what the
  * gate promises — a usage row for the client since start, the
- * four-stage inspector body on the latest row, a moved
+ * four-stage inspector body on the latest row (a pass-through row
+ * is checked for its three stages instead: source, target and
+ * response.wire, with no canonical), a moved
  * babelgate_requests_total, and whichever --expect-* flags name.
  *
  *   ts-node scripts/gates/observe-check.ts --base <url> --client <id>
@@ -79,7 +81,19 @@ export function evaluateObservations(
   if (rows.length === 0) {
     return `no request row for client "${flags.client}"`;
   }
-  if (
+  if (rows[0]!.passthrough === true) {
+    // A pass-through trace has no canonical stage by design (§3.4):
+    // the inspector keeps source, target and response.wire only.
+    if (
+      bodies === null ||
+      bodies.source === undefined ||
+      bodies.target.length === 0 ||
+      bodies.response?.wire === undefined ||
+      bodies.canonical !== undefined
+    ) {
+      return "latest request is pass-through but has no three-stage inspector body (source/target/response.wire, no canonical)";
+    }
+  } else if (
     bodies === null ||
     bodies.source === undefined ||
     bodies.canonical === undefined ||
