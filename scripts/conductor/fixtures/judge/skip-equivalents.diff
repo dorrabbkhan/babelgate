@@ -1,0 +1,11 @@
+diff --git a/scripts/conductor/judge.test.ts b/scripts/conductor/judge.test.ts
+index 1111111..2222222 100644
+--- a/scripts/conductor/judge.test.ts
++++ b/scripts/conductor/judge.test.ts
+@@ -1,2 +1,6 @@
+ describe("judge", () => {
++  xit("pending", () => {});
++  it.each([1, 2]).skip("later", () => {});
++  it.runIf(false)("never", () => {});
++  it.fails("broken", () => {});
+ });

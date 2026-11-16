@@ -1,0 +1,13 @@
+diff --git a/src/config/env-config.ts b/src/config/env-config.ts
+index 1111111..2222222 100644
+--- a/src/config/env-config.ts
++++ b/src/config/env-config.ts
+@@ -208,7 +208,7 @@
+     targetApiKey,
+     targetBaseUrl,
+     upstreamTimeoutMs: process.env.UPSTREAM_TIMEOUT_MS
+-      ? parseInt(process.env.UPSTREAM_TIMEOUT_MS, 10) : 30_000,
++      ? parseInt(process.env.UPSTREAM_TIMEOUT_MS, 10) : 300_000,
+     upstreamRetries: process.env.UPSTREAM_RETRIES
+       ? parseInt(process.env.UPSTREAM_RETRIES, 10) : 1,
+     proxyApiKey: process.env.PROXY_API_KEY || undefined,

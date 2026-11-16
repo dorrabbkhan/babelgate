@@ -13,6 +13,26 @@ import {
   type DiffFile,
 } from "./diff-parse";
 
+/** The content checks in spec §3.0.1 order — also the "could not run" ids. */
+export const CONTENT_CHECK_IDS = [
+  "fixtures",
+  "assertions",
+  "skips",
+  "files-block",
+  "adapter-independence",
+  "canonical-pair",
+  "secrets",
+  "diff-stat",
+  "owner-gate",
+] as const;
+
+/** A zero-file or unparseable diff is never a silent PASS (spec §3.0.1). */
+export function checkDiff(files: DiffFile[]): Check {
+  return files.length
+    ? pass("diff", `${files.length} file(s) parsed`)
+    : flag("diff", [`empty or unparseable diff (${files.length} files)`]);
+}
+
 export interface Check {
   id: string;
   status: "PASS" | "FLAG" | "N/A";
@@ -68,6 +88,12 @@ const decisionsAdditions = (files: DiffFile[]) => {
 
 // ---------- 1. fixtures ----------
 
+// Timeout/retry defaults also live as literals keyed by these names
+// (src/services/http-client.ts, src/config/env-config.ts,
+// src/config/yaml-config.ts, src/cli.ts) — flag edits to them too.
+const TIMEOUT_DEFAULTS_RE =
+  /\b(DEFAULT_TIMEOUT_MS|DEFAULT_RETRIES|BASE_BACKOFF_MS|RETRYABLE_STATUSES|UPSTREAM_(TIMEOUT_MS|RETRIES|STREAM_IDLE_MS)|upstream(TimeoutMs|Retries|StreamIdleMs)|timeout_ms|retries)\b/;
+
 export function checkFixtures(files: DiffFile[]): Check {
   const reasons: string[] = [];
   for (const f of files) {
@@ -77,9 +103,14 @@ export function checkFixtures(files: DiffFile[]): Check {
         f.path.startsWith("tests/contracts/__snapshots__/"))
     )
       reasons.push(`oracle file ${f.status}: ${f.path}`);
+    const srcNonTest = f.path.startsWith("src/") && !isTestFile(f.path);
     for (const h of f.hunks)
       for (const l of h.lines)
-        if (l.kind !== "ctx" && /\bDEFAULT_(TIMEOUT_MS|RETRIES)\b/.test(l.text))
+        if (
+          l.kind !== "ctx" &&
+          (/\bDEFAULT_(TIMEOUT_MS|RETRIES)\b/.test(l.text) ||
+            (srcNonTest && TIMEOUT_DEFAULTS_RE.test(l.text)))
+        )
           reasons.push(`timeout/retry default touched: ${f.path} ${h.header}`);
   }
   return reasons.length ? flag("fixtures", [...new Set(reasons)]) : pass("fixtures");
@@ -88,7 +119,12 @@ export function checkFixtures(files: DiffFile[]): Check {
 // ---------- 2. assertions ----------
 
 const EXACT = /\.(toEqual|toStrictEqual|toBe)\s*\(/;
-const WEAK = /\.(toMatchObject|toContain|toBeTruthy)\s*\(|objectContaining\s*\(/;
+const STRICT = /\.toStrictEqual\s*\(/;
+const LOOSER_EQUAL = /\.toEqual\s*\(/;
+const WEAK =
+  /\.(toMatchObject|toContain|toBeTruthy|toBeDefined|toHaveProperty|toMatch)\s*\(|objectContaining\s*\(|arrayContaining\s*\(|stringContaining\s*\(|expect\.any\s*\(/;
+// A field line in an object literal: `  name: value,` (quoted or bare key).
+const FIELD_RE = /^\s*["']?[\w$-]+["']?\s*:\s*\S/;
 
 export function checkAssertions(files: DiffFile[]): Check {
   const reasons: string[] = [];
@@ -108,6 +144,15 @@ export function checkAssertions(files: DiffFile[]): Check {
       const weak = add.find((l) => WEAK.test(l.text));
       if (rem.some((l) => EXACT.test(l.text)) && weak)
         reasons.push(`${f.path}:${weak.line} exact matcher weakened to ${WEAK.exec(weak.text)![0]}`);
+      const looser = add.find((l) => LOOSER_EQUAL.test(l.text));
+      if (rem.some((l) => STRICT.test(l.text)) && looser)
+        reasons.push(`${f.path}:${looser.line} toStrictEqual weakened to toEqual`);
+      const remFields = h.lines.filter((l) => l.kind === "del" && FIELD_RE.test(l.text));
+      const addFields = h.lines.filter((l) => l.kind === "add" && FIELD_RE.test(l.text));
+      if (remFields.length > addFields.length)
+        reasons.push(
+          `${f.path} ${h.header}: ${remFields.length} expected-object field(s) removed, ${addFields.length} added`,
+        );
     }
   }
   return reasons.length ? flag("assertions", reasons) : pass("assertions");
@@ -115,8 +160,14 @@ export function checkAssertions(files: DiffFile[]): Check {
 
 // ---------- 3. skips ----------
 
-const SKIP_RE =
-  /\b(describe|context|it|test|xit|xdescribe|suite)\.(only|skip|todo|skipIf|onlyIf)\s*\(/;
+const SKIP_RES = [
+  /\b(describe|context|it|test|xit|xdescribe|xtest|fit|fdescribe|suite)\.(only|skip|todo|skipIf|onlyIf|runIf|failing|fails)\s*\(/,
+  /\b(xit|xdescribe|xtest|fit|fdescribe)\s*\(/,
+  /\.(runIf|failing|fails)\s*\(/,
+];
+// `.each(...)`, `.concurrent` etc. chains ending in .skip/.only.
+const CHAIN_SKIP_RE = /\.(skip|only)\s*\(/;
+const TEST_WORD_RE = /\b(describe|context|it|test|suite)\b/;
 
 export function checkSkips(files: DiffFile[]): Check {
   const reasons: string[] = [];
@@ -127,7 +178,11 @@ export function checkSkips(files: DiffFile[]): Check {
       continue;
     }
     for (const l of addedLines(f))
-      if (SKIP_RE.test(l.text)) reasons.push(`${f.path}:${l.line} added ${l.text.trim()}`);
+      if (
+        SKIP_RES.some((r) => r.test(l.text)) ||
+        (CHAIN_SKIP_RE.test(l.text) && TEST_WORD_RE.test(l.text))
+      )
+        reasons.push(`${f.path}:${l.line} added ${l.text.trim()}`);
   }
   return reasons.length ? flag("skips", reasons) : pass("skips");
 }
@@ -231,7 +286,10 @@ const SECRET_RES = [
   /Bearer\s+[A-Za-z0-9._~+/=-]{20,}/,
   /api[_-]?key["']?\s*[:=]\s*["'][A-Za-z0-9_-]{16,}/i,
 ];
-const BODY_LOG_RE = /console\.log\(.*\b(body|prompt|completion|api_?key|authorization)\b/i;
+// The repo logs via pino (logger.info), so console.* and log/logger/req.log/
+// this.log calls mentioning request/response material all count.
+const BODY_LOG_RE =
+  /\b(console\.(log|info|warn|error|debug)|(log|logger|req\.log|this\.log)\.(trace|debug|info|warn|error|fatal))\s*\(.*\b(body|prompt|completion|messages|content|api_?key|authorization)\b/i;
 
 export function checkSecrets(files: DiffFile[]): Check {
   const reasons: string[] = [];
@@ -245,7 +303,7 @@ export function checkSecrets(files: DiffFile[]): Check {
       if (SECRET_RES.some((r) => r.test(l.text)))
         reasons.push(`possible key/token literal: ${f.path}:${l.line}`);
       else if (BODY_LOG_RE.test(l.text))
-        reasons.push(`console.log of body/prompt/key material: ${f.path}:${l.line}`);
+        reasons.push(`log of body/prompt/key material: ${f.path}:${l.line}`);
     }
   }
   return reasons.length ? flag("secrets", reasons) : pass("secrets");
@@ -279,11 +337,16 @@ export function checkDiffStat(files: DiffFile[], claimedText: string | null): Ch
   const unclaimed = [...actual].filter((p) => !hit(claimed, p));
   const absent = claimed.filter((c) => ![...actual].some((p) => hit([c], p)));
   const reasons: string[] = [];
-  if (unclaimed.length) reasons.push(`in diff but not claimed: ${unclaimed.join(", ")}`);
+  if (unclaimed.length)
+    reasons.push(`in diff but not claimed by any session: ${unclaimed.join(", ")}`);
   if (absent.length) reasons.push(`claimed but absent from diff: ${absent.join(", ")}`);
-  return reasons.length
+  return unclaimed.length
     ? flag("diff-stat", reasons)
-    : pass("diff-stat", `${actual.size} file(s) match the claimed git diff --stat`);
+    : pass(
+        "diff-stat",
+        `${actual.size} file(s) match the claimed git diff --stat` +
+          (absent.length ? `; claimed but absent from diff: ${absent.join(", ")}` : ""),
+      );
 }
 
 // ---------- 9. owner-gate ----------

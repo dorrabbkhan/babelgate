@@ -8,59 +8,66 @@
 # ("rejected a tool call that requires confirmation"). standing-notes.md tells Devin to keep
 # worktrees under .claude/worktrees/. Don't switch to --permission-mode dangerous for this.
 set -euo pipefail
-KIND="$1"; VER="$2"; N="$3"; EXTRA="${4:-}"
-DIR="$HOME/babelgate-conductor/${VER}-task${N}"; mkdir -p "$DIR"
-STAMP="$(date +%Y%m%d-%H%M%S)"
-DEVIN_CMD=(devin --sandbox -p)
-# Devin acts as the babelgate-conductor GitHub App, never as the owner.
-# shellcheck disable=SC1091
-source "$(dirname "$0")/app-env.sh"
-PROMPT="$DIR/${KIND}-${STAMP}.prompt.md"
-if [ -n "$EXTRA" ]; then cp "$EXTRA" "$PROMPT"; else cat > "$PROMPT"; fi
-# build-prompt.sh | devin.sh: when build-prompt.sh fails (unknown version or task) the pipe
-# delivers nothing — never start a session on an empty prompt.
-if [ ! -s "$PROMPT" ]; then
-  echo "devin.sh: empty prompt (did build-prompt.sh fail?), not starting a session" >&2
-  rm -f "$PROMPT"; exit 2
-fi
-REPO_DIR="${REPO:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
-# Devin checks its task branch out in the shared checkout and leaves it there. Put the checkout
-# back on the branch it started on, so the conductor and the next session start from there.
-# Only when no tracked file is modified: never discard or carry over a session's work.
-ORIG="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD || git -C "$REPO_DIR" rev-parse HEAD)"
-OUT="$DIR/${KIND}-${STAMP}.out.md"
-# Restore messages go to stderr AND the end of the saved output, so a caller that discards
-# stderr still sees them when it reads the .out.md file.
-note() { echo ">>> devin.sh: $*" | tee -a "$OUT" >&2; }
-restore_checkout() {
-  # Leftover worktrees outside .claude/worktrees/ (stale "prunable" entries skipped): a session
-  # that leaves one may have died on a sandbox confirmation, and one holding $ORIG blocks the
-  # restore below.
-  local wt
-  wt="$(git -C "$REPO_DIR" worktree list --porcelain | awk '
-    /^worktree /{p=substr($0,10); bad=0} /^prunable/{bad=1}
-    /^$/{if(p!="" && !bad) print p; p=""} END{if(p!="" && !bad) print p}' \
-    | grep -v -x -F "$REPO_DIR" | grep -v -F '/.claude/worktrees/' || true)"
-  [ -z "$wt" ] || note "worktrees outside .claude/worktrees/ after the session: $(echo "$wt" | tr '\n' ' ')"
-  local now
-  now="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD || git -C "$REPO_DIR" rev-parse HEAD)"
-  [ "$now" = "$ORIG" ] && return 0
-  if [ -n "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no)" ]; then
-    note "left on $now (tracked changes present), not restoring $ORIG"
-  elif git -C "$REPO_DIR" checkout -q "$ORIG" 2>/dev/null; then
-    note "checkout restored from $now to $ORIG"
-  else
-    note "could NOT restore $ORIG (left on $now); another worktree probably holds it"
+# The body lives inside main(): bash parses a function completely before it
+# runs, so a session that edits devin.sh itself can't corrupt the running
+# script mid-read (v1.5 Task 0a: "devin.sh: line 58: the: command not found").
+main() {
+  KIND="$1"; VER="$2"; N="$3"; EXTRA="${4:-}"
+  DIR="$HOME/babelgate-conductor/${VER}-task${N}"; mkdir -p "$DIR"
+  STAMP="$(date +%Y%m%d-%H%M%S)"
+  DEVIN_CMD=(devin --sandbox -p)
+  # Devin acts as the babelgate-conductor GitHub App, never as the owner.
+  # shellcheck disable=SC1091
+  source "$(dirname "$0")/app-env.sh"
+  PROMPT="$DIR/${KIND}-${STAMP}.prompt.md"
+  if [ -n "$EXTRA" ]; then cp "$EXTRA" "$PROMPT"; else cat > "$PROMPT"; fi
+  # build-prompt.sh | devin.sh: when build-prompt.sh fails (unknown version or task) the pipe
+  # delivers nothing — never start a session on an empty prompt.
+  if [ ! -s "$PROMPT" ]; then
+    echo "devin.sh: empty prompt (did build-prompt.sh fail?), not starting a session" >&2
+    rm -f "$PROMPT"; exit 2
   fi
+  REPO_DIR="${REPO:-$(git -C "$(dirname "$0")" rev-parse --show-toplevel)}"
+  # Devin checks its task branch out in the shared checkout and leaves it there. Put the checkout
+  # back on the branch it started on, so the conductor and the next session start from there.
+  # Only when no tracked file is modified: never discard or carry over a session's work.
+  ORIG="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD || git -C "$REPO_DIR" rev-parse HEAD)"
+  OUT="$DIR/${KIND}-${STAMP}.out.md"
+  # Restore messages go to stderr AND the end of the saved output, so a caller that discards
+  # stderr still sees them when it reads the .out.md file.
+  note() { echo ">>> devin.sh: $*" | tee -a "$OUT" >&2; }
+  restore_checkout() {
+    # Leftover worktrees outside .claude/worktrees/ (stale "prunable" entries skipped): a session
+    # that leaves one may have died on a sandbox confirmation, and one holding $ORIG blocks the
+    # restore below.
+    local wt
+    wt="$(git -C "$REPO_DIR" worktree list --porcelain | awk '
+      /^worktree /{p=substr($0,10); bad=0} /^prunable/{bad=1}
+      /^$/{if(p!="" && !bad) print p; p=""} END{if(p!="" && !bad) print p}' \
+      | grep -v -x -F "$REPO_DIR" | grep -v -F '/.claude/worktrees/' || true)"
+    [ -z "$wt" ] || note "worktrees outside .claude/worktrees/ after the session: $(echo "$wt" | tr '\n' ' ')"
+    local now
+    now="$(git -C "$REPO_DIR" symbolic-ref --short -q HEAD || git -C "$REPO_DIR" rev-parse HEAD)"
+    [ "$now" = "$ORIG" ] && return 0
+    if [ -n "$(git -C "$REPO_DIR" status --porcelain --untracked-files=no)" ]; then
+      note "left on $now (tracked changes present), not restoring $ORIG"
+    elif git -C "$REPO_DIR" checkout -q "$ORIG" 2>/dev/null; then
+      note "checkout restored from $now to $ORIG"
+    else
+      note "could NOT restore $ORIG (left on $now); another worktree probably holds it"
+    fi
+  }
+  trap restore_checkout EXIT
+  # spec §3.0.2: stdout is only the session's last 30 lines plus its
+  # PR_URL:/STOP: line; the full output stays in the saved .out.md.
+  set +e
+  ( cd "$REPO_DIR" && "${DEVIN_CMD[@]}" --prompt-file "$PROMPT" ) >"$OUT" 2>&1
+  rc=$?
+  set -e
+  restore_checkout
+  trap - EXIT
+  { tail -30 "$OUT"; grep -E '^(PR_URL|STOP):' "$OUT" || true; } | awk '!seen[$0]++'
+  exit "$rc"
 }
-trap restore_checkout EXIT
-# spec §3.0.2: stdout is only the session's last 30 lines plus its
-# PR_URL:/STOP: line; the full output stays in the saved .out.md.
-set +e
-( cd "$REPO_DIR" && "${DEVIN_CMD[@]}" --prompt-file "$PROMPT" ) >"$OUT" 2>&1
-rc=$?
-set -e
-restore_checkout
-trap - EXIT
-{ tail -30 "$OUT"; grep -E '^(PR_URL|STOP):' "$OUT" || true; } | awk '!seen[$0]++'
-exit "$rc"
+main "$@"
+exit

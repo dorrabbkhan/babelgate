@@ -18,6 +18,7 @@ export interface DiffFile {
   oldPath: string;
   status: "added" | "modified" | "deleted" | "renamed";
   binary: boolean;
+  modeChange: boolean;
   hunks: Hunk[];
 }
 
@@ -41,12 +42,20 @@ export function parseDiff(text: string): DiffFile[] {
     const git = /^diff --git a\/(.+) b\/(.+)$/.exec(raw);
     if (git) {
       closeFile();
-      f = { path: git[2], oldPath: git[1], status: "modified", binary: false, hunks: [] };
+      f = {
+        path: git[2],
+        oldPath: git[1],
+        status: "modified",
+        binary: false,
+        modeChange: false,
+        hunks: [],
+      };
       continue;
     }
     if (!f) continue;
     if (raw.startsWith("new file mode")) f.status = "added";
     else if (raw.startsWith("deleted file mode")) f.status = "deleted";
+    else if (raw.startsWith("old mode") || raw.startsWith("new mode")) f.modeChange = true;
     else if (raw.startsWith("rename from ")) {
       f.oldPath = raw.slice(12);
       f.status = "renamed";
@@ -95,6 +104,7 @@ export function parseDiff(text: string): DiffFile[] {
 export function uninspectable(f: DiffFile): string | null {
   if (f.binary) return "binary file";
   if (f.status === "renamed" && f.hunks.length === 0) return "rename-only, no hunks";
+  if (f.status === "modified" && f.hunks.length === 0 && !f.modeChange) return "no hunks";
   if (f.hunks.some((x) => x.truncated)) return "truncated hunk";
   return null;
 }

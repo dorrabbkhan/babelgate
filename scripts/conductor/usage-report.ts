@@ -43,7 +43,8 @@ export interface Session {
   id: string;
   file: string;
   task: string;
-  turns: Turn[];
+  turns: Turn[]; // the session's own turns
+  subagentTurns: Turn[]; // turns from <id>/subagents/*.jsonl, priced by their own model
   tools: Map<string, number>;
 }
 
@@ -71,6 +72,7 @@ interface LogEvent {
   type?: string;
   timestamp?: string;
   message?: {
+    id?: string;
     role?: string;
     model?: string;
     content?: unknown;
@@ -127,6 +129,7 @@ export function attributeTask(file: string): string {
 
 export function parseSession(file: string): Session {
   const turns: Turn[] = [];
+  const byId = new Map<string, Turn>();
   const tools = new Map<string, number>();
   for (const ev of readEvents(file)) {
     if (ev.type !== "assistant" || !ev.message?.usage) continue;
@@ -134,7 +137,7 @@ export function parseSession(file: string): Session {
     const input = u.input_tokens ?? 0;
     const cacheRead = u.cache_read_input_tokens ?? 0;
     const cacheWrite = u.cache_creation_input_tokens ?? 0;
-    turns.push({
+    const turn: Turn = {
       model: ev.message.model ?? "?",
       modelKey: modelKey(ev.message.model),
       input,
@@ -143,7 +146,21 @@ export function parseSession(file: string): Session {
       output: u.output_tokens ?? 0,
       ctx: input + cacheRead + cacheWrite,
       ts: ev.timestamp ?? "",
-    });
+    };
+    // Claude Code writes one JSONL line per assistant content block, all
+    // repeating the same message.id and usage — count usage once per
+    // message.id (the last line's), tool_use blocks from every line.
+    const msgId = ev.message.id;
+    if (msgId) {
+      const seen = byId.get(msgId);
+      if (seen) Object.assign(seen, turn);
+      else {
+        byId.set(msgId, turn);
+        turns.push(turn);
+      }
+    } else {
+      turns.push(turn);
+    }
     const content = ev.message.content;
     if (Array.isArray(content))
       for (const b of content)
@@ -157,16 +174,32 @@ export function parseSession(file: string): Session {
     file,
     task: attributeTask(file),
     turns,
+    subagentTurns: [],
     tools,
   };
 }
+
+/** The session's own turns plus its subagent sidechain turns. */
+export const allTurns = (s: Session): Turn[] => s.turns.concat(s.subagentTurns);
 
 export function loadSessions(dir: string): Session[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((f) => f.endsWith(".jsonl"))
     .sort()
-    .map((f) => parseSession(join(dir, f)));
+    .map((f) => {
+      const s = parseSession(join(dir, f));
+      // Sidechain logs: <projects-dir>/<sessionId>/subagents/*.jsonl — their
+      // turns belong to this session (priced by their own model).
+      const sub = join(dir, f.replace(/\.jsonl$/, ""), "subagents");
+      if (existsSync(sub))
+        for (const g of readdirSync(sub).filter((x) => x.endsWith(".jsonl")).sort()) {
+          const t = parseSession(join(sub, g));
+          s.subagentTurns.push(...t.turns);
+          for (const [k, n] of t.tools) s.tools.set(k, (s.tools.get(k) ?? 0) + n);
+        }
+      return s;
+    });
 }
 
 const MILLION = 1_000_000;
@@ -180,8 +213,16 @@ function turnCost(t: Turn): number {
   );
 }
 
+/** Cost of the session's own turns — subagent turns via totalCost. */
 export function sessionCost(s: Session, opusOnly = false): number {
   return s.turns
+    .filter((t) => !opusOnly || t.modelKey === "opus-5-5")
+    .reduce((a, t) => a + turnCost(t), 0);
+}
+
+/** Cost of all turns including subagent sidechains. */
+export function totalCost(s: Session, opusOnly = false): number {
+  return allTurns(s)
     .filter((t) => !opusOnly || t.modelKey === "opus-5-5")
     .reduce((a, t) => a + turnCost(t), 0);
 }
@@ -190,8 +231,10 @@ export function firstTurnContext(s: Session): number {
   return s.turns.length ? s.turns[0].ctx : 0;
 }
 
-const meanCtx = (s: Session) =>
-  s.turns.length ? s.turns.reduce((a, t) => a + t.ctx, 0) / s.turns.length : 0;
+const meanCtx = (s: Session) => {
+  const turns = allTurns(s);
+  return turns.length ? turns.reduce((a, t) => a + t.ctx, 0) / turns.length : 0;
+};
 
 interface Agg {
   sessions: number;
@@ -220,7 +263,7 @@ function aggregate(sessions: Session[], opusOnly: boolean): Agg {
   const firsts: number[] = [];
   const means: number[] = [];
   for (const s of sessions) {
-    const turns = s.turns.filter((t) => !opusOnly || t.modelKey === "opus-5-5");
+    const turns = allTurns(s).filter((t) => !opusOnly || t.modelKey === "opus-5-5");
     if (!turns.length) continue;
     used++;
     firsts.push(turns[0].ctx);
@@ -265,18 +308,25 @@ export interface RenderOpts {
   projectsDir?: string;
 }
 
-export function render(sessions: Session[], opts: RenderOpts): string {
+/** The --since/--version filter shared by render() and toJson(). */
+function filterSessions(sessions: Session[], opts: RenderOpts): Session[] {
   const since = opts.since ? new Date(`${opts.since}T00:00:00Z`).getTime() : -Infinity;
-  const kept = sessions
+  const after = (t: Turn) => !t.ts || new Date(t.ts).getTime() >= since;
+  return sessions
     .map((s) => ({
       ...s,
-      turns: s.turns.filter((t) => !t.ts || new Date(t.ts).getTime() >= since),
+      turns: s.turns.filter(after),
+      subagentTurns: s.subagentTurns.filter(after),
     }))
     .filter(
       (s) =>
-        s.turns.length &&
+        (s.turns.length || s.subagentTurns.length) &&
         (!opts.version || s.task === opts.version || s.task.startsWith(`${opts.version}-task`)),
     );
+}
+
+export function render(sessions: Session[], opts: RenderOpts): string {
+  const kept = filterSessions(sessions, opts);
 
   const out: string[] = [];
   out.push(
@@ -291,7 +341,7 @@ export function render(sessions: Session[], opts: RenderOpts): string {
   );
   for (const s of kept)
     out.push(
-      `${pad(s.id, 22)}${pad(s.task, 16)}${rpad(s.turns.length, 6)}${rpad(usd(sessionCost(s)), 9)}` +
+      `${pad(s.id, 22)}${pad(s.task, 16)}${rpad(allTurns(s).length, 6)}${rpad(usd(totalCost(s)), 9)}` +
         `${rpad(fmt(firstTurnContext(s)), 10)}${rpad(fmt(meanCtx(s)), 10)}  ` +
         toolsTop([...s.tools.entries()].sort((a, b) => b[1] - a[1])),
     );
@@ -328,8 +378,9 @@ export function render(sessions: Session[], opts: RenderOpts): string {
 }
 
 export function toJson(sessions: Session[], opts: RenderOpts): string {
+  const kept = filterSessions(sessions, opts);
   const byTask = new Map<string, Session[]>();
-  for (const s of sessions) {
+  for (const s of kept) {
     const arr = byTask.get(s.task) ?? [];
     arr.push(s);
     byTask.set(s.task, arr);
@@ -339,12 +390,12 @@ export function toJson(sessions: Session[], opts: RenderOpts): string {
       projectsDir: opts.projectsDir,
       since: opts.since ?? null,
       version: opts.version ?? null,
-      sessions: sessions.map((s) => ({
+      sessions: kept.map((s) => ({
         id: s.id,
         task: s.task,
-        turns: s.turns.length,
-        usd: sessionCost(s),
-        usdOpus: sessionCost(s, true),
+        turns: allTurns(s).length,
+        usd: totalCost(s),
+        usdOpus: totalCost(s, true),
         ctxFirst: firstTurnContext(s),
         ctxMean: meanCtx(s),
         tools: Object.fromEntries(s.tools),

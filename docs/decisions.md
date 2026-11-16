@@ -5355,9 +5355,13 @@ a past result.
     AGENTS.md rule 7 split: diff parsing and the nine checks pulled out of
     `judge.ts` (would have been ~550 lines). `judge.ts` keeps the CLI/report
     runner.
-  - `scripts/conductor/fixtures/judge/claimed-{clean,mismatch}.out.md` —
+  - `scripts/conductor/fixtures/judge/claimed-clean.out.md` and
+    `scripts/conductor/fixtures/judge/claimed-mismatch.out.md` —
     seeded Devin-session outputs for the `diff-stat` check; the Files
     block's `fixtures/judge/*.diff` glob only covers the diff seeds.
+  - `scripts/conductor/fixtures/usage/sess-conduct/subagents/agent-x.jsonl` —
+    subagent sidechain-log seed for `usage-report` (fix round 1); the Files
+    block's `fixtures/usage/*.jsonl` glob only covers top-level files.
 - `docs/conductor/usage-baseline-2026-11-16.md` (in the Files block) is **not
   committed here**: `~/.claude/projects/` is outside the repository and not
   readable from the Devin sandbox, and synthetic numbers must never stand in

@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runJudge, type JudgeResult } from "./judge";
+import { main, runJudge, type JudgeResult } from "./judge";
 
 /**
  * judge.ts — the mechanical half of CLAUDE.md "Judgment rules" (spec §3.0.1).
@@ -116,5 +117,122 @@ describe("judge.ts (spec §3.0.1)", () => {
     expect(line(r, "assertions")).toMatch(/^FLAG assertions .*could not inspect .*new\.test\.ts/);
     expect(line(r, "adapter-independence")).toMatch(/^FLAG adapter-independence .*could not inspect/);
     expect(r.stdout).toMatch(/^JUDGE: FLAG \(\d+\)$/m);
+  });
+
+  it("env-config timeout default change flags fixtures", () => {
+    const r = judge("env-config-timeout.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "fixtures")).toMatch(/^FLAG fixtures .*env-config\.ts/);
+  });
+
+  it("toStrictEqual to toEqual flags", () => {
+    const r = judge("strict-to-equal.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "assertions")).toMatch(/^FLAG assertions .*toStrictEqual.*toEqual/);
+  });
+
+  it("removed field in expected object flags", () => {
+    const r = judge("removed-field.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "assertions")).toMatch(/^FLAG assertions .*field.*removed/);
+  });
+
+  it("logger.info of body flags secrets", () => {
+    const r = judge("logger-body.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "secrets")).toMatch(/^FLAG secrets .*x\.ts:2/);
+  });
+
+  it("console.error of body flags secrets", () => {
+    const r = judge("console-error-body.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "secrets")).toMatch(/^FLAG secrets .*x\.ts:2/);
+  });
+
+  it("skip equivalents flag", () => {
+    const r = judge("skip-equivalents.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "skips")).toMatch(/^FLAG skips /);
+    for (const s of ["xit(", "it.each([1, 2]).skip(", "it.runIf(false)(", "it.fails("])
+      expect(r.report).toContain(s);
+  });
+
+  it("empty diff flags, never passes", () => {
+    const r = judge("empty.diff");
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toContain("FLAG diff empty or unparseable diff (0 files)");
+    for (const id of [
+      "fixtures",
+      "assertions",
+      "skips",
+      "files-block",
+      "adapter-independence",
+      "canonical-pair",
+      "secrets",
+      "diff-stat",
+      "owner-gate",
+    ])
+      expect(line(r, id)).toMatch(/^FLAG .* could not run/);
+    // a modified diff entry with zero hunks and no mode change is uninspectable
+    const nh = judge("no-hunks.diff");
+    expect(nh.exitCode).toBe(1);
+    expect(line(nh, "secrets")).toMatch(/^FLAG secrets .*could not inspect .*no hunks/);
+  });
+
+  it("diff fetch failure flags", () => {
+    const r = runJudge(
+      {
+        pr: "999999",
+        version: "v1.5",
+        task: "0a",
+        plan: PLAN,
+        title: "chore(conductor): judge script, waits, usage report",
+        reportDir: mkdtempSync(join(tmpdir(), "judge-test-")),
+      },
+      {
+        fetchDiff: () => {
+          throw new Error("HTTP 406: diff too large\nresponse body");
+        },
+      },
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.stdout).toContain("FLAG diff could not fetch PR diff: HTTP 406: diff too large");
+    expect(line(r, "fixtures")).toMatch(/^FLAG fixtures could not run/);
+    expect(r.stdout).toMatch(/^JUDGE: FLAG \(\d+\)$/m);
+  });
+
+  it("missing args exit 2", () => {
+    expect(main(["--pr", "1"])).toBe(2); // no --task
+    expect(main(["--bogus", "x", "--task", "0a"])).toBe(2); // unknown flag
+    expect(main(["--task", "0a", "--diff-file"])).toBe(2); // flag without value
+  });
+
+  it("judge.sh and wait-ci.sh argc guards exit 2", () => {
+    for (const s of ["judge.sh", "wait-ci.sh"]) {
+      const r = spawnSync("bash", [`scripts/conductor/${s}`], { encoding: "utf8" });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("usage:");
+    }
+  });
+
+  it("diff stat uses task and fix outputs, not review", () => {
+    const dir = mkdtempSync(join(tmpdir(), "judge-claim-"));
+    const stat = (files: string[]) =>
+      "session output\n\n" + files.map((f) => ` ${f} | 3 +++`).join("\n") + "\n\nPR_URL: x\n";
+    writeFileSync(
+      join(dir, "task-20260101-000000.out.md"),
+      stat(["scripts/conductor/judge.ts", "scripts/conductor/devin.sh"]),
+    );
+    writeFileSync(join(dir, "fix-20260101-010000.out.md"), stat(["docs/decisions.md"]));
+    writeFileSync(
+      join(dir, "review-20260101-020000.out.md"),
+      stat(["scripts/conductor/wait-ci.sh"]),
+    );
+    const r = judge("union-stat.diff", { reportDir: dir });
+    expect(r.exitCode).toBe(1);
+    // wait-ci.sh is claimed only by the review output, which never counts.
+    expect(line(r, "diff-stat")).toMatch(
+      /^FLAG diff-stat in diff but not claimed by any session: scripts\/conductor\/wait-ci\.sh$/,
+    );
   });
 });
