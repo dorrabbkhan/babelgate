@@ -58,6 +58,11 @@ Each example routes `*` to its model, so the `model` name in `config.toml`
 doesn't have to match anything. The routed model name is what Codex sent;
 `x-babelgate-provider`/`x-babelgate-model` say who actually served the turn.
 
+Cost comes from the §3.6 price table: codex-anthropic.yaml carries a
+`prices:` override because OpenRouter's Anthropic-format `/models` endpoint
+returns no pricing; the other two get cost from the bundled table (Gemini)
+and `live_prices` (OpenRouter Responses).
+
 ## Native vs bridged backends
 
 | Upstream | Provider `type` | Path |

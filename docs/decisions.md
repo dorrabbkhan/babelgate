@@ -5108,3 +5108,25 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   is wanted.
 - **Launch draft is 550 words** (spec asks ≤ 600), headline "Codex on
   Gemini and Claude", marked as an owner-reviewed draft.
+
+**Fix round 1 — `costUsd: null` on every codex-anthropic.yaml row.** The
+conductor's live run returned 200 with reasoning, but no cost. Cause: a
+`type: anthropic` provider fetches its model list with `x-api-key` +
+`anthropic-version`, and OpenRouter's Anthropic-format endpoint answers
+`GET https://openrouter.ai/api/v1/models` in Anthropic shape — paged (20
+rows), `{id, display_name, created_at, type}`, no `pricing` — and
+`anthropic/claude-haiku-4.5` isn't on the page. So `live_prices: true`
+found nothing, and the bundled table has `claude-haiku-4-5`, not the
+OpenRouter catalog id. `src/cost` and the adapters were not touched: the
+example drops `live_prices` and carries a top-level `prices:` override
+(the bundled claude-haiku-4-5 row, `{input: 1, output: 5, cache_read:
+0.1, cache_write: 1.25}`) with a comment noting the override can go on a
+direct Anthropic key. The `"codex examples parse"` contract test now
+also runs `lookupPrice` on each example's `*` target with
+`getRawModelList` stubbed to an empty list (live step can't answer, no
+network in npm test): codex-anthropic.yaml must price as "override",
+codex-gemini.yaml as "bundled"; codex-openrouter.yaml is skipped with a
+comment since it relies on live prices by design. `docs/recipes/codex.md`
+notes where each example's cost comes from, and the launch draft's gate
+sentence is marked `[pending gates A/B/C, Task 14]` instead of claiming
+a past result.

@@ -28,7 +28,15 @@ providers:
     # https://openrouter.ai/api/v1/messages is the proven endpoint.
     base_url: https://openrouter.ai/api
     api_key_env: OPENROUTER_API_KEY
-    live_prices: true          # cost from OpenRouter's own /models pricing
+# OpenRouter's Anthropic-format endpoint answers GET /models in
+# Anthropic shape — paged, no `pricing` block — so live_prices can
+# never price this model, and the bundled table keys on Anthropic's
+# own id (`claude-haiku-4-5`), not the OpenRouter catalog id. This
+# override is the bundled claude-haiku-4-5 row. With a direct
+# Anthropic key (`to: anthropic/claude-haiku-4-5`) the bundled table
+# prices it and the override can go.
+prices:
+  "anthropic/anthropic/claude-haiku-4.5": { input: 1, output: 5, cache_read: 0.1, cache_write: 1.25 }
 routes:
   - match: "*"
     to: anthropic/anthropic/claude-haiku-4.5

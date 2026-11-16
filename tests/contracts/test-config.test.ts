@@ -1,9 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { join } from 'node:path';
 import { loadYamlConfig } from '../../src/config/yaml-config';
+import { lookupPrice } from '../../src/cost/price-table';
 import type { Provider } from '../../src/transformers';
 import defaultConfig from '../../vitest.config';
 import liveConfig from '../../vitest.live.config';
+
+// The live step of the §3.6 lookup must not touch the network in npm
+// test: getRawModelList answers an empty list, so a live_prices
+// provider falls through to the bundled table exactly like an
+// upstream whose model page carries no pricing.
+vi.mock('../../src/services/models.service', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('../../src/services/models.service')>();
+  return { ...original, getRawModelList: vi.fn(async () => ({ data: [] })) };
+});
 
 /**
  * Guards the suite layout: `npm test` must never pick up the live
@@ -41,11 +52,34 @@ describe('codex examples', () => {
     ['codex-openrouter.yaml', 'responses'],
   ];
 
-  it('codex examples parse', () => {
+  it('codex examples parse', async () => {
     for (const [name, type] of CASES) {
       const config = loadYamlConfig(join(EXAMPLES, name), ENV);
       const entry = config.registry.get(config.routing.defaultProvider);
       expect(entry.type, `${name}: default provider type`).toBe(type);
+
+      const model = config.routing.rules.find((r) => r.match === '*')
+        ?.to.model;
+      expect(model, `${name}: a * route`).toBeDefined();
+
+      // codex-openrouter.yaml prices qwen/qwen3-coder live off
+      // OpenRouter's /models pricing block — with the live step
+      // stubbed empty there is no offline price to assert.
+      if (name === 'codex-openrouter.yaml') continue;
+
+      const priced = await lookupPrice(entry, model!, config);
+      expect(priced, `${name}: routed model priced`).toBeDefined();
+      if (name === 'codex-anthropic.yaml') {
+        expect(priced?.source, `${name}: price source`).toBe('override');
+        expect(priced?.price, `${name}: override price`).toEqual({
+          input: 1,
+          output: 5,
+          cacheRead: 0.1,
+          cacheWrite: 1.25,
+        });
+      } else {
+        expect(priced?.source, `${name}: price source`).toBe('bundled');
+      }
     }
   });
 });
