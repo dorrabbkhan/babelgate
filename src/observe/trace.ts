@@ -93,6 +93,12 @@ export interface RequestTrace extends RouteLogRecord {
   errorType?: CanonicalErrorKind | string;
   cacheReadTokens?: number;
   cacheWriteTokens?: number;
+  /**
+   * v1.4: reasoning/thinking tokens from the decoded usage —
+   * already counted inside `outputTokens` (canonical convention),
+   * stored separately for the usage store's `reasoning_tokens`.
+   */
+  reasoningTokens?: number;
   /** null = unknown price (never 0) */
   costUsd: number | null;
   wouldCostUsd?: number;

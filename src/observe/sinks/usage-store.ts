@@ -58,6 +58,16 @@ CREATE INDEX requests_client ON requests(client, started_at);
 CREATE TABLE bodies (id TEXT PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE, snapshots TEXT NOT NULL);
 `,
   },
+  {
+    // v1.4 Task 12: reasoning/thinking tokens (NULL when the upstream
+    // usage carried none) and the pass-through marker — 1 only on a
+    // relayed request, NULL elsewhere (the trace's own semantics).
+    version: 2,
+    sql: `
+ALTER TABLE requests ADD COLUMN reasoning_tokens INTEGER;
+ALTER TABLE requests ADD COLUMN passthrough INTEGER;
+`,
+  },
 ];
 
 /** Forward-only migrations driven by the `schema_version` table. */
@@ -98,9 +108,10 @@ export function createUsageStore(opts: {
       id, started_at, client, user_agent, source_api, requested_model,
       route_reason, provider, model, stream, status, http_status, error_type,
       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+      reasoning_tokens, passthrough,
       cost_usd, would_cost_usd, cost_estimated, price_source,
       ttfb_ms, total_ms, finish_reason, hops, notes, diagnostics, repairs
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertBody = db.prepare(
     "INSERT OR REPLACE INTO bodies (id, snapshots) VALUES (?, ?)",
@@ -140,6 +151,8 @@ export function createUsageStore(opts: {
           row.outputTokens,
           row.cacheReadTokens,
           row.cacheWriteTokens,
+          row.reasoningTokens,
+          row.passthrough === true ? 1 : null,
           row.costUsd,
           row.wouldCostUsd,
           row.costEstimated ? 1 : 0,

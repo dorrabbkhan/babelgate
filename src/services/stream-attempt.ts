@@ -274,6 +274,7 @@ export async function finishStreamTrace(opts: {
       (estimated ? estimateOutputTokens(observed) : undefined),
     cacheReadTokens: usage?.cacheReadTokens,
     cacheWriteTokens: usage?.cacheWriteTokens,
+    reasoningTokens: usage?.reasoningTokens,
     ...(estimated ? { costEstimated: true } : {}),
     finishReason:
       last?.type === "message_end" ? last.finishReason : undefined,

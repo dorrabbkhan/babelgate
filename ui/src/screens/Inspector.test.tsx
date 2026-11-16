@@ -58,6 +58,7 @@ function makeRow(overrides: Partial<RequestRow>): RequestRow {
       { toolCallId: "call_9", name: "get_weather", code: "fenced_json" },
     ],
     repairs: [{ toolCallId: "call_9", steps: ["strip_fence"] }],
+    reasoningTokens: null,
     ...overrides,
   };
 }
@@ -175,5 +176,380 @@ describe("Inspector screen", () => {
       notes!.compareDocumentPosition(stages!) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("signature bytes never rendered", async () => {
+    const SIG = "SIGBYTES-SENTINEL-0123";
+    const ENV = "bg1.ENVSENTINEL4567890";
+    getMock.mockResolvedValue({
+      row: makeRow({ notes: [], diagnostics: [], repairs: [] }),
+      bodies: {
+        source: {
+          value: {
+            model: "m",
+            input: [
+              {
+                type: "reasoning",
+                id: "rs_1",
+                summary: [],
+                encrypted_content: ENV,
+              },
+            ],
+          },
+        },
+        canonical: {
+          value: {
+            model: "m",
+            messages: [
+              {
+                role: "assistant",
+                content: [
+                  {
+                    type: "reasoning",
+                    reasoning: {
+                      text: "thought hard",
+                      origin: { provider: "gemini", model: "gm" },
+                    },
+                    signature: {
+                      origin: { provider: "gemini", model: "gm" },
+                      data: SIG,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        target: [{ value: { model: "gm" } }],
+        response: { wire: { value: { output: [] } } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    // Expand every collapsed JsonTree node — even fully opened, the
+    // sentinels must never reach the DOM.
+    for (let round = 0; round < 6; round++) {
+      const closed = [...container.querySelectorAll(".twisty")].filter(
+        (t) => t.textContent?.includes("▸"),
+      );
+      if (closed.length === 0) break;
+      await act(async () => {
+        for (const t of closed) {
+          t.parentElement!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true }),
+          );
+        }
+      });
+    }
+
+    // Opaque bytes never reach the DOM — only byte counts and origin.
+    expect(container.textContent).not.toContain(SIG);
+    expect(container.textContent).not.toContain(ENV);
+    expect(container.textContent).toContain(
+      `<signature: ${SIG.length} bytes, origin gemini/gm>`,
+    );
+    expect(container.textContent).toContain("<envelope:");
+    // The reasoning part renders as a labelled, collapsible block.
+    const keys = [...container.querySelectorAll(".key")].map(
+      (k) => k.textContent,
+    );
+    expect(keys).toContain("reasoning");
+    expect(container.textContent).toContain("thought hard");
+  });
+
+  it("signature bytes never rendered in a streamed response", async () => {
+    const GEM = "GEMSIG-SENTINEL-1";
+    const ANT = "ANTSIG-SENTINEL-2";
+    const ENV = "bg1.ENVSENTINEL-3";
+    const RED_TARGET = "REDACTED-SENTINEL-4";
+    const RED_STREAM = "REDACTED-SENTINEL-5";
+    const wire = [
+      `data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"f","args":{}},"thoughtSignature":"${GEM}"}]}}]}`,
+      "event: content_block_delta",
+      `data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"${ANT}"}}`,
+      `data: {"type":"response.output_item.done","item":{"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"${ENV}"}}`,
+      `data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"${RED_STREAM}"}}`,
+      "data: [DONE]",
+      "",
+    ].join("\n");
+    getMock.mockResolvedValue({
+      row: makeRow({
+        stream: true,
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: {
+          value: { model: "m", input: [{ data: "keep-me" }] },
+        },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [
+          {
+            value: {
+              model: "m",
+              content: [{ type: "redacted_thinking", data: RED_TARGET }],
+            },
+          },
+        ],
+        response: { wire: { value: wire } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    for (let round = 0; round < 6; round++) {
+      const closed = [...container.querySelectorAll(".twisty")].filter(
+        (t) => t.textContent?.includes("▸"),
+      );
+      if (closed.length === 0) break;
+      await act(async () => {
+        for (const t of closed) {
+          t.parentElement!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true }),
+          );
+        }
+      });
+    }
+
+    const text = container.textContent ?? "";
+    // No signature or envelope bytes — streamed or nested — reach the DOM.
+    for (const s of [GEM, ANT, ENV, RED_TARGET, RED_STREAM]) {
+      expect(text).not.toContain(s);
+    }
+    expect(text).toContain(`<signature: ${GEM.length} bytes>`);
+    expect(text).toContain(`<signature: ${ANT.length} bytes>`);
+    expect(text).toContain(`<envelope: ${ENV.length} bytes>`);
+    expect(text).toContain(`<signature: ${RED_TARGET.length} bytes>`);
+    // SSE framing survives masking; NDJSON/SSE payloads re-serialize.
+    expect(text).toContain("data: [DONE]");
+    expect(text).toContain("content_block_delta");
+    // An ordinary `data` key outside redacted_thinking stays visible.
+    expect(text).toContain("keep-me");
+  });
+
+  it("truncated final stream line is not rendered", async () => {
+    // A client abort or the wire cap can end the snapshot mid-line:
+    // the partial JSON may carry the first bytes of a signature.
+    const lastLine =
+      `data: {"type":"response.output_item.done","item":{"type":"reasoning","encrypted_content":"bg1.TRUNCSENTINEL-6`;
+    const wire = `data: {"type":"response.created"}\n\n${lastLine}`;
+    getMock.mockResolvedValue({
+      row: makeRow({
+        stream: true,
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: wire } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("TRUNCSENTINEL-6");
+    const n = new TextEncoder().encode(lastLine.slice(5)).length;
+    expect(text).toContain(`data: <truncated: ${n} bytes>`);
+    expect(text).toContain("response.created");
+  });
+
+  it("truncated final ndjson line is not rendered", async () => {
+    const first = `{"message":{"role":"assistant","thinking":"t","content":"first-visible"}}`;
+    const second = `{"message":{"role":"assistant","content":"done"},"done":true}`;
+    const last = `{"message":{"thinking":"NDSENTINEL-7`;
+    const wire = [first, second, last].join("\n");
+    getMock.mockResolvedValue({
+      row: makeRow({
+        stream: true,
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: wire } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).not.toContain("NDSENTINEL-7");
+    const n = new TextEncoder().encode(last).length;
+    expect(text).toContain(`<truncated: ${n} bytes>`);
+    expect(text).toContain("first-visible");
+  });
+
+  it("interior unparseable stream line still renders", async () => {
+    const wire = [
+      "data: not json",
+      `data: {"type":"response.created"}`,
+      "data: [DONE]",
+    ].join("\n");
+    getMock.mockResolvedValue({
+      row: makeRow({
+        stream: true,
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: wire } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("not json");
+    expect(text).toContain("data: [DONE]");
+  });
+
+  it("plain strings in bodies render unchanged", async () => {
+    getMock.mockResolvedValue({
+      row: makeRow({ notes: [], diagnostics: [], repairs: [] }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [
+          {
+            value: {
+              model: "m",
+              tools: [
+                {
+                  type: "function",
+                  name: "get_weather",
+                  parameters: { type: "object", required: ["city"] },
+                },
+              ],
+              include: ["reasoning.encrypted_content"],
+              stop: ["END"],
+              input: "hello world",
+            },
+          },
+        ],
+        response: { wire: { value: { id: "resp_1" } } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    // Expand every collapsed JsonTree node so every nested and
+    // array-element string is painted.
+    for (let round = 0; round < 6; round++) {
+      const closed = [...container.querySelectorAll(".twisty")].filter(
+        (t) => t.textContent?.includes("▸"),
+      );
+      if (closed.length === 0) break;
+      await act(async () => {
+        for (const t of closed) {
+          t.parentElement!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true }),
+          );
+        }
+      });
+    }
+
+    const text = container.textContent ?? "";
+    for (const s of [
+      "city",
+      "reasoning.encrypted_content",
+      "END",
+      "hello world",
+    ]) {
+      expect(text).toContain(s);
+    }
+    expect(text).not.toContain("<truncated:");
+  });
+
+  it("single-line non-stream string snapshot renders unchanged", async () => {
+    getMock.mockResolvedValue({
+      row: makeRow({ notes: [], diagnostics: [], repairs: [] }),
+      bodies: {
+        source: { value: { model: "m" } },
+        canonical: { value: { model: "m", messages: [] } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: "Bad Gateway" } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("Bad Gateway");
+    expect(text).not.toContain("<truncated:");
+  });
+
+  it("pass-through badge", async () => {
+    getMock.mockResolvedValue({
+      row: makeRow({
+        passthrough: true,
+        sourceApi: "responses",
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m", input: "raw" } },
+        // §3.4: no canonical stage — nothing was canonicalized.
+        target: [{ value: { model: "upstream-m", input: "raw" } }],
+        response: { wire: { value: { id: "resp_1" } } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    expect(container.textContent).toContain("pass-through");
+    const stages = container.querySelectorAll(".stage");
+    expect(stages).toHaveLength(3);
+    const headings = [...stages].map(
+      (s) => s.querySelector("h3")?.textContent ?? "",
+    );
+    expect(headings[0]).toContain("source");
+    expect(headings[1]).toContain("target");
+    expect(headings[2]).toContain("response");
   });
 });

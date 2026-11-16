@@ -4994,3 +4994,81 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   custom tool input, schema content) asserted absent from the log stream,
   `/metrics`, OTel spans, `/ui/api/live`, `/ui/api/routing` and `requests`
   while present in the bodies ring/table.
+
+## v1.4 Task 12: UI inspector + usage store `reasoning_tokens` (spec §3.4, §1.3)
+
+- **Files outside the Files block:**
+  - `src/observe/trace.ts`, `src/observe/emit.ts` — the plan's
+    "`trace.usage.reasoningTokens`" is realised as the flat
+    `RequestTrace.reasoningTokens?: number` (the trace carries token
+    counts as flat fields — `cacheReadTokens`/`cacheWriteTokens`
+    precedent), admitted through `TraceFinish`. Filled at every
+    `finishTrace` call site that already passes usage:
+    `chat.service.ts` (unary), `stream-attempt.ts` (bridged streams,
+    which also covers the playground's canonical-stream service) and
+    `passthrough.ts` (both pass-through finishes — unary and stream,
+    from the observed `response.completed` usage).
+  - `src/services/chat.service.ts`, `src/services/stream-attempt.ts`,
+    `src/services/passthrough.ts` — the call sites above (one line
+    each: `reasoningTokens: usage?.reasoningTokens`).
+- **`src/ui-api/requests.ts` needed no change** — the new row fields
+  flow through `listRequests`/`getRequest` untouched.
+- **Migration 2 gained `passthrough INTEGER`** alongside the plan's
+  `reasoning_tokens` ALTER: the Requests-list badge must survive
+  restarts and config edits, and the provider's `type` at request time
+  is only knowable then — re-deriving it in the UI API from the
+  registry would lie about rows written under an older config. NULL =
+  not pass-through, matching `RequestTrace.passthrough`'s absent-by-
+  default semantics; `RequestRow.passthrough?: boolean` is likewise
+  emitted only when true, so non-relay rows' JSON is unchanged.
+- **Inspector display form** — every stage snapshot is walked before
+  render (and before `structuralDiff`): canonical reasoning parts
+  collapse to a labelled `reasoning` block with the origin rendered
+  `provider/model`; canonical signatures render
+  `<signature: N bytes, origin provider/model>`; wire-level
+  `signature`/`thoughtSignature` strings render `<signature: N bytes>`;
+  `encrypted_content` renders `<envelope: N bytes>` for the `bg1.`
+  envelope and `<encrypted_content: N bytes>` for an upstream blob —
+  the bytes never reach the DOM.
+- **Streamed `response.wire` masking** (fix round 1): a streaming
+  request snapshots the raw upstream stream as a *string*, so the
+  object walk never saw it. A keyless string that holds a stream is
+  now masked line by line before render: SSE `data:` payloads and
+  NDJSON lines that parse as JSON go through the same display form
+  and are re-encoded; `event:` lines, blanks, `data: [DONE]` and
+  unparseable payloads pass through. The same round masks Anthropic
+  `redacted_thinking.data` parent-aware (`type ===
+  "redacted_thinking"` only — other `data` keys are ordinary
+  content). The masking walk moved to the new
+  `ui/src/screens/inspector-display.ts` (file outside the Files
+  block): the fix pushed `Inspector.tsx` past the ~400-line
+  single-purpose limit, and the display form is a pure transform
+  with no Preact dependency.
+- **Pass-through stages** — §3.4's "source and target stages (no
+  canonical stage, marked 'pass-through')": the canonical column is
+  omitted on `row.passthrough`, the target stage diffs against the
+  source (showing the `model` rewrite), and a `pass-through` badge
+  appears in the meta line and in the Requests list's routed cell.
+- **Cut-off final stream line masked** (fix round 2): a client abort
+  or the `STREAM_WIRE_CAP_BYTES` cut can end the wire snapshot
+  mid-line, leaving a partial JSON payload that may hold the first
+  bytes of a `signature`/`thoughtSignature`/`encrypted_content`. In
+  `displayStreamText` the last non-blank line now renders
+  `data: <truncated: N bytes>` (SSE, N = UTF-8 bytes of the payload
+  after `data:`) or `<truncated: N bytes>` (NDJSON, N = UTF-8 bytes of
+  the line) when it fails to parse; interior unparseable `data:` lines
+  still pass through, `data: [DONE]` as a last line is unchanged, and
+  an NDJSON body whose *earlier* line fails to parse still returns the
+  text verbatim (it isn't NDJSON).
+- **Stream masking scoped to the snapshot's own string** (fix round 3):
+  the round-1 keyless-string branch masked every unkeyed string, so
+  plain strings nested in bodies — array elements like
+  `required: ["city"]` or `include: ["reasoning.encrypted_content"]` —
+  rendered `<truncated: N bytes>`. `displayStreamText` now runs only
+  on `snapshot.value` when it is itself a string (a raw stream is
+  never nested); nested and array-element strings render unchanged.
+  `displayStreamText` also treats text as NDJSON only with at least
+  two non-blank lines: a lone line that doesn't parse as JSON ("Bad
+  Gateway") renders verbatim, a lone line that parses as JSON is still
+  masked. The SSE path, the truncation rule, and keyed masking are
+  unchanged.

@@ -50,6 +50,7 @@ function makeRow(overrides: Partial<RequestRow>): RequestRow {
       { toolCallId: "call_1", name: "get_weather", code: "invalid_json" },
     ],
     repairs: [],
+    reasoningTokens: null,
     ...overrides,
   };
 }
@@ -196,5 +197,35 @@ describe("Requests screen", () => {
       );
     });
     expect(container.textContent).toContain("kept");
+  });
+
+  it("pass-through badge", async () => {
+    listMock.mockResolvedValue({
+      rows: [
+        makeRow({ passthrough: true }),
+        makeRow({ id: "r2", client: "codex" }),
+      ],
+    });
+    await act(async () => {
+      render(<Requests />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const rows = container.querySelectorAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("pass-through");
+    expect(rows[1].textContent).not.toContain("pass-through");
+
+    // a live finished pass-through row gets the badge too
+    await act(async () => {
+      live.onFinished?.(
+        makeRow({ id: "r3", client: "codex", passthrough: true }),
+      );
+    });
+    expect(container.querySelector("tbody tr")!.textContent).toContain(
+      "pass-through",
+    );
   });
 });

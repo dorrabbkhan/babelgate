@@ -31,6 +31,10 @@ export interface RequestRow {
   outputTokens: number | null;
   cacheReadTokens: number | null;
   cacheWriteTokens: number | null;
+  /** Reasoning tokens inside outputTokens (v1.4); NULL = none reported. */
+  reasoningTokens: number | null;
+  /** Set only on a pass-through row — absent elsewhere (v1.4 §3.4). */
+  passthrough?: boolean;
   costUsd: number | null;
   wouldCostUsd: number | null;
   costEstimated: boolean;
@@ -100,6 +104,8 @@ function toRequestRow(raw: RawRow): RequestRow {
     outputTokens: raw.output_tokens as number | null,
     cacheReadTokens: raw.cache_read_tokens as number | null,
     cacheWriteTokens: raw.cache_write_tokens as number | null,
+    reasoningTokens: raw.reasoning_tokens as number | null,
+    ...(raw.passthrough === 1 ? { passthrough: true } : {}),
     costUsd: raw.cost_usd as number | null,
     wouldCostUsd: raw.would_cost_usd as number | null,
     costEstimated: raw.cost_estimated === 1,
@@ -144,6 +150,8 @@ export function traceToRow(trace: RequestTrace): RequestRow {
     outputTokens: trace.outputTokens ?? null,
     cacheReadTokens: trace.cacheReadTokens ?? null,
     cacheWriteTokens: trace.cacheWriteTokens ?? null,
+    reasoningTokens: trace.reasoningTokens ?? null,
+    ...(trace.passthrough === true ? { passthrough: true } : {}),
     costUsd: trace.costUsd,
     wouldCostUsd: trace.wouldCostUsd ?? null,
     costEstimated: trace.costEstimated,

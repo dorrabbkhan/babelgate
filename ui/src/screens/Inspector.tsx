@@ -11,6 +11,7 @@ import {
 import { AuthPrompt } from "../components/AuthPrompt";
 import { JsonTree } from "../components/JsonTree";
 import { structuralDiff, type DiffEntry } from "../diff";
+import { displaySnapshot } from "./inspector-display";
 
 /**
  * §3.9 screen 2 — the translation inspector: source | canonical |
@@ -24,6 +25,8 @@ import { structuralDiff, type DiffEntry } from "../diff";
 const NOT_RETAINED =
   "bodies not retained — the inspector keeps the last N requests in " +
   "memory; set LOG_BODIES=true to keep them on disk";
+
+// Opaque-artifact masking lives in inspector-display.ts (v1.4 §3.4).
 
 interface StageProps {
   title: string;
@@ -74,13 +77,18 @@ function Meta({ row }: { row: RequestRow }) {
   return (
     <div class="inspector-meta">
       <div>
-        <strong>{row.requestedModel}</strong> → {routed} · {row.status} ·
-        http {row.httpStatus} · {row.totalMs} ms ·{" "}
+        <strong>{row.requestedModel}</strong> → {routed}{" "}
+        {row.passthrough === true && (
+          <span class="badge">pass-through</span>
+        )}{" "}
+        · {row.status} · http {row.httpStatus} · {row.totalMs} ms ·{" "}
         {new Date(row.startedAt).toLocaleString()}
       </div>
       <div class="muted">
         {row.client} via {row.sourceApi} · tokens{" "}
         {row.inputTokens ?? 0}/{row.outputTokens ?? 0}
+        {row.reasoningTokens !== null &&
+          ` (+${row.reasoningTokens} reasoning)`}
         {row.costUsd !== null && ` · $${row.costUsd.toFixed(4)}`}
         {row.finishReason !== null && ` · ${row.finishReason}`}
         {row.errorType !== null && ` · ${row.errorType}`}
@@ -152,9 +160,28 @@ function diffBetween(
 function Stages({ detail }: { detail: RequestDetail & { bodies: Bodies } }) {
   const { row, bodies } = detail;
   const [hopIdx, setHopIdx] = useState(0);
-  const targetSnap = bodies.target[hopIdx];
-  const responseSnap =
-    bodies.response?.wire ?? bodies.response?.canonical;
+  // Opaque bytes (signatures, envelopes) render as placeholders; the
+  // diffs between stages run on the same display form.
+  const shown = useMemo(
+    () => ({
+      source: displaySnapshot(bodies.source),
+      canonical: displaySnapshot(bodies.canonical),
+      target: bodies.target.map((s) => displaySnapshot(s)),
+      response:
+        bodies.response === undefined
+          ? undefined
+          : {
+              canonical: displaySnapshot(bodies.response.canonical),
+              wire: displaySnapshot(bodies.response.wire),
+            },
+    }),
+    [bodies],
+  );
+  const targetSnap = shown.target[hopIdx];
+  const responseSnap = shown.response?.wire ?? shown.response?.canonical;
+  // §3.4: a pass-through request was never canonicalized — the
+  // canonical stage is omitted and target diffs against the source.
+  const prevStage = row.passthrough === true ? shown.source : shown.canonical;
 
   const hopCount = Math.max(bodies.target.length, row.hops.length);
   const hopLabel = (i: number): string => {
@@ -168,14 +195,16 @@ function Stages({ detail }: { detail: RequestDetail & { bodies: Bodies } }) {
     <div class="stages">
       <Stage
         title="source"
-        snapshot={bodies.source}
+        snapshot={shown.source}
         diff={[]}
       />
-      <Stage
-        title="canonical"
-        snapshot={bodies.canonical}
-        diff={diffBetween(bodies.source, bodies.canonical)}
-      />
+      {row.passthrough !== true && (
+        <Stage
+          title="canonical"
+          snapshot={shown.canonical}
+          diff={diffBetween(shown.source, shown.canonical)}
+        />
+      )}
       <div class="stage">
         <h3>target</h3>
         {hopCount > 1 && (
@@ -197,11 +226,11 @@ function Stages({ detail }: { detail: RequestDetail & { bodies: Bodies } }) {
           <JsonTree
             value={targetSnap.value}
             highlights={new Map(
-              diffBetween(bodies.canonical, targetSnap)
+              diffBetween(prevStage, targetSnap)
                 .filter((d) => d.kind !== "removed")
                 .map((d) => [d.path, d.kind]),
             )}
-            removed={diffBetween(bodies.canonical, targetSnap)
+            removed={diffBetween(prevStage, targetSnap)
               .filter((d) => d.kind === "removed")
               .map((d) => d.path)}
           />
