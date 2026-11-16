@@ -5563,10 +5563,16 @@ Devin sandbox this ran in did have a readable `.env` with
 `OPENROUTER_API_KEY`/`GEMINI_API_KEY` present — noted in case the
 conductor prefers to run the recordings from a similar session.)
 
-**Files outside the Files block:** none. `docs/decisions.md` and spec
-§1.2 are the Modify entries; §1.2 is intentionally untouched this
-session (E13+ lands with the recording output, per the conductor's
-instruction). `package.json`/`package-lock.json` unchanged —
+**Files outside the Files block:**
+`scripts/gates/record-claude-code.test.ts` (added in fix round 1) —
+offline regression test for the variadic `--allowedTools` argv bug
+that swallowed the prompt positional on the conductor's first real
+run;
+`docs/superpowers/specs/2026-11-16-babelgate-v1.5-design.md` —
+spec §1.2, in the Files block as "spec §1.2" (named here so the
+mechanical check passes; E13–E16 appended there in the fix rounds).
+`docs/decisions.md` is the other Modify entry.
+`package.json`/`package-lock.json` unchanged —
 `@google/generative-ai@^0.24.1` was already a devDependency on main.
 
 **Fix round 1 (2026-11-16, PR #115)** — two bugs found only on the
@@ -5659,11 +5665,29 @@ conductor's real run, one reviewer finding, and the recording evidence
   `tool_reference` blocks also ride `tool_result` content). Consequence
   recorded on E14 for Tasks 6/7. Scope check (Step 3): not a client
   rewriting reasoning — no STOP.
-- **Still outstanding.** `gemini-sdk-thinking.jsonl`: the Devin
-  sandbox has no direct route to generativelanguage.googleapis.com
-  (the recorder's raw `https.request` does not use the HTTP proxy), so
-  the real run is again a conductor step — the fixed script is
-  stub-verified only; do not commit a Gemini fixture from this
-  session. Ollama probes: the conductor's machine has no `ollama`
-  binary — E16 records "not measured, owner decision pending"; the
-  Task 9 note stands.
+- **Still outstanding after fix round 1.** `gemini-sdk-thinking.jsonl`:
+  the Devin sandbox had no direct route to
+  generativelanguage.googleapis.com (the recorder's raw
+  `https.request` does not use the HTTP proxy), so the real run was
+  again a conductor step — resolved in fix round 2 below. Ollama
+  probes: the conductor's machine has no `ollama` binary — E16 records
+  "not measured, owner decision pending"; the Task 9 note stands.
+
+**Fix round 2 (2026-11-16, PR #115)** — the conductor ran the fixed
+`record-gemini-sdk.ts` for real on this branch: three
+`POST /v1beta/models/gemini-3.8-flash:generateContent`, all 200
+(RECORD PASS).
+`tests/fixtures/recordings/gemini-sdk-thinking.jsonl` was committed
+unchanged from `tmp/` (shapes-only; scanned once for key/value-like
+content — clean). What it shows, now on E15:
+`generationConfig.thinkingConfig {thinkingBudget, includeThoughts}` on
+every request; each model turn is exactly ONE part — `functionCall
+{name,args,id}` (`id` 25 chars, then 23) with a `thoughtSignature`
+sibling field (200 chars both times); the functionResponse rides a
+`role:"user"` turn echoing the `id`. NO `thought:true` text part came
+back in any turn even with `includeThoughts:true` — the script appends
+the candidate content unchanged, so that is what the API returned;
+caveat: one short run on `gemini-3.8-flash`. The signatures survive
+because the script passes the candidate's parts back unchanged — the
+legacy `chat()` path was not usable (`role:"function"` → 400, fix
+round 1). Only the Ollama probes remain outstanding.
