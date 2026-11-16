@@ -5,18 +5,18 @@ no tool inputs/outputs, no keys.
 
 ## How this was produced
 
-- Command: `scripts/conductor/usage-report.sh --since 2026-11-04 --json`
-  (text pass without `--json`), run by the conductor on 2026-11-16 against
-  `~/.claude/projects/-home-dorrabb-babelgate`; output captured as
-  `tmp/usage-baseline.json` / `tmp/usage-baseline.txt` (gitignored, aggregates
-  only). Every number below comes from that JSON; medians are stated at the
-  precision the script prints.
-- This doc restricts to tasks matching `^v1\.[34]-task[0-9]` — **28 sessions**
-  — which drops `unattributed`, the `v0.3-task12` typo session, the two
-  `taskN` placeholder sessions (template text like `<version>-task<N>`; the
-  attribution regexes now require a digit task id), and the current
-  `v1.5-task0a` session. With the comma-list filter this is one command:
-  `--since 2026-11-04 --version v1.3,v1.4`.
+- Command: `usage-report.sh --since 2026-11-04 --version v1.3,v1.4` (a second
+  pass with `--json` for the machine-readable form), run by the conductor on
+  2026-11-16 against `~/.claude/projects/-home-dorrabb-babelgate`; output
+  captured as `tmp/usage-baseline.json` / `tmp/usage-baseline.txt`
+  (gitignored, aggregates only). Every number below comes from that output;
+  medians are stated at the precision the script prints.
+- This doc restricts to tasks matching `^v1\.[34]-task[0-9]` — **30 sessions**
+  — which drops `unattributed`, the `v0.3-task12` typo session and the
+  current `v1.5-task0a` session. The two sessions the earlier pass left as
+  `taskN` placeholders now attribute to real tasks under the digit-only
+  regex: `78a9df1a` → `v1.3-task14` and `97f48092` (a run-plan session) →
+  `v1.4-task10`.
 - Turns count once per assistant `message.id` (the log writes one line per
   content block repeating the same usage) and include `subagents/*.jsonl`
   sidechains priced by their own model. `$` is API-equivalent at the script's
@@ -34,6 +34,7 @@ cache) and mean turn context. Tool mix is the top 5 buckets.
 | v1.3-task10 | 1 | 30 | 2.70M | 121.7k | 12.1k | 1.756 | 68.9k | 94.1k | bash:16 devin:5 diff-read:4 ci-wait:1 |
 | v1.3-task11 | 1 | 37 | 3.64M | 78.8k | 16.3k | 1.685 | 68.9k | 100.4k | bash:20 devin:6 diff-read:5 grep:2 Write:2 |
 | v1.3-task13 | 1 | 39 | 3.01M | 74.5k | 17.6k | 1.549 | 48.8k | 79.0k | bash:25 devin:5 diff-read:4 ci-wait:2 grep:1 |
+| v1.3-task14 | 1 | 44 | 3.25M | 76.3k | 21.2k | 1.686 | 48.1k | 75.6k | bash:12 diff-read:12 grep:3 file-read:3 Skill:2 |
 | v1.3-task15 | 1 | 40 | 3.05M | 76.7k | 19.7k | 1.618 | 49.0k | 78.3k | bash:18 diff-read:12 devin:5 |
 | v1.3-task16 | 1 | 48 | 4.10M | 86.1k | 18.2k | 1.873 | 49.0k | 87.2k | bash:20 grep:10 diff-read:8 devin:5 ci-wait:1 |
 | v1.3-task17 | 2 | 167 | 21.02M | 432.2k | 108.3k | 9.311 | 47.0k | 117.6k | bash:75 diff-read:26 devin:14 grep:13 Write:6 |
@@ -45,6 +46,7 @@ cache) and mean turn context. Tool mix is the top 5 buckets.
 | v1.3-task6 | 1 | 28 | 2.51M | 141.7k | 14.6k | 1.928 | 66.7k | 94.7k | bash:11 diff-read:6 devin:5 grep:2 |
 | v1.3-task7 | 1 | 55 | 5.77M | 184.6k | 23.3k | 3.096 | 68.8k | 108.2k | bash:27 diff-read:13 devin:6 ToolSearch:1 grep:1 |
 | v1.4-task1 | 1 | 118 | 14.43M | 607.8k | 82.9k | 5.958 | 45.8k | 127.4k | bash:47 WebFetch:31 diff-read:18 mcp__t3-code__t3_background_wait:12 devin:7 |
+| v1.4-task10 | 1 | 167 | 21.74M | 702.7k | 84.0k | 11.653 | 45.2k | 134.4k | bash:55 diff-read:30 mcp__t3-code__t3_background_wait:18 devin:9 grep:9 |
 | v1.4-task11 | 1 | 53 | 4.82M | 251.5k | 18.3k | 3.342 | 46.4k | 95.7k | bash:19 grep:10 devin:9 diff-read:4 mcp__t3-code__t3_background_wait:3 |
 | v1.4-task12 | 1 | 68 | 6.75M | 196.6k | 33.3k | 3.591 | 45.8k | 102.2k | bash:26 devin:13 file-read:10 diff-read:9 mcp__t3-code__t3_background_wait:5 |
 | v1.4-task13 | 1 | 57 | 4.80M | 83.8k | 20.8k | 2.047 | 45.8k | 85.6k | bash:28 devin:10 grep:7 diff-read:4 mcp__t3-code__t3_background_wait:3 |
@@ -63,9 +65,9 @@ medians of first-turn and mean context.
 
 | version | sess | tasks | turns | cache-rd | cache-wr | output | $ | $opus | $/task~ | ctx1~ | ctxμ~ |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| v1.3 | 17 | 14 | 1,306 | 150.66M | 4.49M | 715.6k | 79.475 | 79.452 | 1.988 | 67.0k | 94.7k |
-| v1.4 | 11 | 11 | 714 | 73.47M | 2.26M | 365.5k | 36.326 | 36.217 | 3.294 | 45.8k | 96.2k |
-| total | 28 | 25 | 2,020 | 224.12M | 6.75M | 1.08M | 115.801 | 115.669 | 2.978 | 48.9k | 96.0k |
+| v1.3 | 18 | 15 | 1,350 | 153.91M | 4.56M | 736.8k | 81.161 | 81.138 | 1.928 | 66.9k | 94.4k |
+| v1.4 | 12 | 12 | 881 | 95.21M | 2.96M | 449.6k | 47.979 | 47.870 | 3.318 | 45.8k | 96.5k |
+| total | 30 | 27 | 2,231 | 249.11M | 7.53M | 1.19M | 129.140 | 129.008 | 2.978 | 48.4k | 96.0k |
 
 ## vs. spec E9–E11
 
@@ -74,11 +76,12 @@ medians of first-turn and mean context.
   line per content block (about 2× per message) — and over a wider session set
   (everything in the projects dir, including `unattributed`, the `taskN`
   placeholders, `v0.3-task12` and `v1.5-task0a`). The deduped, v1.3+v1.4-only
-  numbers here are **28 sessions, 2,020 turns, $115.801** ($115.669 opus-only;
+  numbers here are **30 sessions, 2,231 turns, $129.140** ($129.008 opus-only;
   E9 was all-models-in-name but the logs are almost entirely Opus).
-- **E10**'s medians reproduce on the restricted set: first-turn context
-  median **48.9k**, per-session mean-context median **96.0k**.
+- **E10**'s first-turn-context median on this set is **48.4k** — it differs
+  slightly from the spec's 48.9k, which counted a different session set.
+  Per-session mean-context median **96.0k**.
 - **E11**'s mix holds in kind if not in count (E11 was the wider set): over
-  these 28 sessions the top buckets are bash 878, diff-read 340, devin 267,
-  grep 102, t3-code background waits 61, ci-wait 50 — mechanical checks,
+  these 30 sessions the top buckets are bash 945, diff-read 382, devin 278,
+  grep 114, t3-code background waits 79, ci-wait 59 — mechanical checks,
   diff reads and waits are most of the tool calls.

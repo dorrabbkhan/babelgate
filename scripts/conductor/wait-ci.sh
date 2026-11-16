@@ -9,6 +9,22 @@ if [ "$#" -lt 1 ]; then
   exit 2
 fi
 pr="$1"
+# Right after a push no checks are registered yet and --watch exits at once
+# ("no checks reported"). Poll until at least one check exists, for at most
+# WAIT_CI_MAX_S (default 300) at WAIT_CI_POLL_S (default 10) intervals.
+poll_s="${WAIT_CI_POLL_S:-10}"
+max_s="${WAIT_CI_MAX_S:-300}"
+waited=0
+while :; do
+  n="$(gh pr checks "$pr" --json name --jq length 2>/dev/null || echo 0)"
+  [ "${n:-0}" -gt 0 ] 2>/dev/null && break
+  if [ "$waited" -ge "$max_s" ]; then
+    echo "wait-ci: no checks registered after ${max_s}s" >&2
+    exit 3
+  fi
+  sleep "$poll_s"
+  waited=$((waited + poll_s))
+done
 log="$(mktemp -t wait-ci.XXXXXX)"
 rc=0
 gh pr checks "$pr" --watch --fail-fast=false >"$log" 2>&1 || rc=$?

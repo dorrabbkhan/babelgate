@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -27,6 +27,63 @@ function judge(diff: string, extra: Partial<Parameters<typeof runJudge>[0]> = {}
 
 const line = (r: JudgeResult, id: string) =>
   r.stdout.split("\n").find((l) => l.includes(` ${id} `));
+
+/** Seeded diff held in a temp file so the bad lines never sit in fixtures. */
+function judgeText(diff: string): JudgeResult {
+  const dir = mkdtempSync(join(tmpdir(), "judge-seed-"));
+  const diffFile = join(dir, "seed.diff");
+  writeFileSync(diffFile, diff);
+  return runJudge({
+    version: "v1.5",
+    task: "0a",
+    diffFile,
+    plan: PLAN,
+    title: "chore(conductor): judge script, waits, usage report",
+    reportDir: dir,
+  });
+}
+
+const seed = (path: string, added: string[]) => `diff --git a/${path} b/${path}
+index 1111111..2222222 100644
+--- a/${path}
++++ b/${path}
+@@ -1,2 +1,${2 + added.length} @@
+ const a = 1;
+${added.map((l) => "+" + l).join("\n")}
+ const b = 2;
+`;
+
+// Stub gh: counts "--json name --jq length" calls in $GH_STUB_COUNT and
+// answers from the $GH_STUB_ANSWERS comma list (repeating the last); any
+// other call (the --watch, the final table) succeeds.
+const GH_STUB = `#!/usr/bin/env bash
+if [[ " \$* " == *" --json name "* && " \$* " == *" --jq length"* ]]; then
+  n=\$(cat "\$GH_STUB_COUNT" 2>/dev/null || echo 0); n=\$((n+1)); echo "\$n" > "\$GH_STUB_COUNT"
+  IFS=, read -ra a <<< "\$GH_STUB_ANSWERS"
+  i=\$((n-1)); [ "\$i" -ge "\${#a[@]}" ] && i=\$((\${#a[@]}-1))
+  echo "\${a[\$i]}"
+  exit 0
+fi
+echo "checks table"
+exit 0
+`;
+
+function runWaitCi(env: Record<string, string>) {
+  const dir = mkdtempSync(join(tmpdir(), "wait-ci-"));
+  writeFileSync(join(dir, "gh"), GH_STUB, { mode: 0o755 });
+  return {
+    dir,
+    r: spawnSync("bash", ["scripts/conductor/wait-ci.sh", "123"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${dir}:${process.env.PATH}`,
+        GH_STUB_COUNT: join(dir, "count"),
+        ...env,
+      },
+    }),
+  };
+}
 
 describe("judge.ts (spec §3.0.1)", () => {
   it("fixture change flags", () => {
@@ -68,6 +125,45 @@ describe("judge.ts (spec §3.0.1)", () => {
     const r = judge("adapter-import.diff");
     expect(r.exitCode).toBe(1);
     expect(line(r, "adapter-independence")).toMatch(/^FLAG adapter-independence .*anthropic\.adapter/);
+  });
+
+  it("baseURL branching flags", () => {
+    // the name is built at runtime so this file's own added lines never
+    // carry the literal the host check looks for.
+    const r = judgeText(
+      seed("scripts/conductor/judge.ts", [
+        `if (cfg.base${"URL"} === "https://api.example.com") {`,
+      ]),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "adapter-independence")).toMatch(
+      /^FLAG adapter-independence .*host\/url branching.*baseURL/,
+    );
+  });
+
+  it("provider pair branch flags", () => {
+    const r = judgeText(
+      seed("scripts/conductor/judge.ts", [
+        'if (source === "anthropic" && target === "gemini") {',
+      ]),
+    );
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "adapter-independence")).toMatch(
+      /^FLAG adapter-independence .*provider-pair branch/,
+    );
+  });
+
+  it("single provider comparison passes", () => {
+    const r = judgeText(
+      seed("scripts/conductor/judge.ts", [
+        'if (entry.type !== "openai" && entry.type !== "ollama") {',
+        '  return source === "responses" && entry.type === "responses";',
+        '}',
+        'if (entry.type === "ollama") {',
+      ]),
+    );
+    expect(r.stdout).toMatch(/^PASS adapter-independence$/m);
+    expect(r.exitCode).toBe(0);
   });
 
   it("canonical types without schema flags", () => {
@@ -205,6 +301,25 @@ describe("judge.ts (spec §3.0.1)", () => {
     expect(main(["--pr", "1"])).toBe(2); // no --task
     expect(main(["--bogus", "x", "--task", "0a"])).toBe(2); // unknown flag
     expect(main(["--task", "0a", "--diff-file"])).toBe(2); // flag without value
+  });
+
+  it("wait-ci waits for checks to appear", () => {
+    const { dir, r } = runWaitCi({
+      WAIT_CI_POLL_S: "0",
+      GH_STUB_ANSWERS: "0,0,2",
+    });
+    expect(r.status).toBe(0);
+    expect(readFileSync(join(dir, "count"), "utf8").trim()).toBe("3");
+  });
+
+  it("wait-ci times out with no checks", () => {
+    const { r } = runWaitCi({
+      WAIT_CI_POLL_S: "0",
+      WAIT_CI_MAX_S: "0",
+      GH_STUB_ANSWERS: "0",
+    });
+    expect(r.status).toBe(3);
+    expect(r.stderr).toContain("wait-ci: no checks registered after");
   });
 
   it("judge.sh and wait-ci.sh argc guards exit 2", () => {

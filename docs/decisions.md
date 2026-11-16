@@ -5367,8 +5367,9 @@ a past result.
   from the Devin sandbox, and synthetic numbers must never stand in for the
   real baseline). The conductor ran `usage-report.sh --since 2026-11-04` on
   the real logs and handed back `tmp/usage-baseline.json`/`.txt`; the doc was
-  written from that JSON in fix round 2, restricted to
-  `^v1\.[34]-task[0-9]` (28 sessions).
+  written from that JSON in fix round 2 and regenerated in fix round 3 after
+  the digit-only task-id fix attributed the two `taskN` placeholder sessions
+  to real tasks, restricted to `^v1\.[34]-task[0-9]` (30 sessions).
 - Fix round 2 (usage-report): the task-id regexes now require a digit start
   (`/conduct v1.4 N` / `v1.4-taskN` template placeholders → `unattributed`),
   `--version` takes a comma list, a `summary` block rolls up per version plus

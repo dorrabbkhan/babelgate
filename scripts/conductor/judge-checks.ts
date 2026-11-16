@@ -215,7 +215,20 @@ export function checkFilesBlock(
 
 const FORMATS = ["anthropic", "gemini", "ollama", "openai", "responses"];
 const ADAPTERS = "src/transformers/adapters/";
-const HOSTNAME_RE = /(hostname|baseUrl|base_url)\s*(===|includes|match)/;
+const HOSTNAME_RE =
+  /\b(hostname|host|baseUrl|baseURL|base_url)\s*(===|!==|\.includes|\.match|\.startsWith|\.endsWith)/;
+// A provider-pair special case is two comparisons of different format-name
+// literals against different variables on one line. Same name or same
+// variable (e.g. one field compared with two formats) is ordinary
+// provider handling and stays PASS.
+const PAIR_CMP_RE =
+  /([A-Za-z_$][\w$.]*)\s*(?:===|!==)\s*"(anthropic|openai|gemini|ollama|responses)"/g;
+const pairBranch = (text: string): boolean => {
+  const cmps = [...text.matchAll(PAIR_CMP_RE)].map((m) => [m[1], m[2]]);
+  return cmps.some((a, i) =>
+    cmps.some((b, j) => j > i && a[0] !== b[0] && a[1] !== b[1]),
+  );
+};
 
 export function checkAdapterIndependence(files: DiffFile[]): Check {
   const reasons: string[] = [];
@@ -240,6 +253,8 @@ export function checkAdapterIndependence(files: DiffFile[]): Check {
       }
       if (!inConfig && HOSTNAME_RE.test(l.text))
         reasons.push(`${f.path}:${l.line} host/url branching: ${l.text.trim()}`);
+      if (!inAdapters && !isTestFile(f.path) && pairBranch(l.text))
+        reasons.push(`${f.path}:${l.line} provider-pair branch: ${l.text.trim()}`);
     }
   }
   return reasons.length ? flag("adapter-independence", reasons) : pass("adapter-independence");
