@@ -5234,7 +5234,7 @@ a past result.
 
 | Gate | Codex version | Model (config) | Duration | Cost | Result |
 |---|---|---|---|---|---|
-| A (Gemini bridge, `codex-gemini.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) | 0.169.0 | `gemini/gemini-3.8-flash` | 27s, 8 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (8 rows, gemini). Run at `10f9ff8`, before the observe-check fix (`fba4caf`, gate scripts only) and the continuity-guard fix (`11d31b3`, Anthropic adapter only). |
+| A (Gemini bridge, `codex-gemini.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) | 0.169.0 | `gemini/gemini-3.8-flash` | 28s, 9 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (9 rows, gemini) at `11d31b3`. An earlier run at `10f9ff8` also passed (27s, 8 rows). |
 | B (Anthropic bridge, `codex-anthropic.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) | 0.169.0 | `anthropic/anthropic/claude-haiku-4.5` (OpenRouter `/api/v1/messages`, E18) | 21s, 8 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (8 rows, anthropic) at `11d31b3`. First run (before the guard fix): GATE FAIL, `reasoning_dropped` from turn 3; see the entry below. |
 | C (OpenRouter `type: responses` pass-through, `codex-openrouter.yaml`, `--expect-cost --expect-passthrough`) | 0.169.0 | `openrouter/qwen/qwen3-coder` | 24s, 10 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (10 rows, openrouter, all pass-through) at `11d31b3`. First run: GATE FAIL, observe-check required a canonical stage (fixed in `fba4caf`). |
 
