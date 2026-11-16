@@ -5130,3 +5130,116 @@ comment since it relies on live prices by design. `docs/recipes/codex.md`
 notes where each example's cost comes from, and the launch draft's gate
 sentence is marked `[pending gates A/B/C, Task 14]` instead of claiming
 a past result.
+
+## v1.4 Task 14: live-suite cases; `codex-edit.sh`; gates A, B, C · OWNER REVIEW
+
+- **Files outside the Files block:**
+  - `examples/codex-model-catalog.json` — owner decision A (PR #87): the
+    gate's Codex model name (`babelgate`) must resolve to catalog
+    metadata, or Codex sends fallback shape (no `apply_patch`, no
+    `reasoning.effort` — spec §1.2 E12). One `ModelsResponse`-shaped
+    entry with `apply_patch_tool_type: "freeform"` and
+    `use_responses_lite: false`, so Codex emits a top-level `tools`
+    list containing a `custom` `apply_patch` (Lark grammar) and no
+    `x-openai-internal-codex-responses-lite` header.
+  - `scripts/gates/record-codex.sh` — gained `--catalog <json>`,
+    `--effort <level>` and `--dry-run` so the conductor can record
+    once with the catalog and confirm that shape before the gates
+    (owner decision A's "unproven" check). The scratch config.toml
+    generation is now a shared `write_config_toml` used by the run
+    and the dry path; the recorded config is unchanged without the
+    new flags.
+- **Codex source evidence (codex-cli 0.169.0, tag `rust-v0.169.0`):**
+  - `codex-rs/config/src/config_toml.rs`: `model_catalog_json:
+    Option<AbsolutePathBuf>` ("Optional path to a JSON model
+    catalog"), `model_reasoning_effort: Option<ReasoningEffort>`,
+    `web_search: Option<WebSearchMode>` (`disabled`/`cached`/
+    `indexed`/`live`), `approval_policy`, `sandbox_mode`.
+  - `codex-rs/core/src/config/mod.rs`: `load_catalog_json` parses the
+    file as `ModelsResponse` (`{models: Vec<ModelInfo>}`, ≥1 entry)
+    and it "replaces the bundled catalog for the current process".
+  - `codex-rs/protocol/src/openai_models.rs`: `ModelInfo` — the entry
+    carries every field without a serde default or `Option` (`slug`,
+    `display_name`, `supported_reasoning_levels`, `shell_type`,
+    `visibility`, `supported_in_api`, `priority`,
+    `support_verbosity`, `truncation_policy`,
+    `experimental_supported_tools`). Enum values used:
+    `ConfigShellToolType::unified_exec`, `ModelVisibility::list`,
+    `ApplyPatchToolType::freeform` (only variant),
+    `TruncationMode::bytes`. `use_responses_lite` defaults false but
+    is set explicitly per the owner decision.
+  - `codex-rs/models-manager/src/manager.rs`:
+    `StaticModelsManager::get_model_info` →
+    `find_model_from_candidates` = longest-prefix then namespaced
+    suffix; `babelgate` matches slug `babelgate`.
+  - `codex-rs/models-manager/src/model_info.rs` +
+    `codex-rs/core/src/session/mod.rs`: base instructions =
+    `config.base_instructions` else
+    `render_model_instructions(model_info)` =
+    `model_messages.instructions_template`; a catalog model without
+    one warns and runs with empty instructions, so the entry embeds
+    `codex-rs/models-manager/prompt.md` (the fallback's
+    `BASE_INSTRUCTIONS`, 20 903 bytes) verbatim.
+  - `codex-rs/core/src/client.rs`: `use_responses_lite == false` →
+    `create_tools_raw_json_for_responses_api` (top-level `tools`) and
+    `add_responses_lite_header` is skipped;
+    `codex-rs/core/src/tools/spec_plan.rs`:
+    `apply_patch_tool_type.is_some()` registers the `apply_patch`
+    handler — `spec.rs` maps `Freeform` to
+    `create_apply_patch_freeform_tool` (custom tool, Lark grammar).
+- **`codex-edit.sh`:** `config <yaml>` mode only (the interface names
+  no other). Follows `claude-code-edit.sh`: fixture copy, build,
+  babelgate `--preset openai-apps --config <yaml>` (prints the client
+  export lines; the token becomes `BABELGATE_KEY` for `env_key`),
+  `codex exec --skip-git-repo-check` under `timeout -k 30
+  ${CODEX_TIMEOUT_S:-900}` with a scratch `CODEX_HOME`, fixture
+  `npm test`, `GATE PASS`/`GATE FAIL`, and `OBSERVE_CHECK` →
+  `observe-check.ts --client codex` with the same config-derived
+  flags. Env knobs per the owner decision: `CODEX_MODEL` (default
+  `babelgate` — the catalog slug), `CODEX_MODEL_CATALOG` (default
+  `examples/codex-model-catalog.json`; empty omits the key),
+  `CODEX_REASONING_EFFORT` (default `medium`; empty omits),
+  `CODEX_EDIT_DRY_RUN=1` prints the generated config.toml and exits
+  before babelgate/Codex start. `npm test` and the codex run get a
+  throwaway `npm_config_cache`/`HOME` like record-codex.sh.
+- **`observe-check.ts`:** `--expect-no-note <code>` (repeatable) fails
+  when any row since start carries that note code; rows expose
+  `notes[].code` and `passthrough` from the usage store.
+  `--expect-passthrough` requires every row to be pass-through. New
+  cases in `observe-check.test.ts`.
+- **`codex.live.test.ts`:** one describe per §4.4 target — Gemini
+  bridge (`GEMINI_API_KEY`), Anthropic bridge (direct
+  `ANTHROPIC_API_KEY`, else OpenRouter's `/api/v1/messages` endpoint
+  per E18 via env-mode `TARGET_API=anthropic` borrowing
+  `OPENROUTER_API_KEY`), OpenRouter `type: responses` pass-through
+  (`OPENROUTER_API_KEY`, env-mode `TARGET_API=responses`). The five
+  §4.4 cases each: plain, stream (`event: response.created`/
+  `response.completed` lines), tools (`tool_choice: "required"` so a
+  call is guaranteed), three-turn tool loop with reasoning (200 every
+  turn; each turn echoes the prior output items — the bg1 envelopes
+  included), structured output (`text.format` json_schema,
+  `JSON.parse` + exact field values). `live.helpers.ts` gained
+  `useOpenRouterAnthropic`/`useOpenRouterResponses` with real-env
+  restore, mirroring the openai borrow pattern.
+- **Recording/network step: run by the conductor** —
+  `scripts/gates/record-codex.sh --model babelgate --catalog
+  examples/codex-model-catalog.json --effort medium` once before the
+  gates; expected: a top-level `tools` list containing a `custom`
+  `apply_patch` and no `x-openai-internal-codex-responses-lite`
+  header. If the catalog can't give that shape, STOP for an owner
+  decision (options: gate without apply_patch; support responses-lite
+  on the bridge; something else).
+
+**Gate results — OWNER to fill (do not write "Owner sign-off"):**
+
+| Gate | Codex version | Model (config) | Duration | Cost | Result |
+|---|---|---|---|---|---|
+| A (Gemini bridge, `codex-gemini.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) |  |  |  |  |  |
+| B (Anthropic bridge, `codex-anthropic.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) |  |  |  |  |  |
+| C (OpenRouter `type: responses` pass-through, `codex-openrouter.yaml`, `--expect-cost --expect-passthrough`) |  |  |  |  |  |
+
+- Catalog-shape recording (pre-gate check above): `jsonl: `,
+  `top-level tools with custom apply_patch: `, `responses-lite header
+  absent: `.
+- Live suite (`npm run test:live`, `tests/live/codex.live.test.ts`):
+  `summary: `.

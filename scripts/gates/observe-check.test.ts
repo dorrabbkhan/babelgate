@@ -19,6 +19,8 @@ const FLAGS: ObserveFlags = {
   expectCacheRead: false,
   expectProviders: [],
   expectSaved: false,
+  expectNoNote: [],
+  expectPassthrough: false,
 };
 
 const ROW: ObserveRow = {
@@ -28,6 +30,7 @@ const ROW: ObserveRow = {
   costUsd: 0.012,
   wouldCostUsd: null,
   cacheReadTokens: null,
+  notes: [],
 };
 
 const BODIES: InspectorBodies = {
@@ -117,5 +120,57 @@ describe("evaluateObservations", () => {
     );
     const saved = { ...ROW, wouldCostUsd: 0.5 };
     expect(evaluateObservations(flags, [saved], BODIES, 7)).toBeNull();
+  });
+
+  // v1.4 Task 14 (spec §4.5, gates A/B): no row since start may carry
+  // the named note — the bridge must never send reasoning across a
+  // provider boundary.
+  it("--expect-no-note fails when any row has the note", () => {
+    const flags = { ...FLAGS, expectNoNote: ["reasoning_dropped"] };
+    const noted: ObserveRow = {
+      ...ROW,
+      notes: [
+        {
+          stage: "decode",
+          adapter: "responses",
+          code: "reasoning_dropped",
+        },
+      ],
+    };
+    expect(evaluateObservations(flags, [noted], BODIES, 7)).toContain(
+      "--expect-no-note reasoning_dropped",
+    );
+    expect(evaluateObservations(flags, [ROW], BODIES, 7)).toBeNull();
+  });
+
+  it("--expect-no-note passes when only other notes are present", () => {
+    const flags = { ...FLAGS, expectNoNote: ["reasoning_dropped"] };
+    const other: ObserveRow = {
+      ...ROW,
+      notes: [
+        {
+          stage: "encode",
+          adapter: "gemini",
+          code: "reasoning_effort_lowered",
+        },
+      ],
+    };
+    expect(evaluateObservations(flags, [other], BODIES, 7)).toBeNull();
+  });
+
+  // v1.4 Task 14 (spec §4.5, gate C): every row since start must be a
+  // pass-through row — a bridged request in a pass-through gate is a
+  // routing bug, not an observation to tolerate.
+  it("--expect-passthrough fails on a bridged row", () => {
+    const flags = { ...FLAGS, expectPassthrough: true };
+    expect(evaluateObservations(flags, [ROW], BODIES, 7)).toContain(
+      "--expect-passthrough",
+    );
+    const relayed = { ...ROW, passthrough: true };
+    expect(evaluateObservations(flags, [relayed], BODIES, 7)).toBeNull();
+    const mixed = { ...ROW, id: "r2", passthrough: true };
+    expect(
+      evaluateObservations(flags, [ROW, mixed], BODIES, 7),
+    ).toContain("--expect-passthrough");
   });
 });

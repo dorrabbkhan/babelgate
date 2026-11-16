@@ -10,12 +10,23 @@
 # the script prints.
 #
 #   scripts/gates/record-codex.sh [--upstream <baseUrl>] [--model <slug>]
+#     [--catalog <json>] [--effort <level>] [--dry-run]
 #
 # --model is the slug written to the scratch config.toml (default
 # qwen/qwen3-coder); if Codex prints a "Model metadata ... not found"
 # warning for it, that line is echoed into the summary — under fallback
 # metadata there is no apply_patch tool and no reasoning.effort, which
 # is exactly what the recording is meant to show.
+#
+# --catalog writes `model_catalog_json` (a JSON model-catalog file per
+# codex-rs/config/src/config_toml.rs at rust-v0.169.0 — the
+# ModelInfo struct is in codex-rs/protocol/src/openai_models.rs) and
+# --effort writes `model_reasoning_effort` into the scratch
+# config.toml, so one recording can prove a catalog entry gives Codex
+# the apply_patch custom tool and reasoning.effort on the classic
+# (non-responses-lite) request shape — the Task 14 gate prerequisite.
+# --dry-run prints the generated config.toml and exits before any key
+# check, recorder or Codex run.
 #
 # The recorder runs with RECORD_KEEP_ENUMS=1 (record-shapes.ts): type
 # values, tool names, include entries, reasoning.effort/summary,
@@ -45,16 +56,22 @@
 # script hangs).
 set -euo pipefail
 
+# Caller's cwd, captured before the cd: --catalog resolves a relative
+# path against it.
+caller_pwd="$PWD"
 cd "$(dirname "$0")/../.."
 FIXTURE="scripts/gates/fixtures/edit-task"
 PROMPT="Make the failing test pass. Run npm test to check your work."
 MODEL="qwen/qwen3-coder"
 
 usage() {
-  echo "usage: $0 [--upstream <baseUrl>] [--model <slug>]" >&2
+  echo "usage: $0 [--upstream <baseUrl>] [--model <slug>] [--catalog <json>] [--effort <level>] [--dry-run]" >&2
 }
 
 upstream="https://openrouter.ai/api/v1"
+catalog=""
+effort=""
+dry_run=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --upstream)
@@ -65,12 +82,72 @@ while [ $# -gt 0 ]; do
       MODEL="${2:?--model needs a value}"
       shift 2
       ;;
+    --catalog)
+      catalog="${2:?--catalog needs a value}"
+      shift 2
+      ;;
+    --effort)
+      effort="${2:?--effort needs a value}"
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
     *)
       usage
       exit 2
       ;;
   esac
 done
+
+if [ -n "$catalog" ]; then
+  case "$catalog" in
+    /*) ;;
+    *) catalog="$caller_pwd/$catalog" ;;
+  esac
+  if [ ! -f "$catalog" ]; then
+    echo "RECORD FAIL: model catalog not found: $catalog" >&2
+    exit 1
+  fi
+fi
+
+# The scratch config.toml (one temp CODEX_HOME per run). `model` is
+# --model; `model_catalog_json`/`model_reasoning_effort` come from
+# --catalog/--effort when given; model_provider `rec` is the recorder;
+# wire_api "responses" is what this task is measuring. env_key names
+# the env var Codex reads the key from — it stays OPENROUTER_API_KEY
+# whatever --upstream points at. approval_policy/sandbox_mode match
+# record-gemini-cli.sh's --yolo: the edit task must write files and
+# run npm test without asking (a sandbox-denied run records nothing).
+write_config_toml() {
+  local home="$1" port="$2"
+  {
+    echo "model = \"$MODEL\""
+    echo "model_provider = \"rec\""
+    echo "approval_policy = \"never\""
+    echo "sandbox_mode = \"danger-full-access\""
+    [ -n "$effort" ] && echo "model_reasoning_effort = \"$effort\""
+    [ -n "$catalog" ] && echo "model_catalog_json = \"$catalog\""
+    echo ""
+    echo "[model_providers.rec]"
+    echo "name = \"Recorded upstream\""
+    echo "base_url = \"http://localhost:$port/v1\""
+    echo "wire_api = \"responses\""
+    echo "env_key = \"OPENROUTER_API_KEY\""
+    echo "requires_openai_auth = false"
+  } > "$home/config.toml"
+}
+
+if [ -n "$dry_run" ]; then
+  dry_home="$(mktemp -d)"
+  dry_port="$(node -e 'const s=require("net").createServer();s.listen(0,()=>{console.log(s.address().port);s.close()})')"
+  write_config_toml "$dry_home" "$dry_port"
+  echo "dry-run: generated config.toml:"
+  cat "$dry_home/config.toml"
+  rm -rf "$dry_home"
+  exit 0
+fi
 
 # Key from the environment first; if unset, the same ./.env babelgate
 # loads — parsed with dotenv itself so quoting rules match, and only
@@ -179,25 +256,9 @@ if [ -z "$ready" ]; then
 fi
 
 # Scratch CODEX_HOME: keeps the user's real ~/.codex (auth, sessions,
-# config) out of the recording. model_provider `rec` is the recorder;
-# wire_api "responses" is what this task is measuring. env_key names
-# the env var Codex reads the key from — it stays OPENROUTER_API_KEY
-# whatever --upstream points at. approval_policy/sandbox_mode match
-# record-gemini-cli.sh's --yolo: the edit task must write files and
-# run npm test without asking (a sandbox-denied run records nothing).
-cat > "$work/codex-home/config.toml" <<EOF
-model = "$MODEL"
-model_provider = "rec"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-[model_providers.rec]
-name = "Recorded upstream"
-base_url = "http://localhost:$port/v1"
-wire_api = "responses"
-env_key = "OPENROUTER_API_KEY"
-requires_openai_auth = false
-EOF
+# config) out of the recording. See write_config_toml above for what
+# the file carries.
+write_config_toml "$work/codex-home" "$port"
 
 # Non-interactive Codex run. --skip-git-repo-check: the temp fixture
 # copy is not a git repo and Codex refuses to run outside one.
