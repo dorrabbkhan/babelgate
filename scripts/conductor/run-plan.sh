@@ -11,8 +11,10 @@
 # (docs/superpowers/plans/*babelgate-<version>-plan.md); PLAN_FILE=<path>
 # overrides it (used by the dry-run fixture under fixtures/run-plan/).
 #
-# After each session the script reads the last "RESULT:" line of the task's
-# ~/babelgate-conductor/<version>-task<id>/conductor-log.md:
+# After each session the script reads the last non-empty line of the task's
+# ~/babelgate-conductor/<version>-task<id>/conductor-log.md — but only if the
+# session appended to the log (a stale RESULT from an earlier run does not
+# count) — and treats it as a RESULT only if it starts with "RESULT: ":
 #   RESULT: READY <PR>              → poll `gh pr view <PR> --json state`
 #                                     every RUN_PLAN_POLL_S (default 300)
 #                                     seconds until MERGED, then next task
@@ -124,6 +126,9 @@ for ((i = PI; i <= QI; i++)); do
   fi
 
   mkdir -p "$TASKDIR"
+  LOG="$TASKDIR/conductor-log.md"
+  LINES_BEFORE=0
+  { [ -f "$LOG" ] && LINES_BEFORE="$(wc -l <"$LOG")"; } || true
   echo "run-plan.sh: starting task $ID ($MODEL) → $OUT"
   set +e
   ( cd "$ROOT" && "${CMD[@]}" ) >"$OUT" 2>&1
@@ -131,9 +136,13 @@ for ((i = PI; i <= QI; i++)); do
   set -e
   echo "run-plan.sh: task $ID session exited $rc"
 
-  LOG="$TASKDIR/conductor-log.md"
+  LINES_AFTER=0
+  { [ -f "$LOG" ] && LINES_AFTER="$(wc -l <"$LOG")"; } || true
+  [ "$LINES_AFTER" -gt "$LINES_BEFORE" ] \
+    || stop_with "task $ID: no new RESULT: line in $LOG (session rc=$rc, output $OUT)"
   RESULT=""
-  { [ -f "$LOG" ] && RESULT="$(grep -E '^RESULT:' "$LOG" | tail -1)"; } || true
+  LAST="$(awk 'NF{l=$0} END{print l}' "$LOG")"
+  case "$LAST" in "RESULT: "*) RESULT="$LAST" ;; esac
   case "$RESULT" in
     "RESULT: READY "*)
       PR="${RESULT#RESULT: READY }"; PR="${PR%%[[:space:]]*}"

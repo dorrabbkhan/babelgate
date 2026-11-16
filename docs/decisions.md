@@ -5410,31 +5410,51 @@ a past result.
   Claude Docs, Meetings), system tools 23.1k. In T3 Code conductor sessions
   the median is 45.8k; the ~13k difference is host-injected (`t3-code` MCP
   tools/instructions and orchestration text) that project settings cannot
-  remove. After: measured by the conductor on this PR branch (pending).
+  remove. After (conductor on this PR branch with `disableBundledSkills` and
+  `skillOverrides` dropped, same measurement): **28.9k** first-turn tokens —
+  system prompt 2.8k · system tools 18.1k · custom agents 68 · memory files
+  3.0k · skills 4.9k · messages 10; MCP tools, MCP server instructions and
+  deferred MCP tools 0. The ≤ 30k target is met for the plain CLI; T3 Code
+  adds its ~13k host injection on top (≈ 42k expected there), which project
+  settings cannot remove.
 - **`.claude/settings.json` removals** (key semantics per
   <https://code.claude.com/docs/en/settings> and
   <https://code.claude.com/docs/en/settings-reference>; connector behaviour
   per <https://code.claude.com/docs/en/mcp#disable-claude-ai-connectors>):
   - `"disableClaudeAiConnectors": true` — stops fetching/connecting all
-    claude.ai connectors (Atlassian, Claude Data, Claude Docs, Meetings);
-    removes the 586 MCP tools + ~2.3k server instructions and the 29.9k of
-    deferred connector tools.
+    claude.ai connectors (Atlassian, Claude Data, Claude Docs, Meetings).
+    Measured saving −2.9k first-turn tokens (586 MCP tools + 2.3k server
+    instructions); the 29.9k of deferred connector tools is gone too.
   - `"enabledPlugins": {"superpowers@synced": false}` — disables only the
-    synced `superpowers` plugin (16 skills, ≈1.0k; name verified in its
-    plugin.json). `syncClaudeAiPlugins`/`syncClaudeAiSkills` are
-    user/local/managed-scope only — a repository cannot set them
-    (settings-reference §syncClaudeAiPlugins), so the per-plugin key is used
-    in the committed project file instead.
-  - `"disableBundledSkills": true` — removes bundled skills/workflows
-    (≈2.8k); built-in commands stay typable, project commands/skills
-    unaffected.
-  - `"skillOverrides": {"graphify","docs","docx","google-workspace",
-    "import-memory","morning","pdf","pptx","skill-creator","xlsx": "off"}` —
-    hides the user's `graphify` skill and the claude.ai-synced skills
-    (≈2.1k) without editing `~/.claude`. Synced skills are not plugin
-    skills, so overrides reach them by name; if a name fails to suppress,
-    the per-user fallback is `"syncClaudeAiSkills": false` in
-    `.claude/settings.local.json` (gitignored — cannot be committed).
+    synced `superpowers` plugin (16 skills; name verified in its
+    plugin.json). Measured saving −1.3k.
+    `syncClaudeAiPlugins`/`syncClaudeAiSkills` are user/local/managed-scope
+    only — a repository cannot set them (settings-reference
+    §syncClaudeAiPlugins), so the per-plugin key is used in the committed
+    project file instead.
+  - Tried and dropped — `"disableBundledSkills": true` and `"skillOverrides"`
+    (graphify, docs, docx, google-workspace, import-memory, morning, pdf,
+    pptx, skill-creator, xlsx: "off"). The conductor measured the branch per
+    key (`claude -p "/context"`, Claude Code 2.1.322, opus 5.5, each number
+    reproduced twice):
+
+    | settings on the branch | first-turn total | system tools | skills |
+    |---|---|---|---|
+    | all four keys | 35.1k (worse than 32.7k before) | 29.1k | 178 |
+    | − `disableClaudeAiConnectors` | 38.0k | 29.1k | 178 (+ MCP 586, instructions 2.3k) |
+    | − `enabledPlugins` | 36.4k | 28.1k | 1.1k |
+    | − `skillOverrides` | 35.1k | 26.9k | 2.4k |
+    | − `disableBundledSkills` | 28.9k | 20.3k | 2.7k |
+    | − `disableBundledSkills` and `skillOverrides` | 28.9k | 18.1k | 4.9k |
+
+    Bisecting `skillOverrides` per skill showed why: turning off the bundled
+    `workflow-authoring` skill alone adds +6.2k to system tools (probably
+    the Workflow tool description inlines its reference when that skill is
+    off — cause inside Claude Code not confirmed); every other skill turned
+    off moves ~2–4 hundred tokens from "Skills" into "System tools", net
+    ≈ 0. So `skillOverrides` saved nothing and `disableBundledSkills` cost
+    6.2k. Both keys are removed; `graphify` and the claude.ai-synced skills
+    stay on (net ≈ 0 to hide).
   - Not set: `allowedMcpServers` (an empty array blocks all user-added
     servers, but could also block a host-injected `--mcp-config` server such
     as `t3-code` — too risky for the conductor host) and
@@ -5446,11 +5466,15 @@ a past result.
   contiguous range by table position; `Opus`/`Sonnet` map to
   `--model opus|sonnet`, anything else is an error. `headless-tools.txt`
   keeps `#` comment lines (the file documents itself) and run-plan.sh strips
-  them before `paste -sd,`. `RESULT:` is read as the *last matching* line of
-  conductor-log.md; a PR that is `CLOSED` without merge stops the run like
-  FAILED. `RUN_PLAN_POLL_S` overrides the 300 s merge poll and
-  `RUN_PLAN_DIR` the `~/babelgate-conductor` session dir (both for offline
-  tests).
+  them before `paste -sd,`. `RESULT:` is read per the spec: the log's last
+  non-empty line is a RESULT only if it starts with `RESULT: `, and only if
+  the session actually appended to the log — the script records the line
+  count before the session and stops with "no new RESULT: line" when the
+  log did not grow (a stale `RESULT: READY` from an earlier run no longer
+  lets a crashed session slip through). A PR that is `CLOSED` without merge
+  stops the run like FAILED. `RUN_PLAN_POLL_S` overrides the 300 s merge
+  poll and `RUN_PLAN_DIR` the `~/babelgate-conductor` session dir (both for
+  offline tests).
   Verified offline: `DRY_RUN=1 PLAN_FILE=scripts/conductor/fixtures/run-plan/
   v1.4-task-index-with-conductor.md run-plan.sh v1.4 15 15` prints the
   `claude -p "/conduct v1.4 15" --model sonnet --allowedTools "…"` line and

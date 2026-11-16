@@ -3,19 +3,6 @@
   "enabledPlugins": {
     "superpowers@synced": false
   },
-  "disableBundledSkills": true,
-  "skillOverrides": {
-    "graphify": "off",
-    "docs": "off",
-    "docx": "off",
-    "google-workspace": "off",
-    "import-memory": "off",
-    "morning": "off",
-    "pdf": "off",
-    "pptx": "off",
-    "skill-creator": "off",
-    "xlsx": "off"
-  },
   "permissions": {
     "allow": [
       "Read", "Grep", "Glob",
