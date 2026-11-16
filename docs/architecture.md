@@ -1,7 +1,8 @@
 # Architecture
 
 babelgate is a TypeScript / Express 5 proxy that translates between LLM
-API formats — OpenAI, Anthropic, Gemini, Ollama — through a **canonical
+API formats — OpenAI Chat, Anthropic, Gemini, Ollama and the OpenAI
+Responses API — through a **canonical
 intermediate format**: one adapter per provider, never one transformer
 per provider pair. This document is the map; `docs/roadmap.md` is the
 direction and `docs/decisions.md` is the journal.
@@ -37,8 +38,9 @@ pre-route rejections are never traced. Only chat requests open a trace;
 ## Translation: the canonical format
 
 `src/types/canonical.types.ts` is the contract — messages (text, images,
-tool calls/results), tools, system parts, cache hints, usage (incl.
-cache read/write tokens), errors and stream events.
+reasoning, tool calls/results), tools (function and custom), system parts,
+cache hints, response format, usage (incl. cache and reasoning tokens),
+errors and stream events.
 `canonical.schema.ts` is its Zod mirror; the two move together and every
 change is an interface change recorded in `docs/decisions.md`.
 
@@ -56,6 +58,28 @@ provider's errors (Gemini's gRPC status object, Anthropic's
 `detectSource` middleware records the request's dialect so even
 body-parse and 404 errors render correctly.
 
+### Pass-through and reasoning origin (v1.4)
+
+Two exceptions live inside that same flow, not beside it. When the source
+is **Responses** (`POST /v1/responses`) and the routed entry is
+`type: responses`, `src/services/passthrough.ts` skips canonical entirely:
+the body goes upstream with only `model` rewritten (and the
+`max_output_tokens` clamp), the reply or SSE stream relays byte-for-byte
+with `model` restored in the lifecycle events, and the trace — hops, usage
+from `response.completed`, cost, diagnostics — is emitted as usual and
+marked `passthrough: true`.
+
+Canonical **reasoning parts and signatures** carry an
+`origin {provider, model}` set by the decoding adapter from
+`currentAttempt()` (`src/observe/context.ts`; services wrap each attempt's
+encode/call/decode in `runWithAttempt`, fallback hops included). An encoder
+emits a reasoning part or signature only when its origin equals the current
+attempt's — reasoning never crosses providers — and drops the rest with a
+`reasoning_dropped` note. Responses clients get their upstream's reasoning
+back inside `bg1.` `encrypted_content` envelopes
+(`src/transformers/adapters/responses.envelope.ts`), which later requests
+unpack back into canonical parts.
+
 ## Routing
 
 `babelgate.yaml` (`--config`, `BABELGATE_CONFIG`, or `./babelgate.yaml`)
@@ -68,8 +92,8 @@ optional `when.min_input_tokens`) → the default provider. A rule's
 or an upstream `429/5xx` — only before the first byte; a mid-stream
 death is an in-stream error, never a silent switch. Per-provider flags
 (`max_output_tokens`, `context_window`, `timeout_ms`, `cache_hints`,
-`live_prices`, `repair_tool_calls`, `local`) carry all provider
-differences — never a hostname check.
+`live_prices`, `repair_tool_calls`, `local`, `reasoning_passback`) carry
+all provider differences — never a hostname check.
 
 Replies keep the model name the client asked for;
 `x-babelgate-provider`, `x-babelgate-model` and `x-babelgate-attempts`

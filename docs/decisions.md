@@ -5072,3 +5072,61 @@ Three non-blocking leftovers from the Task 4 review; no fixture, snapshot or exp
   Gateway") renders verbatim, a lone line that parses as JSON is still
   masked. The SSE path, the truncation rule, and keyed masking are
   unchanged.
+
+## v1.4 Task 13: Codex recipe, examples, README, architecture doc, launch draft (spec §3.8)
+
+- **Files outside the Files block:** `src/cli.ts` — its `--help` text (and
+  the README's verbatim quote of it) named only four upstream key env vars
+  although `responses` has been a valid `TARGET_API` since Task 3;
+  `RESPONSES_API_KEY` added. One string line; the help test asserts only
+  `--config`/`BABELGATE_CONFIG`/`./babelgate.yaml`, so no test change.
+- **`docs/recipes/README.md` skipped** — no such file exists; the recipes
+  directory has no index (the README links each recipe directly), so the
+  plan's "(if it indexes recipes)" condition does not apply.
+- **`examples/codex-anthropic.yaml` uses OpenRouter's Anthropic endpoint**
+  (`type: anthropic`, `base_url: https://openrouter.ai/api`, model
+  `anthropic/claude-haiku-4.5` — the cheapest current Claude model with
+  thinking): Task 1's check proved that endpoint returns signed thinking
+  blocks for it (E18), and one `OPENROUTER_API_KEY` then covers both this
+  example and `codex-openrouter.yaml`. The header documents the
+  direct-Anthropic alternative (`https://api.anthropic.com`,
+  `claude-haiku-4-5`, `ANTHROPIC_API_KEY`).
+- **`"codex examples parse"` sits in `tests/contracts/test-config.test.ts`
+  per the Files block** even though `src/config/examples.test.ts` already
+  loads every `examples/*.yaml`: the new test pins the three files by name
+  plus the provider `type` each recipe claims (gemini / anthropic /
+  responses), which is what gates A–C depend on.
+- **README staleness fixes in the same pass:** the "Reasoning/thinking is
+  not mapped … planned for v1.4", "`parallel_tool_calls` is ignored" and
+  "all four adapters" bullets were contradicted by this release; each now
+  scopes to the non-Responses sources or says five. `--target` and the
+  `--help` quote gained `responses`/`RESPONSES_API_KEY` to match cli.ts.
+- **`endpointLines` in cli.ts has no Responses row** — deliberate for this
+  task: Codex's entry point is `~/.codex/config.toml`, not printed export
+  lines, so the README describes it in prose after the verbatim endpoint
+  block. Follow-up: consider adding the row in Task 15 if a printed line
+  is wanted.
+- **Launch draft is 550 words** (spec asks ≤ 600), headline "Codex on
+  Gemini and Claude", marked as an owner-reviewed draft.
+
+**Fix round 1 — `costUsd: null` on every codex-anthropic.yaml row.** The
+conductor's live run returned 200 with reasoning, but no cost. Cause: a
+`type: anthropic` provider fetches its model list with `x-api-key` +
+`anthropic-version`, and OpenRouter's Anthropic-format endpoint answers
+`GET https://openrouter.ai/api/v1/models` in Anthropic shape — paged (20
+rows), `{id, display_name, created_at, type}`, no `pricing` — and
+`anthropic/claude-haiku-4.5` isn't on the page. So `live_prices: true`
+found nothing, and the bundled table has `claude-haiku-4-5`, not the
+OpenRouter catalog id. `src/cost` and the adapters were not touched: the
+example drops `live_prices` and carries a top-level `prices:` override
+(the bundled claude-haiku-4-5 row, `{input: 1, output: 5, cache_read:
+0.1, cache_write: 1.25}`) with a comment noting the override can go on a
+direct Anthropic key. The `"codex examples parse"` contract test now
+also runs `lookupPrice` on each example's `*` target with
+`getRawModelList` stubbed to an empty list (live step can't answer, no
+network in npm test): codex-anthropic.yaml must price as "override",
+codex-gemini.yaml as "bundled"; codex-openrouter.yaml is skipped with a
+comment since it relies on live prices by design. `docs/recipes/codex.md`
+notes where each example's cost comes from, and the launch draft's gate
+sentence is marked `[pending gates A/B/C, Task 14]` instead of claiming
+a past result.

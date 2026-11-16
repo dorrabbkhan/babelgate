@@ -1,0 +1,29 @@
+# Codex CLI on OpenRouter's native Responses API — the pass-through path.
+# Release gate C (spec §4.5) runs this file.
+#
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo codex-openrouter.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/codex-openrouter.yaml
+#   OPENROUTER_API_KEY=<key> \
+#     npx babelgate --config codex-openrouter.yaml
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
+#
+# ~/.codex/config.toml: same [model_providers.babelgate] block as
+# docs/recipes/codex.md. Codex's wire_api "responses" + a `type: responses`
+# provider mean the request body is relayed byte-for-byte — only `model` is
+# rewritten — and the response stream comes back untouched (spec §3.4). The
+# trace, usage/cost rows and the inspector's pass-through view still apply.
+# OpenRouter's Responses API is beta and stateless, which is all Codex sends
+# over HTTP (spec E1/E17); built-in tools like web_search are forwarded here,
+# not dropped — keep `web_search = "disabled"` anyway unless you want them.
+default: openrouter
+providers:
+  openrouter:
+    type: responses
+    # No /v1: babelgate appends /v1/responses and /v1/models itself.
+    base_url: https://openrouter.ai/api
+    api_key_env: OPENROUTER_API_KEY
+    live_prices: true         # cost from OpenRouter's own /models pricing
+routes:
+  - match: "*"
+    to: openrouter/qwen/qwen3-coder

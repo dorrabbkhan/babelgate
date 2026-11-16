@@ -230,7 +230,8 @@ function usageLines(): string[] {
     "",
     "Config file discovery: --config, then BABELGATE_CONFIG,",
     "then ./babelgate.yaml. Upstream API keys come only from the environment",
-    "(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_API_KEY).",
+    "(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_API_KEY,",
+    "RESPONSES_API_KEY).",
   ];
 }
 
