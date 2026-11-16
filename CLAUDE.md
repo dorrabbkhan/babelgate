@@ -34,15 +34,26 @@ a human decision is needed. The owner reviews PRs on GitHub and talks to you thr
 ## The loop for one task (/conduct <version> <N>)
 1. Preconditions: clean tree; main up to date; previous dependencies merged (check the plan's Task Index).
 2. Task session → parse `PR_URL:` or `STOP:`. STOP → escalate (step 7) and end.
-3. Start the review session immediately (in parallel with CI): the babelgate-review skill for that PR (build-prompt.sh review).
-4. Judge (see "Judgment rules"). If REQUIRED fixes exist (from the review or your own checks) → a fix
-   session on the same branch, listing them precisely. Max 2 fix rounds; then escalate.
-5. Wait for CI green (`gh pr checks <PR> --watch`). Red CI → a fix round (counts toward the max). check.sh runs
+3. Start the review session and `scripts/conductor/wait-ci.sh <PR>` in the background together, right after
+   the push (one blocking wait on each, never a polling loop): the review is the babelgate-review skill for
+   that PR (build-prompt.sh review).
+4. Judge (see "Judgment rules"): run `scripts/conductor/judge.sh <PR> <version> <N>` first and read its
+   FLAGs instead of hand greps — the rules below are unchanged; judge.sh runs the mechanical ones, while
+   wire-format evidence and anything it can't parse stay your call. Send long CI or Devin logs to the
+   `log-reader` subagent (Haiku, ≤ 15 lines with pointers) instead of reading them inline. If REQUIRED
+   fixes exist (from the review or judge.sh) → a fix session on the same branch, listing them precisely.
+   Max 2 fix rounds; then escalate.
+5. CI result from wait-ci.sh: green → step 6; red → a fix round (counts toward the max). check.sh runs
    every step even when the fixture guard fails; on an owner-approved fixture change, CI red with "FIXTURE GUARD
    FAILED … all other checks passed" and nothing else failing is the expected state (the owner sets ALLOW_FIXTURE_CHANGE).
 6. Post/update ONE sticky status comment on the PR (scripts/conductor/status-comment.sh) and notify the owner.
 7. Escalation: a PR comment starting "**Owner decision needed:**" with the question, 2–3 options, and your
    recommendation; then notify and stop.
+8. End every run by appending `RESULT: READY <PR>` / `RESULT: ESCALATED` / `RESULT: GATE` /
+   `RESULT: FAILED` as the last line of the task's conductor-log.md — `run-plan.sh <version> <from> <to>`
+   (one headless `/conduct` session per task, model from the Task Index's Conductor column, explicit
+   `--allowedTools` in scripts/conductor/headless-tools.txt per D7) reads it to decide whether to start the
+   next session.
 
 ## Judgment rules (apply every time)
 - **Never loosened:** any change to a fixture, contract snapshot, timeout/retry default, or an assertion

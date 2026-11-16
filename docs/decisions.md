@@ -5398,3 +5398,66 @@ a past result.
   hunk. `secrets` flags file:line but never echoes the matched material.
   "Opus-only and total columns" is rendered as two per-task tables (all
   models; opus only).
+
+## v1.5 Task 0b: lean context, headless per-task runs, log reader (spec §3.0.2–3.0.6, D7)
+
+- **Context measurements.** Before (conductor on main `beace8b`, Claude Code
+  2.1.322, plain `claude -p "/context"`, model opus 5.5): **32.7k** first-turn
+  tokens — system prompt 2.8k · system tools 17.2k · MCP tools 586 · MCP
+  server instructions 2.3k · memory files 2.7k (project CLAUDE.md 2.5k, user
+  CLAUDE.md 96, MEMORY.md 114) · skills 5.8k · messages 1.3k. Deferred (loaded
+  on demand): MCP tools 29.9k (claude.ai connectors Atlassian, Claude Data,
+  Claude Docs, Meetings), system tools 23.1k. In T3 Code conductor sessions
+  the median is 45.8k; the ~13k difference is host-injected (`t3-code` MCP
+  tools/instructions and orchestration text) that project settings cannot
+  remove. After: measured by the conductor on this PR branch (pending).
+- **`.claude/settings.json` removals** (key semantics per
+  <https://code.claude.com/docs/en/settings> and
+  <https://code.claude.com/docs/en/settings-reference>; connector behaviour
+  per <https://code.claude.com/docs/en/mcp#disable-claude-ai-connectors>):
+  - `"disableClaudeAiConnectors": true` — stops fetching/connecting all
+    claude.ai connectors (Atlassian, Claude Data, Claude Docs, Meetings);
+    removes the 586 MCP tools + ~2.3k server instructions and the 29.9k of
+    deferred connector tools.
+  - `"enabledPlugins": {"superpowers@synced": false}` — disables only the
+    synced `superpowers` plugin (16 skills, ≈1.0k; name verified in its
+    plugin.json). `syncClaudeAiPlugins`/`syncClaudeAiSkills` are
+    user/local/managed-scope only — a repository cannot set them
+    (settings-reference §syncClaudeAiPlugins), so the per-plugin key is used
+    in the committed project file instead.
+  - `"disableBundledSkills": true` — removes bundled skills/workflows
+    (≈2.8k); built-in commands stay typable, project commands/skills
+    unaffected.
+  - `"skillOverrides": {"graphify","docs","docx","google-workspace",
+    "import-memory","morning","pdf","pptx","skill-creator","xlsx": "off"}` —
+    hides the user's `graphify` skill and the claude.ai-synced skills
+    (≈2.1k) without editing `~/.claude`. Synced skills are not plugin
+    skills, so overrides reach them by name; if a name fails to suppress,
+    the per-user fallback is `"syncClaudeAiSkills": false` in
+    `.claude/settings.local.json` (gitignored — cannot be committed).
+  - Not set: `allowedMcpServers` (an empty array blocks all user-added
+    servers, but could also block a host-injected `--mcp-config` server such
+    as `t3-code` — too risky for the conductor host) and
+    `disabledMcpjsonServers` (the repo's `.mcp.json` is untracked and the
+    server names can't be enumerated here; add names if the re-measurement
+    shows leftover MCP tools).
+- **`run-plan.sh` resolutions:** the Task Index is parsed by header name
+  (`#`, `Conductor`) so extra columns can sit anywhere; `from`/`to` select a
+  contiguous range by table position; `Opus`/`Sonnet` map to
+  `--model opus|sonnet`, anything else is an error. `headless-tools.txt`
+  keeps `#` comment lines (the file documents itself) and run-plan.sh strips
+  them before `paste -sd,`. `RESULT:` is read as the *last matching* line of
+  conductor-log.md; a PR that is `CLOSED` without merge stops the run like
+  FAILED. `RUN_PLAN_POLL_S` overrides the 300 s merge poll and
+  `RUN_PLAN_DIR` the `~/babelgate-conductor` session dir (both for offline
+  tests).
+  Verified offline: `DRY_RUN=1 PLAN_FILE=scripts/conductor/fixtures/run-plan/
+  v1.4-task-index-with-conductor.md run-plan.sh v1.4 15 15` prints the
+  `claude -p "/conduct v1.4 15" --model sonnet --allowedTools "…"` line and
+  exits 0; the real `claude -p` runs are the conductor's (no `claude` CLI in
+  the Devin sandbox).
+- **Files outside the Files block:**
+  `scripts/conductor/fixtures/run-plan/v1.4-task-index-with-conductor.md` —
+  the plan's dry-run step requires "a test copy of the v1.4 index with a
+  Conductor column"; conductor fixtures live under
+  `scripts/conductor/fixtures/` (Task 0a pattern).

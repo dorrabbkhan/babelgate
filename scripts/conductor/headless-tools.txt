@@ -1,0 +1,49 @@
+# --allowedTools list for run-plan.sh headless /conduct sessions (D7, spec
+# §3.0.4): one tool spec per line, joined by `paste -sd,`. Mirrors the allow
+# list in .claude/settings.json (keep in sync) plus the conductor scripts it
+# already reaches through Bash(scripts/conductor/*) — named explicitly so they
+# survive a narrower glob — the log-reader subagent, and the conductor log
+# directory. The settings.json deny list stays in force on top of this list.
+# No bypassPermissions, no --dangerously-skip-permissions.
+Read
+Grep
+Glob
+Edit(docs/conductor/**)
+Bash(scripts/conductor/*)
+Bash(./scripts/check.sh:*)
+Bash(scripts/babelgate-loop.sh:*)
+Bash(devin:*)
+Bash(npm ci)
+Bash(npm test:*)
+Bash(npm run typecheck)
+Bash(npm run build)
+Bash(gh pr view:*)
+Bash(gh pr diff:*)
+Bash(gh pr checks:*)
+Bash(gh pr list:*)
+Bash(gh pr comment:*)
+Bash(gh run view:*)
+Bash(gh run list:*)
+Bash(gh run rerun:*)
+Bash(gh workflow run:*)
+Bash(gh api repos/*/issues/*/comments*)
+Bash(git fetch:*)
+Bash(git status:*)
+Bash(git diff:*)
+Bash(git log:*)
+Bash(git show:*)
+Bash(git switch:*)
+Bash(git worktree:*)
+Bash(git rev-parse:*)
+Bash(git pull:*)
+Bash(notify-send:*)
+Bash(mkdir:*)
+Bash(cat:*)
+Bash(grep:*)
+Bash(wc:*)
+Bash(sleep:*)
+Bash(scripts/conductor/judge.sh:*)
+Bash(scripts/conductor/wait-ci.sh:*)
+Bash(scripts/conductor/usage-report.sh:*)
+Agent(log-reader)
+Write(~/babelgate-conductor/**)
