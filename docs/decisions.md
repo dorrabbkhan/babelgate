@@ -5130,3 +5130,168 @@ comment since it relies on live prices by design. `docs/recipes/codex.md`
 notes where each example's cost comes from, and the launch draft's gate
 sentence is marked `[pending gates A/B/C, Task 14]` instead of claiming
 a past result.
+
+## v1.4 Task 14: live-suite cases; `codex-edit.sh`; gates A, B, C · OWNER REVIEW
+
+- **Files outside the Files block:**
+  - `examples/codex-model-catalog.json` — owner decision A (PR #87): the
+    gate's Codex model name (`babelgate`) must resolve to catalog
+    metadata, or Codex sends fallback shape (no `apply_patch`, no
+    `reasoning.effort` — spec §1.2 E12). One `ModelsResponse`-shaped
+    entry with `apply_patch_tool_type: "freeform"` and
+    `use_responses_lite: false`, so Codex emits a top-level `tools`
+    list containing a `custom` `apply_patch` (Lark grammar) and no
+    `x-openai-internal-codex-responses-lite` header.
+  - `scripts/gates/record-codex.sh` — gained `--catalog <json>`,
+    `--effort <level>` and `--dry-run` so the conductor can record
+    once with the catalog and confirm that shape before the gates
+    (owner decision A's "unproven" check). The scratch config.toml
+    generation is now a shared `write_config_toml` used by the run
+    and the dry path; the recorded config is unchanged without the
+    new flags.
+- **Codex source evidence (codex-cli 0.169.0, tag `rust-v0.169.0`):**
+  - `codex-rs/config/src/config_toml.rs`: `model_catalog_json:
+    Option<AbsolutePathBuf>` ("Optional path to a JSON model
+    catalog"), `model_reasoning_effort: Option<ReasoningEffort>`,
+    `web_search: Option<WebSearchMode>` (`disabled`/`cached`/
+    `indexed`/`live`), `approval_policy`, `sandbox_mode`.
+  - `codex-rs/core/src/config/mod.rs`: `load_catalog_json` parses the
+    file as `ModelsResponse` (`{models: Vec<ModelInfo>}`, ≥1 entry)
+    and it "replaces the bundled catalog for the current process".
+  - `codex-rs/protocol/src/openai_models.rs`: `ModelInfo` — the entry
+    carries every field without a serde default or `Option` (`slug`,
+    `display_name`, `supported_reasoning_levels`, `shell_type`,
+    `visibility`, `supported_in_api`, `priority`,
+    `support_verbosity`, `truncation_policy`,
+    `experimental_supported_tools`). Enum values used:
+    `ConfigShellToolType::unified_exec`, `ModelVisibility::list`,
+    `ApplyPatchToolType::freeform` (only variant),
+    `TruncationMode::bytes`. `use_responses_lite` defaults false but
+    is set explicitly per the owner decision.
+  - `codex-rs/models-manager/src/manager.rs`:
+    `StaticModelsManager::get_model_info` →
+    `find_model_from_candidates` = longest-prefix then namespaced
+    suffix; `babelgate` matches slug `babelgate`.
+  - `codex-rs/models-manager/src/model_info.rs` +
+    `codex-rs/core/src/session/mod.rs`: base instructions =
+    `config.base_instructions` else
+    `render_model_instructions(model_info)` =
+    `model_messages.instructions_template`; a catalog model without
+    one warns and runs with empty instructions, so the entry embeds
+    `codex-rs/models-manager/prompt.md` (the fallback's
+    `BASE_INSTRUCTIONS`, 20 903 bytes) verbatim.
+  - `codex-rs/core/src/client.rs`: `use_responses_lite == false` →
+    `create_tools_raw_json_for_responses_api` (top-level `tools`) and
+    `add_responses_lite_header` is skipped;
+    `codex-rs/core/src/tools/spec_plan.rs`:
+    `apply_patch_tool_type.is_some()` registers the `apply_patch`
+    handler — `spec.rs` maps `Freeform` to
+    `create_apply_patch_freeform_tool` (custom tool, Lark grammar).
+- **`codex-edit.sh`:** `config <yaml>` mode only (the interface names
+  no other). Follows `claude-code-edit.sh`: fixture copy, build,
+  babelgate `--preset openai-apps --config <yaml>` (prints the client
+  export lines; the token becomes `BABELGATE_KEY` for `env_key`),
+  `codex exec --skip-git-repo-check` under `timeout -k 30
+  ${CODEX_TIMEOUT_S:-900}` with a scratch `CODEX_HOME`, fixture
+  `npm test`, `GATE PASS`/`GATE FAIL`, and `OBSERVE_CHECK` →
+  `observe-check.ts --client codex` with the same config-derived
+  flags. Env knobs per the owner decision: `CODEX_MODEL` (default
+  `babelgate` — the catalog slug), `CODEX_MODEL_CATALOG` (default
+  `examples/codex-model-catalog.json`; empty omits the key),
+  `CODEX_REASONING_EFFORT` (default `medium`; empty omits),
+  `CODEX_EDIT_DRY_RUN=1` prints the generated config.toml and exits
+  before babelgate/Codex start. `npm test` and the codex run get a
+  throwaway `npm_config_cache`/`HOME` like record-codex.sh.
+- **`observe-check.ts`:** `--expect-no-note <code>` (repeatable) fails
+  when any row since start carries that note code; rows expose
+  `notes[].code` and `passthrough` from the usage store.
+  `--expect-passthrough` requires every row to be pass-through. New
+  cases in `observe-check.test.ts`.
+- **`codex.live.test.ts`:** one describe per §4.4 target — Gemini
+  bridge (`GEMINI_API_KEY`), Anthropic bridge (direct
+  `ANTHROPIC_API_KEY`, else OpenRouter's `/api/v1/messages` endpoint
+  per E18 via env-mode `TARGET_API=anthropic` borrowing
+  `OPENROUTER_API_KEY`), OpenRouter `type: responses` pass-through
+  (`OPENROUTER_API_KEY`, env-mode `TARGET_API=responses`). The five
+  §4.4 cases each: plain, stream (`event: response.created`/
+  `response.completed` lines), tools (`tool_choice: "required"` so a
+  call is guaranteed), three-turn tool loop with reasoning (200 every
+  turn; each turn echoes the prior output items — the bg1 envelopes
+  included), structured output (`text.format` json_schema,
+  `JSON.parse` + exact field values). `live.helpers.ts` gained
+  `useOpenRouterAnthropic`/`useOpenRouterResponses` with real-env
+  restore, mirroring the openai borrow pattern.
+- **Recording/network step: run by the conductor** —
+  `scripts/gates/record-codex.sh --model babelgate --catalog
+  examples/codex-model-catalog.json --effort medium` once before the
+  gates; expected: a top-level `tools` list containing a `custom`
+  `apply_patch` and no `x-openai-internal-codex-responses-lite`
+  header. If the catalog can't give that shape, STOP for an owner
+  decision (options: gate without apply_patch; support responses-lite
+  on the bridge; something else).
+
+**Gate results** (run by the owner on 2026-11-16 on branch `v1.4/task-14-codex-gates`, codex-cli 0.169.0, `model = "babelgate"`, `model_reasoning_effort = "medium"`, `examples/codex-model-catalog.json`; numbers copied from the `codex-edit.sh` output). `codex-edit.sh` does not print a cost figure; `--expect-cost` asserted that every gate had at least one priced row (`cost_usd` present):
+
+| Gate | Codex version | Model (config) | Duration | Cost | Result |
+|---|---|---|---|---|---|
+| A (Gemini bridge, `codex-gemini.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) | 0.169.0 | `gemini/gemini-3.8-flash` | 28s, 9 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (9 rows, gemini) at `11d31b3`. An earlier run at `10f9ff8` also passed (27s, 8 rows). |
+| B (Anthropic bridge, `codex-anthropic.yaml`, `--expect-cost --expect-no-note reasoning_dropped`) | 0.169.0 | `anthropic/anthropic/claude-haiku-4.5` (OpenRouter `/api/v1/messages`, E18) | 21s, 8 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (8 rows, anthropic) at `11d31b3`. First run (before the guard fix): GATE FAIL, `reasoning_dropped` from turn 3; see the entry below. |
+| C (OpenRouter `type: responses` pass-through, `codex-openrouter.yaml`, `--expect-cost --expect-passthrough`) | 0.169.0 | `openrouter/qwen/qwen3-coder` | 24s, 10 requests, 0 fallbacks | priced (`--expect-cost` pass) | **GATE PASS**, **OBSERVE PASS** (10 rows, openrouter, all pass-through) at `11d31b3`. First run: GATE FAIL, observe-check required a canonical stage (fixed in `fba4caf`). |
+
+- Catalog-shape recording (pre-gate check above, conductor, 2026-11-16,
+  `record-codex.sh --model babelgate --catalog examples/codex-model-catalog.json --effort medium`):
+  1 request recorded (OpenRouter then 400'd the unknown model id `babelgate`, as expected);
+  top-level tools with custom apply_patch: **yes** (`custom:apply_patch`, `format: grammar/lark`);
+  responses-lite header absent: **yes** (no `additional_tools` input item);
+  `reasoning: {effort: medium, summary: auto}`, `include: ["reasoning.encrypted_content"]`.
+- Live suite (`tests/live/codex.live.test.ts` only, conductor, real keys, at `10f9ff8` and again at `11d31b3`):
+  `summary: Tests 16 passed (16)`: Gemini bridge, Anthropic bridge (direct `ANTHROPIC_API_KEY`) and
+  OpenRouter pass-through, five cases each, plus the offline shape pin. The full `npm run test:live` was not run.
+
+### Continuity guard checks the loop start (owner decision 2026-11-16, PR #108 gate B)
+
+- **Evidence (conductor, codex-cli 0.169.0, `examples/codex-anthropic.yaml`):**
+  gate B's Codex edit passed, but every request from turn 3 on
+  carried `reasoning_dropped@thinking_disabled_no_prior_block`. Codex
+  resends the bg1 reasoning item every turn (recorded); Claude Haiku
+  4.5 thinks only at the START of a tool loop — turn 1
+  `[thinking(signed), text, tool_use]`, later loop steps
+  `[text, tool_use]` (no interleaved thinking on Haiku 4.5). The Task
+  8 `applyContinuityGuard` checked the LAST assistant message with
+  `toolCalls`, which from turn 3 has no thinking block, so thinking
+  was deleted for the rest of the session.
+- **Doc basis (fetched 2026-11-16, quoted verbatim):**
+  - https://platform.claude.com/docs/en/build-with-claude/thinking,
+    "Thinking with tool use": "**A tool-use loop is one assistant
+    turn.** From the model's perspective, an assistant turn ends only
+    when Claude completes its full response, which might include
+    multiple tool calls and results." And: "In extended (manual)
+    mode, the API additionally enforces that the final assistant turn
+    of a thinking-enabled request starts with a thinking block."
+  - https://platform.claude.com/docs/en/build-with-claude/extended-thinking,
+    "Turn structure in manual mode": "the final assistant turn of a
+    thinking-enabled request must start with a thinking block".
+- **Change:** `applyContinuityGuard` still finds the last assistant
+  message with `toolCalls`, then walks backward over the contiguous
+  tool loop (assistant/tool messages, stopping at the first user or
+  system message) and applies the unchanged own-origin test
+  (`reasoning` part with attempt origin + matching `signature`) to
+  the EARLIEST assistant message in that span — the loop start.
+  Deletion of `thinking`/`output_config.effort` and the
+  `reasoning_dropped`/`thinking_disabled_no_prior_block` note are
+  unchanged. Spec §3.3's "last assistant turn with tool_use" is read
+  as Anthropic's assistant turn: the whole tool loop.
+- **Files outside the Files block (owner decision 2026-11-16, option
+  1 — the "task says so" exception, scoped to this fix only):**
+  - `src/transformers/adapters/anthropic.adapter.ts` — the
+    loop-start walk and doc comment described above.
+  - `src/transformers/adapters/anthropic.adapter.test.ts` — five new
+    cases in `describe('continuity guard (v1.4 spec §3.2)')`:
+    thinking kept when the loop starts with an own block and a later
+    step has none; kept across an assistant text message inside the
+    loop; fires when the loop start has no own block even if the
+    last step does; fires for a new loop after a user message; fires
+    when the loop starts with a foreign block. Existing tests
+    unchanged (each ends its loop with a new user message).
+- **Follow-up:** the conductor reruns the Codex live file and the
+  owner reruns gate B.

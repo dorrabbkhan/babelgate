@@ -19,6 +19,8 @@ const FLAGS: ObserveFlags = {
   expectCacheRead: false,
   expectProviders: [],
   expectSaved: false,
+  expectNoNote: [],
+  expectPassthrough: false,
 };
 
 const ROW: ObserveRow = {
@@ -28,6 +30,7 @@ const ROW: ObserveRow = {
   costUsd: 0.012,
   wouldCostUsd: null,
   cacheReadTokens: null,
+  notes: [],
 };
 
 const BODIES: InspectorBodies = {
@@ -117,5 +120,114 @@ describe("evaluateObservations", () => {
     );
     const saved = { ...ROW, wouldCostUsd: 0.5 };
     expect(evaluateObservations(flags, [saved], BODIES, 7)).toBeNull();
+  });
+
+  // v1.4 Task 14 (spec §4.5, gates A/B): no row since start may carry
+  // the named note — the bridge must never send reasoning across a
+  // provider boundary.
+  it("--expect-no-note fails when any row has the note", () => {
+    const flags = { ...FLAGS, expectNoNote: ["reasoning_dropped"] };
+    const noted: ObserveRow = {
+      ...ROW,
+      notes: [
+        {
+          stage: "decode",
+          adapter: "responses",
+          code: "reasoning_dropped",
+        },
+      ],
+    };
+    expect(evaluateObservations(flags, [noted], BODIES, 7)).toContain(
+      "--expect-no-note reasoning_dropped",
+    );
+    expect(evaluateObservations(flags, [ROW], BODIES, 7)).toBeNull();
+  });
+
+  it("--expect-no-note passes when only other notes are present", () => {
+    const flags = { ...FLAGS, expectNoNote: ["reasoning_dropped"] };
+    const other: ObserveRow = {
+      ...ROW,
+      notes: [
+        {
+          stage: "encode",
+          adapter: "gemini",
+          code: "reasoning_effort_lowered",
+        },
+      ],
+    };
+    expect(evaluateObservations(flags, [other], BODIES, 7)).toBeNull();
+  });
+
+  // Fix round 2: a pass-through trace has no canonical stage by
+  // design (§3.4, markPassthrough deletes it), so the latest row's
+  // body check is the three stages source/target/response.wire —
+  // and a canonical stage on such a row is wrong too.
+  const PASS_THROUGH_BODIES: InspectorBodies = {
+    source: { value: {} },
+    target: [{ value: {} }],
+    response: { wire: { value: {} } },
+  };
+  const PASS_THROUGH_ROW: ObserveRow = {
+    ...ROW,
+    passthrough: true,
+    costUsd: 0.001,
+  };
+
+  // v1.4 Task 14 (spec §4.5, gate C): every row since start must be a
+  // pass-through row — a bridged request in a pass-through gate is a
+  // routing bug, not an observation to tolerate.
+  it("--expect-passthrough fails on a bridged row", () => {
+    const flags = { ...FLAGS, expectPassthrough: true };
+    expect(evaluateObservations(flags, [ROW], BODIES, 7)).toContain(
+      "--expect-passthrough",
+    );
+    const relayed = { ...ROW, passthrough: true };
+    expect(
+      evaluateObservations(flags, [relayed], PASS_THROUGH_BODIES, 7),
+    ).toBeNull();
+    const mixed = { ...ROW, id: "r2", passthrough: true };
+    expect(
+      evaluateObservations(flags, [ROW, mixed], BODIES, 7),
+    ).toContain("--expect-passthrough");
+  });
+
+  it("passes a pass-through latest row with its three stages", () => {
+    const flags = { ...FLAGS, expectPassthrough: true, expectCost: true };
+    expect(
+      evaluateObservations(flags, [PASS_THROUGH_ROW], PASS_THROUGH_BODIES, 7),
+    ).toBeNull();
+  });
+
+  it("fails a pass-through row whose response has no wire stage", () => {
+    const flags = { ...FLAGS, expectPassthrough: true };
+    const bodies: InspectorBodies = {
+      ...PASS_THROUGH_BODIES,
+      response: {},
+    };
+    expect(
+      evaluateObservations(flags, [PASS_THROUGH_ROW], bodies, 7),
+    ).toBe(
+      "latest request is pass-through but has no three-stage inspector body (source/target/response.wire, no canonical)",
+    );
+  });
+
+  it("fails a pass-through row that carries a canonical stage", () => {
+    const flags = { ...FLAGS, expectPassthrough: true };
+    const bodies: InspectorBodies = {
+      ...PASS_THROUGH_BODIES,
+      canonical: { value: {} },
+    };
+    expect(
+      evaluateObservations(flags, [PASS_THROUGH_ROW], bodies, 7),
+    ).toBe(
+      "latest request is pass-through but has no three-stage inspector body (source/target/response.wire, no canonical)",
+    );
+  });
+
+  it("still demands the canonical stage on a bridged latest row", () => {
+    const bodies: InspectorBodies = { ...PASS_THROUGH_BODIES };
+    expect(evaluateObservations(FLAGS, [ROW], bodies, 7)).toBe(
+      "latest request has no four-stage inspector body (source/canonical/target/response)",
+    );
   });
 });

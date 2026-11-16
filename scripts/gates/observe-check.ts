@@ -2,12 +2,15 @@
  * The release gates' observability half (spec §4.5): after a gate's
  * edit task, assert the running babelgate instance recorded what the
  * gate promises — a usage row for the client since start, the
- * four-stage inspector body on the latest row, a moved
+ * four-stage inspector body on the latest row (a pass-through row
+ * is checked for its three stages instead: source, target and
+ * response.wire, with no canonical), a moved
  * babelgate_requests_total, and whichever --expect-* flags name.
  *
  *   ts-node scripts/gates/observe-check.ts --base <url> --client <id>
  *     [--since <epoch-ms>] [--expect-cost] [--expect-cache-read]
  *     [--expect-providers a,b] [--expect-saved]
+ *     [--expect-no-note <code>...] [--expect-passthrough]
  *
  * Exit 0 prints "OBSERVE PASS"; exit 1 prints "OBSERVE FAIL: <the
  * failed expectation>"; exit 2 is a usage error. Loopback only — the
@@ -30,6 +33,15 @@ export interface ObserveRow {
   costUsd: number | null;
   wouldCostUsd: number | null;
   cacheReadTokens: number | null;
+  /** §3.5 translation notes — codes only; content never reaches rows. */
+  notes?: {
+    stage: "decode" | "encode";
+    adapter: string;
+    code: string;
+    path?: string;
+  }[];
+  /** Set only on a pass-through row (v1.4 §3.4). */
+  passthrough?: boolean;
 }
 
 /** The inspector body of GET /ui/api/requests/<id> (the §3.5 stages). */
@@ -49,6 +61,8 @@ export interface ObserveFlags {
   expectCacheRead: boolean;
   expectProviders: string[];
   expectSaved: boolean;
+  expectNoNote: string[];
+  expectPassthrough: boolean;
 }
 
 /**
@@ -67,7 +81,19 @@ export function evaluateObservations(
   if (rows.length === 0) {
     return `no request row for client "${flags.client}"`;
   }
-  if (
+  if (rows[0]!.passthrough === true) {
+    // A pass-through trace has no canonical stage by design (§3.4):
+    // the inspector keeps source, target and response.wire only.
+    if (
+      bodies === null ||
+      bodies.source === undefined ||
+      bodies.target.length === 0 ||
+      bodies.response?.wire === undefined ||
+      bodies.canonical !== undefined
+    ) {
+      return "latest request is pass-through but has no three-stage inspector body (source/target/response.wire, no canonical)";
+    }
+  } else if (
     bodies === null ||
     bodies.source === undefined ||
     bodies.canonical === undefined ||
@@ -96,6 +122,14 @@ export function evaluateObservations(
   }
   if (flags.expectSaved && !rows.some((r) => r.wouldCostUsd !== null)) {
     return "--expect-saved: no row has a would-have-cost figure";
+  }
+  for (const code of flags.expectNoNote) {
+    if (rows.some((r) => r.notes?.some((n) => n.code === code))) {
+      return `--expect-no-note ${code}: a row carries that note`;
+    }
+  }
+  if (flags.expectPassthrough && rows.some((r) => r.passthrough !== true)) {
+    return "--expect-passthrough: a row is not marked pass-through";
   }
   return null;
 }
@@ -129,7 +163,8 @@ function usage(): never {
   console.error(
     "usage: observe-check.ts --base <url> --client <id> " +
       "[--since <epoch-ms>] [--expect-cost] [--expect-cache-read] " +
-      "[--expect-providers a,b] [--expect-saved]",
+      "[--expect-providers a,b] [--expect-saved] " +
+      "[--expect-no-note <code>...] [--expect-passthrough]",
   );
   process.exit(2);
 }
@@ -147,6 +182,8 @@ function parseCli(argv: string[]): CliArgs {
         "expect-cache-read": { type: "boolean", default: false },
         "expect-providers": { type: "string" },
         "expect-saved": { type: "boolean", default: false },
+        "expect-no-note": { type: "string", multiple: true },
+        "expect-passthrough": { type: "boolean", default: false },
       },
     });
     if (values.base === undefined || values.client === undefined) {
@@ -168,6 +205,8 @@ function parseCli(argv: string[]): CliArgs {
         .map((p) => p.trim())
         .filter((p) => p !== ""),
       expectSaved: values["expect-saved"]!,
+      expectNoNote: values["expect-no-note"] ?? [],
+      expectPassthrough: values["expect-passthrough"]!,
     };
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));

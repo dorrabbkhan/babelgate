@@ -240,12 +240,38 @@ export function tokenBudget(
 const REAL_OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const REAL_OPENAI_API_BASE_URL = process.env.OPENAI_API_BASE_URL;
 
+// Same for the Anthropic and Responses env vars — the Codex live
+// cases borrow them to reach OpenRouter's Anthropic-format and native
+// Responses endpoints (v1.4 Task 14, spec §4.4).
+const REAL_ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const REAL_ANTHROPIC_API_BASE_URL = process.env.ANTHROPIC_API_BASE_URL;
+const REAL_RESPONSES_API_KEY = process.env.RESPONSES_API_KEY;
+const REAL_RESPONSES_API_BASE_URL = process.env.RESPONSES_API_BASE_URL;
+
 function restoreOpenAIEnv(): void {
   if (REAL_OPENAI_API_KEY === undefined) delete process.env.OPENAI_API_KEY;
   else process.env.OPENAI_API_KEY = REAL_OPENAI_API_KEY;
   if (REAL_OPENAI_API_BASE_URL === undefined)
     delete process.env.OPENAI_API_BASE_URL;
   else process.env.OPENAI_API_BASE_URL = REAL_OPENAI_API_BASE_URL;
+}
+
+function restoreAnthropicEnv(): void {
+  if (REAL_ANTHROPIC_API_KEY === undefined)
+    delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = REAL_ANTHROPIC_API_KEY;
+  if (REAL_ANTHROPIC_API_BASE_URL === undefined)
+    delete process.env.ANTHROPIC_API_BASE_URL;
+  else process.env.ANTHROPIC_API_BASE_URL = REAL_ANTHROPIC_API_BASE_URL;
+}
+
+function restoreResponsesEnv(): void {
+  if (REAL_RESPONSES_API_KEY === undefined)
+    delete process.env.RESPONSES_API_KEY;
+  else process.env.RESPONSES_API_KEY = REAL_RESPONSES_API_KEY;
+  if (REAL_RESPONSES_API_BASE_URL === undefined)
+    delete process.env.RESPONSES_API_BASE_URL;
+  else process.env.RESPONSES_API_BASE_URL = REAL_RESPONSES_API_BASE_URL;
 }
 
 /**
@@ -264,9 +290,38 @@ export function useTarget(source: Provider, target: LiveTarget): void {
   } else {
     process.env.TARGET_API = target;
     restoreOpenAIEnv();
+    restoreAnthropicEnv();
+    restoreResponsesEnv();
     const baseUrlVar = `${target.toUpperCase()}_API_BASE_URL`;
     process.env[baseUrlVar] = process.env[baseUrlVar] || LIVE_BASE_URLS[target];
   }
+  resetConfig();
+}
+
+/**
+ * Point the in-process app at OpenRouter's Anthropic-format endpoint
+ * (v1.4 spec E18: `POST /api/v1/messages` returns signed `thinking`
+ * blocks for `anthropic/claude-haiku-4.5`). The Anthropic provider
+ * borrows OPENROUTER_API_KEY, like the "openrouter" target borrows
+ * OpenAI's — `useTarget` restores the real env afterwards.
+ */
+export function useOpenRouterAnthropic(): void {
+  process.env.TARGET_API = 'anthropic';
+  process.env.ANTHROPIC_API_BASE_URL = OPENROUTER_BASE_URL;
+  process.env.ANTHROPIC_API_KEY = process.env.OPENROUTER_API_KEY!;
+  resetConfig();
+}
+
+/**
+ * Point the in-process app at OpenRouter's native Responses API:
+ * env-mode `TARGET_API=responses` makes a `type: responses` provider,
+ * so a Responses source relays byte-for-byte (pass-through, spec
+ * §3.4). RESPONSES_API_* borrow the OpenRouter key/URL.
+ */
+export function useOpenRouterResponses(): void {
+  process.env.TARGET_API = 'responses';
+  process.env.RESPONSES_API_BASE_URL = OPENROUTER_BASE_URL;
+  process.env.RESPONSES_API_KEY = process.env.OPENROUTER_API_KEY!;
   resetConfig();
 }
 
@@ -353,6 +408,27 @@ export const MODEL_LIST_CHECKS: Record<Provider, (body: unknown) => void> = {
   },
 };
 
+/**
+ * The assistant text of a Responses-shaped body: every `output_text`
+ * content part of every `message` output item, concatenated (the
+ * Responses object reference). Pass-through bodies have no top-level
+ * `output_text` — that's a convenience field the bridge's encoder
+ * adds — so read the parts, not the field.
+ */
+export function outputText(body: unknown): string {
+  const output = (
+    body as {
+      output?: { type?: string; content?: { type?: string; text?: string }[] }[];
+    }
+  ).output;
+  return (output ?? [])
+    .filter((item) => item.type === 'message')
+    .flatMap((item) => item.content ?? [])
+    .filter((part) => part.type === 'output_text')
+    .map((part) => part.text ?? '')
+    .join('');
+}
+
 /** Pull the assistant text out of a source-shaped chat response. */
 export const ASSISTANT_TEXT: Record<
   Provider,
@@ -369,7 +445,7 @@ export const ASSISTANT_TEXT: Record<
     (b as { content?: { type?: string; text?: string }[] }).content?.find(
       (c) => c.type === 'text',
     )?.text,
-  responses: (b) => (b as { output_text?: string }).output_text,
+  responses: (b) => outputText(b) || undefined,
 };
 
 /**
