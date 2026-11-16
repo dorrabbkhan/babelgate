@@ -13,8 +13,9 @@ cp .env.example .env   # then fill in the upstream keys you need
 npm run dev            # local development server
 ```
 
-You only need API keys for the providers your `SOURCE_API`/`TARGET_API` pair
-uses; Ollama works key-free against a local install.
+You only need API keys for the providers you route to (`TARGET_API` in
+env-only mode, or the providers in your `babelgate.yaml`); Ollama works
+key-free against a local install.
 
 ## Checks
 

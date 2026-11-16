@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 1.0.x   | Yes       |
-| < 1.0   | No        |
+| 1.4.x   | Yes       |
+| < 1.4   | No        |
 
 ## Reporting a vulnerability
 
@@ -15,7 +15,9 @@ vulnerability reporting). Do not open a public issue for a security problem.
 
 Include, where you can:
 
-- the affected version and configuration (`SOURCE_API`/`TARGET_API`),
+- the affected version and configuration (your `babelgate.yaml`, or
+  `TARGET_API` in env-only mode, with keys removed) and the client you
+  used (Claude Code, Codex CLI, an SDK, …),
 - steps to reproduce, and
 - the impact you believe the issue has.
 
@@ -31,6 +33,9 @@ made public.
   treat `.env` and any process dump as secret material.
 - Client access is gated by `PROXY_API_KEY` when set; without it the proxy is
   open — run it only on trusted networks.
-- The proxy never logs prompt bodies, completions, or keys. If you find a
+- The proxy never logs prompt bodies, completions, or keys. Bodies are kept
+  only in an in-memory ring for the `/ui` Inspector, and on disk only with
+  `LOG_BODIES=true`. The `/ui` answers only local clients unless
+  `UI_ALLOW_REMOTE` is set or `PROXY_API_KEY` is presented. If you find a
   path where one leaks into logs or error messages, that is a bug — report
   it privately as above.
