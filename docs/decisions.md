@@ -6541,12 +6541,21 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
 - **Ambiguities resolved.** (a) `tool_choice`'s "required/named"
   note covers every non-default choice, including `none` —
   dropping `none` would silently re-enable tool use. (b)
-  `prompt_cache` strips `cache_control` recursively, including a
-  top-level one — Anthropic clients never send that field and
-  providers re-using it for their own extension (Kimi) get the
-  declared-honest strip. (c) The `needsMedia` second pass renders
-  the placeholder, which keeps the byte-destination knowledge in
-  the adapter; `applyGapFixes` never learns a format shape.
+  `prompt_cache` strips `cache_control` from nested positions only —
+  every path except the top-level `cache_control` key, which stays
+  in the body untouched with no note. The earlier reasoning
+  (Anthropic clients never send a top-level marker, so a recursive
+  strip was safe) was wrong for Kimi, whose documented extension IS
+  the request-level field: Kimi's schema honours a top-level
+  `cache_control` while markers inside `messages` are ignored
+  (https://platform.kimi.ai/docs/api/messages, read 2026-11-17).
+  Recorded per owner decision in chat 2026-11-17; covered by
+  "cache_control stripped with note" and "top-level cache_control
+  survives the prompt_cache gap" in
+  `src/services/gap-fixes.test.ts`. (c) The `needsMedia` second
+  pass renders the placeholder, which keeps the byte-destination
+  knowledge in the adapter; `applyGapFixes` never learns a format
+  shape.
   (d) A preset's `passthrough` implication honours an explicit
   `passthrough: false` — explicit keys always win.
 - **Files outside the Files block:**

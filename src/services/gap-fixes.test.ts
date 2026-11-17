@@ -165,14 +165,64 @@ describe("applyGapFixes (v1.5 spec §3.3)", () => {
       ["prompt_cache"],
       NO_FETCH,
     );
-    expect(JSON.stringify(out.body)).not.toContain("cache_control");
+    // The top-level marker survives untouched; nested markers under
+    // system/tools/messages are stripped with a note each.
+    expect(out.body.cache_control).toEqual({ type: "ephemeral" });
+    expect(out.body.system[0]).not.toHaveProperty("cache_control");
+    expect(out.body.tools[0]).not.toHaveProperty("cache_control");
     const dropped = out.notes.filter(
       (n) => n.code === "cache_control_dropped",
     );
     expect(dropped.map((n) => n.path).sort()).toEqual([
-      "cache_control",
       "system[0].cache_control",
       "tools[0].cache_control",
+    ]);
+  });
+
+  it("top-level cache_control survives the prompt_cache gap", async () => {
+    const body = anthropicBody({
+      cache_control: { type: "ephemeral" },
+    });
+    const out = await applyGapFixes(
+      "anthropic",
+      body,
+      ["prompt_cache"],
+      NO_FETCH,
+    );
+    expect(out.body).toEqual(body);
+    expect(
+      out.notes.filter((n) => n.code === "cache_control_dropped"),
+    ).toHaveLength(0);
+  });
+
+  it("message content cache_control stripped with note", async () => {
+    const out = await applyGapFixes(
+      "anthropic",
+      anthropicBody({
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "hi there",
+                cache_control: { type: "ephemeral" },
+              },
+            ],
+          },
+        ],
+      }),
+      ["prompt_cache"],
+      NO_FETCH,
+    );
+    expect(out.body.messages[0].content[0]).not.toHaveProperty(
+      "cache_control",
+    );
+    const dropped = out.notes.filter(
+      (n) => n.code === "cache_control_dropped",
+    );
+    expect(dropped.map((n) => n.path)).toEqual([
+      "messages[0].content[0].cache_control",
     ]);
   });
 

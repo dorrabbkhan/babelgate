@@ -1107,6 +1107,9 @@ function stripCacheControl(
   for (const [key, value] of Object.entries(node)) {
     const p = path === "" ? key : `${path}.${key}`;
     if (key === "cache_control") {
+      // The top-level marker is a request-level field some upstreams
+      // honour; it stays in the body untouched and earns no note.
+      if (path === "") continue;
       delete node[key];
       note("cache_control_dropped", p);
       continue;
@@ -1181,8 +1184,9 @@ export function patchGaps(
     if (!silent) note("tool_choice_dropped", "tool_choice");
   }
 
-  // prompt_cache: every cache_control anywhere — system blocks,
-  // content blocks, tool definitions and the top-level marker.
+  // prompt_cache: every nested cache_control — system blocks,
+  // content blocks and tool definitions. The top-level marker is a
+  // request-level extension some upstreams honour, so it survives.
   if (gaps.includes("prompt_cache")) stripCacheControl(out, "", note);
 
   const wantDocuments = gaps.includes("documents");

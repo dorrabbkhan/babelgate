@@ -121,8 +121,11 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    * Moonshot Kimi's Anthropic endpoint. Its Messages schema: image
    * `source.type:"url"` accepts only `ms://<file_id>` file references
    * (not http(s) URLs → url_images); `cache_control` markers inside
-   * `messages` are ignored (→ prompt_cache); no `document` block type
-   * and no count_tokens endpoint appear in the schema (→ documents,
+   * `messages` are ignored while the request-level top-level
+   * `cache_control` field is honoured — the prompt_cache fix strips
+   * the in-`messages`/`system`/`tools` markers and keeps the
+   * top-level one (→ prompt_cache); no `document` block type and no
+   * count_tokens endpoint appear in the schema (→ documents,
    * count_tokens). `tool_choice` and streaming are documented.
    */
   "kimi-anthropic": {
