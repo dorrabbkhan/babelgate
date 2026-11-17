@@ -895,6 +895,25 @@ export const upstreamHandlers = [
     return HttpResponse.json(nonStreamBody("responses"));
   }),
 
+  // Anthropic's real token counter (v1.5 §3.3): a pass-through
+  // anthropic entry forwards /v1/messages/count_tokens here.
+  // https://docs.anthropic.com/en/api/messages-count-tokens
+  http.post(
+    `${MOCK_BASE_URLS.anthropic}/v1/messages/count_tokens`,
+    async ({ request }) => {
+      const body = await request.json();
+      capturedRequests.anthropic.push(body);
+      capturedHeaders.anthropic.push(request.headers);
+      const override = responseOverrides.anthropic;
+      if (override) {
+        return HttpResponse.json(override.body ?? {}, {
+          status: override.status ?? 200,
+        });
+      }
+      return HttpResponse.json({ input_tokens: 1234 });
+    },
+  ),
+
   http.post(`${MOCK_BASE_URLS.anthropic}/v1/messages`, async ({ request }) => {
     const body = await request.json();
     capturedRequests.anthropic.push(body);

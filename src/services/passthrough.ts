@@ -1,16 +1,20 @@
 /**
- * Responses pass-through (v1.4 spec §3.4): when the source dialect is
- * Responses and the routed provider entry is `type: responses`, the
- * request is relayed to the upstream as-is — no canonical
- * transformation — with only `model` rewritten and `max_output_tokens`
- * clamped (the same clamp record the bridged path produces). The
- * reply is relayed byte for byte; `response.model` inside the five
- * lifecycle events is restored to the client's model by a JSON
- * round-trip of that event's `data:` frame alone. Everything else —
- * framing, whitespace, delta payloads — reaches the client exactly as
- * the upstream sent it. The SSE relay itself lives in
- * passthrough-relay.ts (rule 7); this file owns the routing
- * decision, the request body and the trace finish.
+ * Same-format pass-through (v1.4 spec §3.4, v1.5 spec §3.3 D6): when
+ * the source dialect matches the routed provider entry's type and the
+ * entry passes through — `type: responses` unconditionally, an
+ * `anthropic`/`openai` entry with `passthrough: true` — the request
+ * is relayed to the upstream as-is: no canonical transformation,
+ * only `model` rewritten and the dialect's max-tokens field clamped
+ * (the same clamp record the bridged path produces). The reply is
+ * relayed byte for byte; `model` inside the dialect's model-bearing
+ * frames is restored to the client's model by a JSON round-trip of
+ * that event's `data:` frame alone. Everything else — framing,
+ * whitespace, delta payloads — reaches the client exactly as the
+ * upstream sent it. The SSE relay engine lives in
+ * passthrough-relay.ts, the per-dialect wire knowledge in
+ * passthrough-dialects.ts and the observation→trace finishes in
+ * passthrough-trace.ts (rule 7); this file owns the routing
+ * decision, the request body and the count_tokens forward.
  *
  * Wire-format sources (every event/field this file touches):
  *  - The Response object and its `model`/`usage` fields:
@@ -18,22 +22,20 @@
  *  - The lifecycle event set the relay restores `model` in:
  *    https://platform.openai.com/docs/api-reference/responses-streaming
  *  - `codex-rs/codex-api/src/sse/responses.rs` at 0.169.0 (E19).
+ *  - Anthropic Messages + count_tokens:
+ *    https://docs.anthropic.com/en/api/messages
+ *  - Chat Completions + `stream_options.include_usage`:
+ *    https://platform.openai.com/docs/api-reference/chat/create
  */
 import type { GatewayConfig } from "../config/env-config";
 import type { ProviderEntry } from "../routing/registry";
 import { authHeaders } from "../routing/registry";
-import type { RouteTarget } from "../routing/plan-route";
+import type { RoutePlan, RouteTarget } from "../routing/plan-route";
 import { PROVIDER_ROUTES, type Provider } from "../transformers";
-import { toCanonicalResponse } from "../transformers/adapters/responses.response";
-import {
-  currentTrace,
-  runWithAttempt,
-  snapshot,
-} from "../observe/context";
-import { finishTrace } from "../observe/emit";
-import { diagnoseToolCalls } from "../observe/tool-diagnostics";
+import { runWithAttempt, snapshot } from "../observe/context";
 import type { CanonicalRequest } from "../types/canonical.types";
 import { UnsupportedParameterError, UpstreamError } from "../utils/errors";
+import { logger } from "../utils/logger";
 import {
   postJson,
   postStream,
@@ -41,25 +43,39 @@ import {
   type UpstreamStreamResponse,
 } from "./http-client";
 import {
+  relayAnthropicStream,
+  relayChatStream,
+  relayResponsesStream,
+} from "./passthrough-dialects";
+import {
   relayResponseHeaders,
-  type PassthroughObservation,
+  type RelayStreamOpts,
 } from "./passthrough-relay";
 import {
+  attemptTargets,
   maxTokensClampOf,
   toClientFacing,
-  type AttemptResult,
 } from "./attempt-targets";
 import type { ProxyResult } from "./proxy.service";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Obj = Record<string, any>;
 
-/** §3.4: pass-through iff a Responses source routes to a responses entry. */
+/**
+ * §3.3 (D6): pass-through iff the source and the entry share a format
+ * AND the entry passes through — a `type: responses` entry always
+ * (the v1.4 rule); an `anthropic`/`openai` entry only with
+ * `passthrough: true`. The flag never crosses formats, and no flag
+ * keeps same-format anthropic/openai traffic on the canonical path.
+ */
 export function isPassthrough(
   source: Provider,
   entry: ProviderEntry,
 ): boolean {
-  return source === "responses" && entry.type === "responses";
+  return (
+    source === entry.type &&
+    (entry.type === "responses" || entry.passthrough === true)
+  );
 }
 
 /**
@@ -111,11 +127,15 @@ export function assertBridgeableBody(body: unknown): void {
 }
 
 /**
- * The forwarded request body (§3.4): the client's bytes with `model`
- * rewritten to the routed upstream model and `max_output_tokens`
- * carrying the same clamp canonicalForTarget applies. A shallow copy
- * keeps every other field — built-in tools, reasoning/encrypted
- * fields, provider extras — untouched.
+ * The forwarded request body (§3.3/§3.4): the client's bytes with
+ * `model` rewritten to the routed upstream model and the dialect's
+ * own max-tokens field carrying the same clamp canonicalForTarget
+ * applies — `max_output_tokens` on responses, `max_tokens` on
+ * anthropic, and on chat whichever of `max_completion_tokens` /
+ * `max_tokens` the client sent (`max_tokens` when neither did).
+ * A shallow copy keeps every other field — built-in tools,
+ * reasoning/encrypted fields, `stream_options`, provider extras —
+ * untouched.
  */
 export function passthroughTargetBody(
   sourceBody: unknown,
@@ -129,13 +149,36 @@ export function passthroughTargetBody(
       : {};
   const body: Obj = { ...src, model: target.model };
   const clamp = maxTokensClampOf(canonical, entry);
-  if (clamp !== undefined) body.max_output_tokens = clamp.to;
+  if (clamp !== undefined) {
+    if (entry.type === "responses") {
+      body.max_output_tokens = clamp.to;
+    } else if (
+      entry.type === "openai" &&
+      src.max_completion_tokens === undefined
+    ) {
+      // A chat client that asked for neither field still gets the cap
+      // on the field its dialect spells the bridged encoder's way.
+      body.max_tokens = clamp.to;
+    } else if (entry.type === "openai") {
+      body.max_completion_tokens = clamp.to;
+    } else {
+      body.max_tokens = clamp.to;
+    }
+  }
   return body;
 }
 
-function responsesChatUrl(entry: ProviderEntry): string {
-  const route = PROVIDER_ROUTES.responses.find((r) => r.kind === "chat")!;
-  return `${entry.baseUrl}${route.requestPath()}`;
+/**
+ * The upstream chat endpoint for this entry — the provider route's
+ * own `requestPath` (Gemini's embeds the model; the others ignore
+ * it), so a pass-through hop posts to exactly the URL the bridged
+ * path would.
+ */
+function chatUrl(entry: ProviderEntry, model: string): string {
+  const route = PROVIDER_ROUTES[entry.type].find(
+    (r) => r.kind === "chat",
+  )!;
+  return `${entry.baseUrl}${route.requestPath(model)}`;
 }
 
 /** Unary pass-through attempt — used inside chat.service's attempt loop. */
@@ -162,7 +205,7 @@ export async function passthroughUnaryAttempt(
       // §3.5: one target snapshot per hop (fallbacks included).
       snapshot("target", body);
       const upstream = await postJson({
-        url: responsesChatUrl(entry),
+        url: chatUrl(entry, target.model),
         headers: authHeaders(entry),
         body,
         timeoutMs: entry.timeoutMs ?? ctx.config.upstreamTimeoutMs,
@@ -170,17 +213,17 @@ export async function passthroughUnaryAttempt(
         requestId: ctx.requestId,
       }).catch((err) => {
         throw err instanceof UpstreamError
-          ? toClientFacing(err, "responses")
+          ? toClientFacing(err, entry.type)
           : err;
       });
       if (upstream.status < 200 || upstream.status >= 300) {
         const err = new UpstreamError(
-          `Upstream responses returned ${upstream.status}`,
+          `Upstream ${entry.type} returned ${upstream.status}`,
           upstream.status,
           upstream.body,
         );
         err.retryAfterSeconds = upstream.retryAfterSeconds;
-        throw toClientFacing(err, "responses");
+        throw toClientFacing(err, entry.type);
       }
       return upstream;
     },
@@ -218,7 +261,7 @@ export async function passthroughStreamAttempt(
       snapshot("target", body);
       const upstreamAc = new AbortController();
       const upstream = await postStream({
-        url: responsesChatUrl(entry),
+        url: chatUrl(entry, target.model),
         headers: authHeaders(entry),
         body,
         timeoutMs: entry.timeoutMs ?? ctx.config.upstreamTimeoutMs,
@@ -230,7 +273,7 @@ export async function passthroughStreamAttempt(
             : upstreamAc.signal,
       }).catch((err) => {
         throw err instanceof UpstreamError
-          ? toClientFacing(err, "responses")
+          ? toClientFacing(err, entry.type)
           : err;
       });
       return { upstream, upstreamAc };
@@ -238,179 +281,113 @@ export async function passthroughStreamAttempt(
   );
 }
 
-// ============ Trace finishes ============
-
 /**
- * One pass-through Response object → the canonical read the trace
- * needs (usage, finishReason, tool calls). This is the responses
- * adapter's own response codec — the field map never drifts from the
- * bridged path — run purely as observation: its `field_dropped`
- * notes describe a translation that never happened and are cleared
- * with the rest by markPassthrough. Item/usage/status shapes:
- * https://platform.openai.com/docs/api-reference/responses/object
+ * The dialect's stream relay for a won pass-through entry —
+ * chat-stream.service feeds it the upstream body. `isPassthrough`
+ * guarantees the entry's type is one of the three.
  */
-function observeResponse(response: unknown): {
-  calls: ReturnType<typeof toCanonicalResponse>["message"]["toolCalls"];
-  usage: ReturnType<typeof toCanonicalResponse>["usage"];
-  finishReason: ReturnType<typeof toCanonicalResponse>["finishReason"];
-} {
-  const decoded = toCanonicalResponse(
-    response as Parameters<typeof toCanonicalResponse>[0],
-    "unused",
-  );
-  return {
-    calls: decoded.message.toolCalls,
-    usage: decoded.usage,
-    finishReason: decoded.finishReason,
-  };
+export function passthroughRelay(
+  entry: ProviderEntry,
+): (opts: RelayStreamOpts) => AsyncGenerator<string> {
+  if (entry.type === "anthropic") return relayAnthropicStream;
+  if (entry.type === "openai") return relayChatStream;
+  return relayResponsesStream;
 }
 
-/**
- * A pass-through trace is marked `passthrough: true` and carries no
- * canonical artefacts: the routing decode's notes describe
- * transforms that never ran, and the `canonical` body stage (taken
- * before routing, for the bridged hop that never came) is removed —
- * the inspector shows source, target and response.wire only.
- */
-function markPassthrough(): void {
-  const trace = currentTrace();
-  if (trace === undefined) return;
-  trace.notes.length = 0;
-  if (trace.bodies !== undefined) delete trace.bodies.canonical;
-  trace.passthrough = true;
-}
+// ============ count_tokens ============
 
-/** Unary pass-through finish: diagnostics + trace + the relayed body. */
-export async function finishPassthroughUnary(opts: {
-  reason: string;
-  requestedModel: string;
-  canonical: CanonicalRequest;
-  result: AttemptResult<UpstreamResponse>;
+/**
+ * §3.3 (Task 8): the source's count_tokens request is forwarded
+ * verbatim — `model` rewritten, nothing else — to the first
+ * pass-through target in the plan, when that target's provider has a
+ * count_tokens endpoint (Anthropic's POST /v1/messages/count_tokens):
+ * the upstream's real count, not the local chars/4 estimate. The
+ * first target that CANNOT relay it (a bridged entry, or a provider
+ * type with no count_tokens route) answers locally instead — a
+ * different dialect's count shape would be a provider-pair special
+ * case. Forwarded hops obey the same fallback contract as chat
+ * attempts; Task 9's `gaps` declaration will be able to suppress the
+ * forward and force the local answer.
+ */
+export async function passthroughCountTokens(opts: {
+  source: Provider;
+  /** The client's count_tokens body (after the route's unwrap). */
+  sourceBody: unknown;
+  plan: RoutePlan;
+  config: GatewayConfig;
+  requestId: string;
+  estimate: number;
+  countTokensBody: (estimate: number) => unknown;
+  signal?: AbortSignal;
 }): Promise<ProxyResult> {
-  const { result, requestedModel, canonical } = opts;
-  // §3.5: the upstream JSON body lands in the ring.
-  snapshot("response.wire", result.value.body);
-  const upstreamBody = result.value.body;
-  // §3.4: the non-stream reply is a JSON round-trip with `model`
-  // restored — every other field is relayed unchanged.
-  const body =
-    upstreamBody !== null && typeof upstreamBody === "object"
-      ? { ...(upstreamBody as Obj), model: requestedModel }
-      : upstreamBody;
-  const observed = observeResponse(upstreamBody);
-  const trace = currentTrace();
-  // §3.7: diagnostics run on the relayed function calls — repair is
-  // never applied on pass-through (it would alter the bytes).
-  trace?.diagnostics.push(
-    ...diagnoseToolCalls(observed.calls ?? [], canonical.tools),
+  const { source, sourceBody, plan, config, requestId } = opts;
+  const result = await attemptTargets(
+    plan,
+    config.registry,
+    (entry, target) =>
+      runWithAttempt(
+        { providerName: target.provider, upstreamModel: target.model },
+        async () => {
+          const ctRoute = PROVIDER_ROUTES[entry.type].find(
+            (r) => r.kind === "count_tokens",
+          );
+          if (!isPassthrough(source, entry) || ctRoute === undefined) {
+            // Not relayable — the local estimate answers (below).
+            return { upstream: undefined };
+          }
+          const body: Obj = {
+            ...(sourceBody !== null && typeof sourceBody === "object"
+              ? (sourceBody as Obj)
+              : {}),
+            model: target.model,
+          };
+          snapshot("target", body);
+          const upstream = await postJson({
+            url: `${entry.baseUrl}${ctRoute.requestPath()}`,
+            headers: authHeaders(entry),
+            body,
+            timeoutMs: entry.timeoutMs ?? config.upstreamTimeoutMs,
+            retries: config.upstreamRetries,
+            requestId,
+          }).catch((err) => {
+            throw err instanceof UpstreamError
+              ? toClientFacing(err, entry.type)
+              : err;
+          });
+          if (upstream.status < 200 || upstream.status >= 300) {
+            const err = new UpstreamError(
+              `Upstream ${entry.type} returned ${upstream.status}`,
+              upstream.status,
+              upstream.body,
+            );
+            err.retryAfterSeconds = upstream.retryAfterSeconds;
+            throw toClientFacing(err, entry.type);
+          }
+          return { upstream };
+        },
+      ),
+    { requestId, signal: opts.signal },
   );
-  markPassthrough();
-  const usage = observed.usage;
-  await finishTrace({
-    reason: opts.reason,
-    requestedModel,
-    hops: result.hops,
-    winner: result.target.provider,
-    stream: false,
-    status: "ok",
-    httpStatus: 200,
-    inputTokens: usage?.inputTokens,
-    outputTokens: usage?.outputTokens,
-    cacheReadTokens: usage?.cacheReadTokens,
-    cacheWriteTokens: usage?.cacheWriteTokens,
-    reasoningTokens: usage?.reasoningTokens,
-    finishReason: observed.finishReason,
-    maxTokensClamp: maxTokensClampOf(canonical, result.entry),
-    ttfbMs:
-      trace === undefined ? undefined : Date.now() - trace.startedAt,
-  });
+
+  // The first non-relayable target: the §3.5 local answer.
+  if (result.value.upstream === undefined) {
+    logger.info(
+      { requestId, sourceApi: source },
+      "count_tokens answered locally",
+    );
+    return {
+      body: opts.countTokensBody(opts.estimate),
+      headers: { "x-babelgate-token-estimate": "true" },
+    };
+  }
+
   return {
-    body,
+    body: result.value.upstream.body,
     headers: {
-      ...relayResponseHeaders(result.value.headers),
+      ...relayResponseHeaders(result.value.upstream.headers),
       "x-babelgate-provider": result.target.provider,
       "x-babelgate-model": result.target.model,
       "x-babelgate-attempts": String(result.hops.length),
     },
   };
-}
-
-/**
- * Whatever ended a pass-through stream, the upstream request is done
- * with and the trace emits exactly once — aborted when the client
- * went away, error when the stream failed, ok otherwise. Usage comes
- * only from `response.completed`'s `response.usage` (§3.4) — absent
- * unless that event already reached the client.
- */
-export async function finishPassthroughTrace(opts: {
-  reason: string;
-  requestedModel: string;
-  canonical: CanonicalRequest;
-  result: AttemptResult<PassthroughStreamAttempt>;
-  observation: PassthroughObservation;
-  signal: AbortSignal;
-  iterated: boolean;
-  clientStatus?: number;
-}): Promise<void> {
-  const {
-    reason,
-    requestedModel,
-    canonical,
-    result,
-    observation,
-    signal,
-    iterated,
-    clientStatus,
-  } = opts;
-  result.value.upstreamAc.abort();
-  const terminal = observation.terminal;
-  const observed =
-    terminal?.response !== undefined
-      ? observeResponse(terminal.response)
-      : undefined;
-  const usage =
-    terminal?.type === "response.completed" ? observed?.usage : undefined;
-  const trace = currentTrace();
-  trace?.diagnostics.push(
-    ...diagnoseToolCalls(observed?.calls ?? [], canonical.tools),
-  );
-  markPassthrough();
-  const failed =
-    terminal?.type === "response.failed" ||
-    observation.errorKind !== undefined;
-  const status = signal.aborted
-    ? ("aborted" as const)
-    : !iterated
-      ? ("error" as const)
-      : failed
-        ? ("error" as const)
-        : ("ok" as const);
-  await finishTrace({
-    reason,
-    requestedModel,
-    hops: result.hops,
-    winner: result.target.provider,
-    stream: true,
-    status,
-    httpStatus: iterated
-      ? 200
-      : signal.aborted
-        ? 499
-        : (clientStatus ?? 500),
-    errorType:
-      !signal.aborted && failed
-        ? (observation.errorKind ?? "upstream")
-        : undefined,
-    inputTokens: usage?.inputTokens,
-    outputTokens: usage?.outputTokens,
-    cacheReadTokens: usage?.cacheReadTokens,
-    cacheWriteTokens: usage?.cacheWriteTokens,
-    reasoningTokens: usage?.reasoningTokens,
-    finishReason:
-      terminal?.type === "response.completed" ||
-      terminal?.type === "response.incomplete"
-        ? observed?.finishReason
-        : undefined,
-    maxTokensClamp: maxTokensClampOf(canonical, result.entry),
-  });
 }

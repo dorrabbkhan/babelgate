@@ -21,6 +21,7 @@ import {
   ValidationError,
 } from "../utils/errors";
 import { logger } from "../utils/logger";
+import { passthroughCountTokens } from "./passthrough";
 import { proxyChat, type ChatInput } from "./chat.service";
 import { proxyChatStream } from "./chat-stream.service";
 import { proxyModelList } from "./models.service";
@@ -265,18 +266,6 @@ export async function proxyRequest(
   // with it (§3.5) and routing `when` conditions consume it (§3.3).
   const estimatedInputTokens = estimateInputTokens(canonicalRequest);
 
-  // §3.5: count_tokens is answered locally — a chars/4 estimate with the
-  // estimate header, never an upstream call. The reply shape is the
-  // source provider's (Anthropic input_tokens, Gemini totalTokens).
-  if (route.kind === "count_tokens") {
-    getMetricsSink()?.incAux(sourceApi, "count_tokens");
-    logger.info({ requestId, sourceApi }, "count_tokens answered locally");
-    return {
-      body: route.countTokensBody(estimatedInputTokens),
-      headers: { "x-babelgate-token-estimate": "true" },
-    };
-  }
-
   // §3.3: resolve the model to an ordered list of targets — env mode
   // produces MODEL_MAP routes then the single default provider.
   const requestedModel = modelFromPath ?? canonicalRequest.model;
@@ -289,6 +278,26 @@ export async function proxyRequest(
     routing: config.routing,
     providerNames: new Set(config.registry.names()),
   });
+
+  // §3.5 + v1.5 §3.3 (Task 8): count_tokens is answered locally — a
+  // chars/4 estimate with the estimate header — UNLESS the routed
+  // target is a same-format pass-through entry with a count_tokens
+  // endpoint (Anthropic), which gets the request verbatim for the
+  // upstream's real count. Task 9's `gaps` declaration may suppress
+  // the forward.
+  if (route.kind === "count_tokens") {
+    getMetricsSink()?.incAux(sourceApi, "count_tokens");
+    return passthroughCountTokens({
+      source: sourceApi,
+      sourceBody: decodeBody,
+      plan,
+      config,
+      requestId,
+      estimate: estimatedInputTokens,
+      countTokensBody: route.countTokensBody,
+      signal: opts?.signal,
+    });
+  }
 
   const input: ChatInput = {
     source: sourceApi,

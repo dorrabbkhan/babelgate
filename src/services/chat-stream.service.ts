@@ -17,14 +17,14 @@ import {
 } from "./stream-attempt";
 import {
   assertBridgeableBody,
-  finishPassthroughTrace,
   isPassthrough,
+  passthroughRelay,
   passthroughStreamAttempt,
   type PassthroughStreamAttempt,
 } from "./passthrough";
+import { finishPassthroughTrace } from "./passthrough-trace";
 import {
   relayResponseHeaders,
-  relayResponsesStream,
   type PassthroughObservation,
 } from "./passthrough-relay";
 import type { ChatInput } from "./chat.service";
@@ -75,8 +75,8 @@ export async function proxyChatStream(
       plan,
       config.registry,
       (entry, target) => {
-        // §3.4: a `type: responses` entry on a responses source is
-        // pass-through — the request is relayed, never encoded.
+        // §3.4/§3.3: a same-format pass-through entry relays the
+        // request verbatim — it is never encoded.
         if (isPassthrough(source, entry)) {
           return passthroughStreamAttempt(entry, target, {
             sourceBody,
@@ -113,9 +113,9 @@ export async function proxyChatStream(
 
   const signal = opts?.signal ?? new AbortController().signal;
 
-  // §3.4: a won pass-through hop relays the upstream SSE byte for
-  // byte — `response.model` restored inside the five lifecycle
-  // events only — never through the canonical pipeline.
+  // §3.4/§3.3: a won pass-through hop relays the upstream SSE byte
+  // for byte — the dialect's model restored in its model-bearing
+  // frames only — never through the canonical pipeline.
   if (isPassthrough(source, result.entry)) {
     const pt = result as AttemptResult<PassthroughStreamAttempt>;
     const observation: PassthroughObservation = {};
@@ -134,7 +134,11 @@ export async function proxyChatStream(
     const ptChunks = (async function* (): AsyncGenerator<string> {
       try {
         ptIterated = true;
-        for await (const chunk of relayResponsesStream({
+        // §3.3: the entry's own dialect relay — responses relays the
+        // lifecycle events, anthropic restores `message.model` in
+        // message_start, chat restores every chunk's `model` and the
+        // `data: [DONE]` terminator rides through verbatim.
+        for await (const chunk of passthroughRelay(pt.entry)({
           upstream: pt.value.upstream.body,
           upstreamHeaders: pt.value.upstream.headers,
           requestedModel,

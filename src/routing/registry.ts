@@ -45,6 +45,15 @@ export interface ProviderEntry {
    * v1.4 note.
    */
   reasoning?: boolean;
+  /**
+   * Same-format pass-through (v1.5 spec §3.3, D6): a same-type source
+   * request is relayed to this upstream without the canonical round
+   * trip — only `anthropic`/`openai` entries may opt in (`responses`
+   * entries pass through unconditionally); a shim `preset` implies
+   * it (Task 9). Absent means false: existing configs keep the
+   * canonical path.
+   */
+  passthrough?: boolean;
   timeoutMs?: number;
   streamIdleMs?: number;
 }
