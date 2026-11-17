@@ -6108,3 +6108,127 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   replied `message.thinking` (streamed `message.thinking`
   fragments); a client-echoed `reasoning_content` never reached the
   upstream body (request/response in the PR).
+
+## v1.5 Task 6 — media: URL images, documents, fetch guard, refusals (spec §3.2.2, E4, Review Focus 1 and 4)
+
+- **`MEDIA_SUPPORT` per adapter** (`MediaSupport` in
+  `src/services/media-inline.ts`; `toolMessageImages` values are
+  Task-7 placeholders pending its doc pass — Task 6 only needs the
+  field to exist):
+  - `anthropic` {imageUrl, documentData, documentUrl, toolMessageImages: true}
+    — image `source.type: "url"|"base64"`
+    https://platform.claude.com/docs/en/build-with-claude/vision;
+    document `source.type: "url"|"base64"|"text"`
+    https://platform.claude.com/docs/en/build-with-claude/pdf-support;
+    tool_result image blocks
+    https://platform.claude.com/docs/en/build-with-claude/tool-use.
+  - `openai` {true, true, false, false} — `image_url.url` takes remote
+    URLs https://platform.openai.com/docs/guides/images-vision; `file`
+    carries `file_data` bytes only, no URL slot
+    https://platform.openai.com/docs/guides/pdf-files.
+  - `gemini` {true, true, true, false} — `inlineData` bytes and
+    `fileData.fileUri` URLs for images and PDFs
+    https://ai.google.dev/api/generate-content#Part.
+  - `ollama` {false, false, false, false} — `images[]` is base64 only,
+    no URL or document slot https://docs.ollama.com/api/chat.
+  - `responses` {true, true, true, false} — `input_image.image_url`
+    remote URLs; `input_file` `file_data`/`file_url`
+    https://platform.openai.com/docs/guides/pdf-files.
+- **Decode keeps URLs as URLs (§3.2.2, E4).** OpenAI `image_url` http(s)
+  → `{url}` image (the `[Image: <url>]` text placeholder is gone — D5);
+  `file{file_data}` → document (`data:` URL or raw base64 → PDF default;
+  `file_id` refused — no fetchable bytes); `input_audio` → loud 400 (no
+  canonical audio part). Anthropic `image.source.url` → `{url}` image;
+  `document` `base64`/`text`/`url` sources → document (`content`/`file`
+  sources → 400); an image source that is neither usable base64 nor url
+  now throws instead of emitting an empty text part. Gemini
+  `inlineData` (image or `application/pdf`/`text/plain`) and
+  `fileData.fileUri` decode to images/documents; other inlineData mimes
+  → 400. Responses `input_image.image_url` non-`data:` → `{url}` image;
+  `input_file` `file_data`/`file_url` → document (`file_id` → 400).
+- **Encode.** URL-capable targets emit the URL unchanged (OpenAI
+  `image_url.url`, Anthropic `source.type:"url"`, Gemini
+  `fileData.fileUri`, Responses `input_image.image_url` /
+  `input_file.file_url`); byte slots emit base64 (OpenAI
+  `file.file_data` as a `data:` URL, Anthropic `source.type:"base64"`,
+  Gemini `inlineData`, Responses `file_data`). A `text/plain` document
+  becomes a text part for every target — media-inline converts it
+  first; the encoders' own text/plain handling is the defensive path
+  for a direct encode. Unknown Responses message parts now 400 rather
+  than emitting an empty `input_text` (the Task-2 open item).
+- **`inlineMediaForTarget` + services.** Per attempt, after
+  `canonicalForTarget` shaping and before `fromCanonicalRequest`:
+  `MEDIA_SUPPORT[entry.type]` decides pass-through vs fetch-and-inline
+  vs refuse. A part the target cannot take at all, `media.fetch:false`
+  when bytes are needed, or a `MediaFetchError` → `ValidationError`
+  naming `messages[i].content[j]` and the attempt's provider (a 400 in
+  the source's dialect, no fallback hop). A `MediaFetchError` with
+  `reason:"timeout"` → `ProxyError(504)` instead: Review Focus 4 wants
+  a slow host "504-mapped", and a plain `ProxyError` is not an
+  `UpstreamError`, so it is no route outcome and no fallback.
+- **`fetchMedia` (SSRF guard, Review Focus 1).** `http:`/`https:` only;
+  injected resolver (system DNS default) checks EVERY resolved address
+  — a public/private mix is refused as rebinding — and every redirect
+  hop (max 3) re-resolves and re-checks; the request's `lookup` pins
+  the checked address so connect never re-resolves. Private =
+  loopback, RFC-1918, link-local+metadata, CG-NAT, ULA/site-local,
+  reserved/doc ranges and the v6 mapped/compatible/NAT64 forms, unless
+  `allowPrivate`. The other v6 transition prefixes that embed a v4 —
+  6to4 `2002::/16` (RFC 3056) and Teredo `2001:0000::/32` (RFC 4380) —
+  are refused wholesale rather than decoded. 20 MB cap enforced on
+  `content-length` AND mid-stream
+  (the body streams; the byte after the cap aborts — never buffered
+  unbounded); 15 s total deadline across hops. Aborting destroys the
+  response stream once headers arrived (the request itself only
+  pre-response): it tears down the connection without leaving a
+  parser/socket race on late bytes — and keeps msw's mock socket
+  assertion-free in tests. `Accept-Encoding: identity` is sent, but a
+  gzip reply is still decoded defensively. Bytes are returned to the
+  caller only; the URL, never the bytes, may appear in errors/logs.
+- **`media:` config.** Top-level `media: {fetch, allow_private}`
+  (`gateway.schema.ts` strictObject) → `GatewayConfig.media`
+  (optional so tests can build configs field by field; loaders always
+  set it). `MEDIA_FETCH` / `MEDIA_ALLOW_PRIVATE` env vars win over the
+  YAML keys in both loaders; defaults `fetch:true`,
+  `allow_private:false`. `MEDIA_DEFAULTS` in `media-inline.ts` covers
+  hand-built configs in tests.
+- **Ambiguities resolved.** (a) The responses decoder's
+  `unsupported_image_url` refusal (a Task-3 interim guard) pinned the
+  same class of placeholder behaviour as OpenAI's `[Image: <url>]` —
+  the §3.2.2 decode table replaces both, so its test changed the same
+  way D5 pre-approves, asserting decode-to-url-image as exactly as the
+  old test asserted the 400. (b) `GatewayConfig.media` is optional
+  rather than required: existing tests build `GatewayConfig` literals
+  field by field, and the loaders always produce the block anyway.
+  (c) msw intercepts `http.request` only when it is called as a module
+  property — media-fetch keeps `http.request`/`https.request`
+  namespace calls (a destructured `import { request }` captured the
+  pre-patch original and bypassed every handler). (d) `file_id` /
+  `input_file.file_id` are stored-file references the proxy cannot
+  resolve — refused loudly rather than silently dropped.
+- **Files outside the Files block:**
+  `src/transformers/adapters/index.ts` (aggregates the five adapters'
+  `MEDIA_SUPPORT` into the provider-keyed record the services read),
+  `src/transformers/index.ts` (re-exports `MEDIA_SUPPORT` beside
+  `adapters` for the services),
+  `src/services/stream-attempt.ts` (the streaming encode site —
+  `attemptStreamTarget` is shared by `chat-stream.service.ts` and
+  `canonical-stream.service.ts`, so the one `inlineMediaForTarget`
+  call covers both stream paths),
+  `src/transformers/adapters/anthropic.adapter.test.ts`,
+  `src/transformers/adapters/openai.adapter.test.ts`,
+  `src/transformers/adapters/gemini.adapter.test.ts`,
+  `src/transformers/adapters/ollama.adapter.test.ts`,
+  `src/transformers/adapters/responses.adapter.test.ts` (Step 1's
+  per-adapter decode/encode cases; the Files block names no test files
+  but Step 1 requires them),
+  `src/config/yaml-config.test.ts` (covers the new `media:` section:
+  keys map, defaults, env wins, unknown keys rejected),
+  `.env.example` (documents `MEDIA_FETCH` / `MEDIA_ALLOW_PRIVATE` beside
+  the other env keys).
+- **Live check.** `npx ts-node src/index.ts` (env mode, ollama target,
+  `MEDIA_ALLOW_PRIVATE=true`) + a local stub serving `/api/chat` and a
+  PNG: an OpenAI-dialect `image_url` http URL was fetched and reached
+  the upstream as Ollama `images[]` base64; a `file` PDF to the same
+  target returned a 400 `invalid_request_error` naming
+  `messages[0].content[0]` and the target (request/response in the PR).

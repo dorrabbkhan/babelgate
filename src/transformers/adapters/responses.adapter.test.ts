@@ -152,24 +152,29 @@ describe("Responses adapter", () => {
       });
     });
 
-    it("remote image URLs are a 400, data URLs decode", () => {
-      expect(() =>
-        toCanonicalRequest({
-          model: "m",
-          input: [
-            {
-              type: "message",
-              role: "user",
-              content: [
-                {
-                  type: "input_image",
-                  image_url: "https://example.com/cat.png",
-                },
-              ],
-            },
-          ],
-        } as ResponsesRequest),
-      ).toThrow(ValidationError);
+    it("remote image URLs decode to url images, data URLs decode", () => {
+      // v1.5 §3.2.2: a remote image_url keeps its URL (was a 400).
+      const remote = toCanonicalRequest({
+        model: "m",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_image",
+                image_url: "https://example.com/cat.png",
+              },
+            ],
+          },
+        ],
+      } as ResponsesRequest);
+      expect(remote.messages[0].content).toEqual([
+        {
+          type: "image",
+          image: { url: "https://example.com/cat.png" },
+        },
+      ]);
 
       const canonical = toCanonicalRequest(
         fixtures.requests.multimodal as ResponsesRequest,
@@ -179,6 +184,118 @@ describe("Responses adapter", () => {
         type: "image",
         image: { data: "iVBORw0KGgo=", mimeType: "image/png" },
       });
+    });
+
+    it("input_file decodes to a document part", () => {
+      // v1.5 §3.2.2: file_data / file_url per the Responses reference —
+      // https://platform.openai.com/docs/api-reference/responses/create
+      const byData = toCanonicalRequest({
+        model: "m",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                file_data: "data:application/pdf;base64,JVBERi0=",
+                filename: "spec.pdf",
+              },
+            ],
+          },
+        ],
+      } as ResponsesRequest);
+      expect(byData.messages[0].content).toEqual([
+        {
+          type: "document",
+          document: {
+            data: "JVBERi0=",
+            mimeType: "application/pdf",
+            name: "spec.pdf",
+          },
+        },
+      ]);
+
+      const byUrl = toCanonicalRequest({
+        model: "m",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                file_url: "https://cdn.example.com/spec.pdf",
+                filename: "spec.pdf",
+              },
+            ],
+          },
+        ],
+      } as ResponsesRequest);
+      expect(byUrl.messages[0].content).toEqual([
+        {
+          type: "document",
+          document: {
+            url: "https://cdn.example.com/spec.pdf",
+            mimeType: "application/pdf",
+            name: "spec.pdf",
+          },
+        },
+      ]);
+    });
+
+    it("url image encodes to input_image, document encodes to input_file", () => {
+      const wire = fromCanonicalRequest({
+        model: "m",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "image",
+                image: { url: "https://cdn.example.com/cat.png" },
+              },
+              {
+                type: "document",
+                document: {
+                  data: "JVBERi0=",
+                  mimeType: "application/pdf",
+                  name: "spec.pdf",
+                },
+              },
+              {
+                type: "document",
+                document: {
+                  url: "https://cdn.example.com/other.pdf",
+                  mimeType: "application/pdf",
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(wire.input).toEqual([
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_image",
+              image_url: "https://cdn.example.com/cat.png",
+              detail: "auto",
+            },
+            {
+              type: "input_file",
+              file_data: "data:application/pdf;base64,JVBERi0=",
+              filename: "spec.pdf",
+            },
+            {
+              type: "input_file",
+              file_url: "https://cdn.example.com/other.pdf",
+            },
+          ],
+        },
+      ]);
     });
 
     it("dropped fields are noted, never sent", () => {

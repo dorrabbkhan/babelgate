@@ -20,6 +20,7 @@
  */
 import type {
   CanonicalContentPart,
+  CanonicalDocument,
   CanonicalImage,
   CanonicalImageMimeType,
   CanonicalMessage,
@@ -392,7 +393,15 @@ function decodeMessageContent(
 
   const parts: CanonicalContentPart[] = [];
   for (const [i, part] of content.entries()) {
-    const p = part as { type?: string; text?: string; image_url?: string };
+    const p = part as {
+      type?: string;
+      text?: string;
+      image_url?: string;
+      file_data?: string;
+      file_url?: string;
+      file_id?: string;
+      filename?: string;
+    };
     if (p.type === "input_text" || p.type === "output_text") {
       parts.push({ type: "text", text: p.text ?? "" });
       continue;
@@ -401,7 +410,14 @@ function decodeMessageContent(
       parts.push({ type: "image", image: toCanonicalImage(p, path, i) });
       continue;
     }
-    // refusal, input_file and any unknown part are noted drops.
+    if (p.type === "input_file") {
+      parts.push({
+        type: "document",
+        document: toCanonicalDocument(p, path, i),
+      });
+      continue;
+    }
+    // refusal and any unknown part are noted drops.
     note(
       "field_dropped",
       `${path}.content[${i}]`,
@@ -419,13 +435,14 @@ function toCanonicalImage(
   const url = part.image_url ?? "";
   const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
   if (!match) {
-    // The plan's Task 3 Interfaces block makes a remote URL a 400
-    // (`unsupported_image_url`) naming the limitation — new behaviour
-    // for this dialect (other adapters degrade remote URLs); never a
-    // silent drop or fetch.
-    throw new ValidationError(
-      `unsupported_image_url at ${path}.content[${index}]: only data: image URLs are supported`,
-    );
+    if (url === "") {
+      throw new ValidationError(
+        `missing image_url at ${path}.content[${index}]`,
+      );
+    }
+    // v1.5 spec §3.2.2 (E4): a remote URL keeps its URL —
+    // media-inline fetches or passes it through per target.
+    return { url };
   }
   const mimeType = match[1] as CanonicalImageMimeType;
   return {
@@ -439,6 +456,51 @@ function toCanonicalImage(
       ? mimeType
       : "image/png",
   };
+}
+
+/**
+ * Responses `input_file` → canonical document (v1.5 §3.2.2):
+ * `file_data` carries a `data:` URL or raw base64 (a PDF per
+ * https://platform.openai.com/docs/guides/pdf-files); `file_url`
+ * keeps its URL for per-target pass-through or fetch. `file_id` is
+ * a stored-file reference the proxy cannot resolve — refused, never
+ * an empty `input_text` pretending to carry it.
+ */
+function toCanonicalDocument(
+  part: {
+    file_data?: string;
+    file_url?: string;
+    file_id?: string;
+    filename?: string;
+  },
+  path: string,
+  index: number,
+): CanonicalDocument {
+  const name =
+    typeof part.filename === "string" && part.filename !== ""
+      ? { name: part.filename }
+      : {};
+  if (typeof part.file_data === "string" && part.file_data !== "") {
+    const match = /^data:([^;,]+);base64,(.*)$/s.exec(part.file_data);
+    const mimeType = match?.[1] ?? "application/pdf";
+    if (mimeType !== "application/pdf" && mimeType !== "text/plain") {
+      throw new ValidationError(
+        `unsupported input_file media type "${mimeType}" at ${path}.content[${index}]`,
+      );
+    }
+    return { data: match?.[2] ?? part.file_data, mimeType, ...name };
+  }
+  if (typeof part.file_url === "string" && part.file_url !== "") {
+    return { url: part.file_url, mimeType: "application/pdf", ...name };
+  }
+  if (typeof part.file_id === "string" && part.file_id !== "") {
+    throw new ValidationError(
+      `input_file "file_id" at ${path}.content[${index}] is a stored-file reference with no fetchable bytes`,
+    );
+  }
+  throw new ValidationError(
+    `input_file without file_data or file_url at ${path}.content[${index}]`,
+  );
 }
 
 function toolOutputText(output: unknown, path: string): string {
@@ -557,21 +619,67 @@ function toInputContent(
 ): Array<Record<string, unknown>> {
   const parts = typeof content === "string" ? [{ type: "text" as const, text: content }] : content;
   return parts.map((part) => {
+    if (part.type === "text") {
+      return { type: "input_text", text: part.text ?? "" };
+    }
     if (part.type === "image" && part.image) {
-      if (part.image.data === undefined) {
-        // URL images resolve to bytes in the services (v1.5 Task 6).
-        throw new ValidationError(
-          'Unsupported "image" content: "url" without "data"',
-        );
-      }
+      // v1.5 §3.2.2: input_image.image_url takes remote http(s) URLs
+      // as well as data: URLs —
+      // https://platform.openai.com/docs/guides/images-vision
       return {
         type: "input_image",
-        image_url: `data:${part.image.mimeType};base64,${part.image.data}`,
+        image_url:
+          part.image.data === undefined
+            ? part.image.url!
+            : `data:${part.image.mimeType};base64,${part.image.data}`,
         detail: "auto",
       };
     }
-    return { type: "input_text", text: part.text ?? "" };
+    if (part.type === "document" && part.document) {
+      return toInputFile(part.document);
+    }
+    // Anything else (reasoning on a user/system item can't be
+    // encoded) is a loud 400 — never an empty input_text.
+    throw new ValidationError(
+      `Unsupported "${part.type}" content part on a Responses message`,
+    );
   });
+}
+
+/**
+ * Canonical document → `input_file` (v1.5 §3.2.2): bytes →
+ * `file_data` as a `data:` URL; a URL → `file_url` (the wire slot
+ * for remote PDFs); `name` → `filename`. A text/plain document
+ * decodes to input_text — media-inline already converts it; this is
+ * the defensive path for a direct encode.
+ */
+function toInputFile(document: CanonicalDocument): Record<string, unknown> {
+  if (document.mimeType === "text/plain") {
+    if (document.data === undefined) {
+      throw new ValidationError(
+        'Unsupported "document" content: "url" without "data"',
+      );
+    }
+    return {
+      type: "input_text",
+      text: Buffer.from(document.data, "base64").toString("utf8"),
+    };
+  }
+  const filename =
+    document.name !== undefined ? { filename: document.name } : {};
+  if (document.url !== undefined) {
+    return { type: "input_file", file_url: document.url, ...filename };
+  }
+  if (document.data === undefined) {
+    throw new ValidationError(
+      'Unsupported "document" content: neither "url" nor "data"',
+    );
+  }
+  return {
+    type: "input_file",
+    file_data: `data:${document.mimeType};base64,${document.data}`,
+    ...filename,
+  };
 }
 
 export function toOutputContent(

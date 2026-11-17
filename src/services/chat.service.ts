@@ -43,6 +43,11 @@ import type {
   ProxyRequestOptions,
   ProxyResult,
 } from "./proxy.service";
+import {
+  inlineMediaForTarget,
+  MEDIA_DEFAULTS,
+} from "./media-inline";
+import { MEDIA_SUPPORT } from "../transformers";
 
 /** Everything a chat service needs — explicit inputs, no globals. */
 export interface ChatInput {
@@ -117,14 +122,19 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
             if (input.deferredValidation !== undefined) {
               throw input.deferredValidation;
             }
-            const targetBody = adapters[
-              entry.type
-            ].fromCanonicalRequest(
+            // §3.2.2: per attempt, URL media the target can't take
+            // by URL is fetched and inlined; what it can't take at
+            // all is refused before encode, naming the field path.
+            const shaped = await inlineMediaForTarget(
               canonicalForTarget(canonical, entry, target, {
                 source,
                 sourceBody: input.sourceBody,
               }),
+              MEDIA_SUPPORT[entry.type],
+              config.media ?? MEDIA_DEFAULTS,
             );
+            const targetBody =
+              adapters[entry.type].fromCanonicalRequest(shaped);
             // §3.5: one target snapshot per hop (fallbacks included).
             snapshot("target", targetBody);
             const targetRoute = PROVIDER_ROUTES[entry.type].find(

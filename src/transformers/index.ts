@@ -8,6 +8,7 @@ import type {
 // Re-export adapters
 export {
   adapters,
+  MEDIA_SUPPORT,
   PROVIDER_PATHS,
   PROVIDER_ROUTES,
   type Provider,

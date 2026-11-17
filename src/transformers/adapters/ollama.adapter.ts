@@ -47,6 +47,22 @@ import {
   type PendingCallIds,
 } from "./ollama.tools";
 
+import type { MediaSupport } from "../../services/media-inline";
+
+/**
+ * Ollama media support (v1.5 spec §3.2.2): `images[]` carries base64
+ * only — no URL slot, no document slot
+ * (https://docs.ollama.com/api/chat). URL media is fetched and
+ * inlined by the services; documents are refused there (and here,
+ * defensively).
+ */
+export const MEDIA_SUPPORT: MediaSupport = {
+  imageUrl: false,
+  documentData: false,
+  documentUrl: false,
+  toolMessageImages: false,
+};
+
 export const ollamaAdapter: ProviderAdapter<
   OllamaChatRequest,
   OllamaChatResponse
@@ -411,6 +427,29 @@ export function fromCanonicalRequest(
   return result;
 }
 
+/**
+ * Part → Ollama text: text parts pass through; a text/plain document
+ * (converted to a text part by media-inline — this is the defensive
+ * path for a direct encode) decodes utf-8; any other document mime
+ * has no Ollama slot and is refused loudly — never an empty string
+ * pretending to carry it.
+ */
+function ollamaText(part: CanonicalContentPart): string | undefined {
+  if (part.type === "text") return part.text ?? "";
+  if (part.type === "document" && part.document) {
+    if (
+      part.document.mimeType === "text/plain" &&
+      part.document.data !== undefined
+    ) {
+      return Buffer.from(part.document.data, "base64").toString("utf8");
+    }
+    throw new ValidationError(
+      `Unsupported "document" content: Ollama carries no document parts`,
+    );
+  }
+  return undefined;
+}
+
 function convertToOllamaMessage(
   msg: CanonicalMessage,
   callNameById: CallNameById,
@@ -431,8 +470,8 @@ function convertToOllamaMessage(
       msg.role === "system" && msg.content.some((p) => p.cache)
         ? (systemText(msg.content) ?? "")
         : msg.content
-            .filter((p) => p.type === "text")
-            .map((p) => p.text || "")
+            .map((p) => ollamaText(p))
+            .filter((t): t is string => t !== undefined)
             .join("\n");
 
     const images = msg.content
@@ -440,7 +479,9 @@ function convertToOllamaMessage(
       .map((p) => {
         const image = p.image!;
         if (image.data === undefined) {
-          // URL images resolve to bytes in the services (v1.5 Task 6).
+          // URL images are fetched and inlined by media-inline before
+          // encode (v1.5 Task 6); a URL arriving here was never
+          // fetched — refuse, never silently drop.
           throw new ValidationError(
             'Unsupported "image" content: "url" without "data"',
           );

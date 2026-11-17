@@ -54,6 +54,14 @@ export interface GatewayConfig {
   registry: ProviderRegistry;
   routing: RoutingConfig;
   observe: ObserveConfig;
+  /**
+   * `media:` section (v1.5 spec §3.2.2): whether URL media is fetched
+   * for byte-only targets and whether private-range addresses are
+   * allowed. `MEDIA_FETCH` / `MEDIA_ALLOW_PRIVATE` env vars; defaults
+   * fetch on, private refused. Optional so tests can build configs
+   * field by field — the loaders always set it.
+   */
+  media?: { fetch: boolean; allowPrivate: boolean };
   /** Top-level `prices:` overrides (spec §3.6); YAML only. */
   prices?: Record<string, PriceOverride>;
 }
@@ -220,6 +228,7 @@ export function loadConfig(): EnvConfig {
     registry,
     routing,
     observe: parseObserve(process.env),
+    media: parseMedia(process.env),
     deprecatedEnv:
       process.env.SOURCE_API !== undefined ? ["SOURCE_API"] : [],
   };
@@ -299,6 +308,35 @@ function parsePositiveIntEnv(
     throw new ConfigurationError(`${name} must be a positive integer`);
   }
   return value;
+}
+
+/** The YAML `media:` section's keys (gateway.schema.ts). */
+export interface MediaYaml {
+  fetch?: boolean;
+  allow_private?: boolean;
+}
+
+/**
+ * Build the `media` block (v1.5 spec §3.2.2): env vars win over the
+ * YAML `media:` keys (env-only mode passes no `yaml`). Defaults:
+ * `fetch: true`, `allow_private: false`.
+ */
+export function parseMedia(
+  env: NodeJS.ProcessEnv,
+  yaml: MediaYaml = {},
+): { fetch: boolean; allowPrivate: boolean } {
+  return {
+    fetch: parseBoolEnv(
+      "MEDIA_FETCH",
+      env.MEDIA_FETCH,
+      yaml.fetch ?? true,
+    ),
+    allowPrivate: parseBoolEnv(
+      "MEDIA_ALLOW_PRIVATE",
+      env.MEDIA_ALLOW_PRIVATE,
+      yaml.allow_private ?? false,
+    ),
+  };
 }
 
 /**

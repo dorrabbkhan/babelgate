@@ -40,6 +40,8 @@ import {
   type AttemptResult,
 } from "./attempt-targets";
 import type { ReasoningPolicySource } from "./reasoning-policy";
+import { inlineMediaForTarget, MEDIA_DEFAULTS } from "./media-inline";
+import { MEDIA_SUPPORT } from "../transformers";
 
 /** The pieces of a won stream attempt: response stream, abort handle, decoder. */
 export interface UpstreamAttempt {
@@ -87,9 +89,16 @@ export function attemptStreamTarget(
         feed: (chunk) => runWithAttempt(attempt, () => raw.feed(chunk)),
         end: () => runWithAttempt(attempt, () => raw.end()),
       };
-      const targetBody = adapters[entry.type].fromCanonicalRequest(
+      // §3.2.2: per attempt, URL media the target can't take by URL
+      // is fetched and inlined; what it can't take at all is refused
+      // before encode, naming the field path.
+      const shaped = await inlineMediaForTarget(
         canonicalForTarget(canonical, entry, target, policySource),
+        MEDIA_SUPPORT[entry.type],
+        config.media ?? MEDIA_DEFAULTS,
       );
+      const targetBody =
+        adapters[entry.type].fromCanonicalRequest(shaped);
       // §3.5: one target snapshot per hop (fallbacks included).
       snapshot("target", targetBody);
       const targetRoute = PROVIDER_ROUTES[entry.type].find(

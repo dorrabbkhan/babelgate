@@ -73,6 +73,23 @@ import type {
   ResponsesModelListResponse,
 } from "../../types/responses.types";
 
+import type { MediaSupport } from "../../services/media-inline";
+
+/**
+ * Responses media support (v1.5 spec §3.2.2):
+ *  - `input_image.image_url` takes remote http(s) URLs —
+ *    https://platform.openai.com/docs/guides/images-vision
+ *  - `input_file` carries base64 `file_data` or a remote `file_url` —
+ *    https://platform.openai.com/docs/guides/pdf-files
+ *  - tool outputs (function_call_output) carry text parts only.
+ */
+export const MEDIA_SUPPORT: MediaSupport = {
+  imageUrl: true,
+  documentData: true,
+  documentUrl: true,
+  toolMessageImages: false,
+};
+
 export const responsesAdapter: ProviderAdapter<
   ResponsesRequest,
   ResponsesResponse

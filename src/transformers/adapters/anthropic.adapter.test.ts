@@ -960,12 +960,9 @@ describe('Anthropic Adapter', () => {
             role: 'user',
             content: [
               {
-                type: 'document',
-                source: {
-                  type: 'base64',
-                  media_type: 'application/pdf',
-                  data: 'abc',
-                },
+                type: 'web_search_tool_result',
+                tool_use_id: 'srvtoolu_1',
+                content: [],
               },
             ],
           },
@@ -981,7 +978,132 @@ describe('Anthropic Adapter', () => {
       }
       expect(err).toBeInstanceOf(ValidationError);
       expect((err as ValidationError).statusCode).toBe(400);
-      expect((err as ValidationError).message).toContain('"document"');
+      expect((err as ValidationError).message).toContain(
+        '"web_search_tool_result"',
+      );
+    });
+
+    describe('media (v1.5 spec §3.2.2)', () => {
+      it('url image block decodes to url image', () => {
+        const input = {
+          model: 'claude-3-opus-20240229',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  source: {
+                    type: 'url',
+                    url: 'https://cdn.example.com/cat.png',
+                  },
+                },
+              ],
+            },
+          ],
+          max_tokens: 1024,
+        } as unknown as MessageCreateParams;
+
+        const result = toCanonicalRequest(input);
+        expect(result.messages[0].content).toEqual([
+          {
+            type: 'image',
+            image: { url: 'https://cdn.example.com/cat.png' },
+          },
+        ]);
+      });
+
+      it('document block decodes to document part', () => {
+        const input = {
+          model: 'claude-3-opus-20240229',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'document',
+                  title: 'spec.pdf',
+                  source: {
+                    type: 'base64',
+                    media_type: 'application/pdf',
+                    data: 'JVBERi0=',
+                  },
+                },
+              ],
+            },
+          ],
+          max_tokens: 1024,
+        } as unknown as MessageCreateParams;
+
+        const result = toCanonicalRequest(input);
+        expect(result.messages[0].content).toEqual([
+          {
+            type: 'document',
+            document: {
+              data: 'JVBERi0=',
+              mimeType: 'application/pdf',
+              name: 'spec.pdf',
+            },
+          },
+        ]);
+      });
+
+      it('url image encodes to a url source block', () => {
+        const result = fromCanonicalRequest({
+          model: 'claude-3-opus-20240229',
+          max_tokens: 1024,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'image',
+                  image: { url: 'https://cdn.example.com/cat.png' },
+                },
+              ],
+            },
+          ],
+        } as unknown as Parameters<typeof fromCanonicalRequest>[0]);
+        expect(result.messages[0].content).toEqual([
+          {
+            type: 'image',
+            source: { type: 'url', url: 'https://cdn.example.com/cat.png' },
+          },
+        ]);
+      });
+
+      it('document part encodes to a document block', () => {
+        const result = fromCanonicalRequest({
+          model: 'claude-3-opus-20240229',
+          max_tokens: 1024,
+          messages: [
+            {
+              role: 'user',
+              content: [
+                {
+                  type: 'document',
+                  document: {
+                    data: 'JVBERi0=',
+                    mimeType: 'application/pdf',
+                    name: 'spec.pdf',
+                  },
+                },
+              ],
+            },
+          ],
+        } as unknown as Parameters<typeof fromCanonicalRequest>[0]);
+        expect(result.messages[0].content).toEqual([
+          {
+            type: 'document',
+            source: {
+              type: 'base64',
+              media_type: 'application/pdf',
+              data: 'JVBERi0=',
+            },
+            title: 'spec.pdf',
+          },
+        ]);
+      });
     });
   });
 

@@ -9,7 +9,11 @@ import type {
 } from "../routing/plan-route";
 import { parseTarget } from "../routing/rules";
 import { ConfigurationError } from "../utils/errors";
-import { parseObserve, type GatewayConfig } from "./env-config";
+import {
+  parseMedia,
+  parseObserve,
+  type GatewayConfig,
+} from "./env-config";
 import { gatewayFileSchema } from "./gateway.schema";
 
 /**
@@ -259,6 +263,8 @@ export function loadYamlConfig(
     // §3.11: the observe: section's keys, with env vars winning over
     // the keys that have an env counterpart.
     observe: parseObserve(env, file.observe),
+    // §3.2.2: media: keys — MEDIA_FETCH / MEDIA_ALLOW_PRIVATE win.
+    media: parseMedia(env, file.media),
     prices,
   };
 }
