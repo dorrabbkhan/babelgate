@@ -169,6 +169,60 @@ describe("judge.ts (spec §3.0.1)", () => {
     expect(line(r, "files-block")).toMatch(/^FLAG files-block .*src\/x\/one\.adapter\.ts outside Files block/);
   });
 
+  // v1.5 Task 3: the plan's Files block names files by bare name after a
+  // full path ("`src/config/gateway.schema.ts`, `yaml-config.ts`") or with
+  // no path at all ("`anthropic.adapter.ts`", "each `*.adapter.test.ts`").
+  const judgeTask3 = (paths: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "judge-seed-"));
+    const diffFile = join(dir, "seed.diff");
+    writeFileSync(diffFile, paths.map((p) => seed(p, ["const c = 3;"])).join(""));
+    return runJudge({
+      version: "v1.5",
+      task: "3",
+      diffFile,
+      plan: PLAN,
+      title: "feat: reasoning request config for every source",
+      reportDir: dir,
+    });
+  };
+
+  it("bare names in the Files block resolve against the path before them", () => {
+    const r = judgeTask3([
+      "src/config/yaml-config.ts",
+      "src/services/chat-stream.service.ts",
+      "src/services/attempt-targets.ts",
+      "src/transformers/adapters/anthropic.adapter.ts",
+      "src/transformers/adapters/ollama.adapter.test.ts",
+      "src/transformers/reasoning-effort.test.ts",
+    ]);
+    expect(line(r, "files-block")).toBe(
+      "PASS files-block every diff file is in the task's Files block",
+    );
+  });
+
+  it("a bare name does not match the same file name in another directory", () => {
+    const r = judgeTask3(["src/routing/yaml-config.ts", "src/services/gateway.schema.ts"]);
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "files-block")).toBe(
+      "FLAG files-block src/routing/yaml-config.ts outside Files block and not named in a decisions.md hunk; " +
+        "src/services/gateway.schema.ts outside Files block and not named in a decisions.md hunk",
+    );
+  });
+
+  it("a long FLAG keeps whole reasons and counts the rest", () => {
+    const paths = ["a", "b", "c", "d", "e"].map((x) => `src/extra/${x}-file.ts`);
+    const r = judgeTask3(paths);
+    expect(line(r, "files-block")).toBe(
+      "FLAG files-block " +
+        paths
+          .slice(0, 3)
+          .map((p) => `${p} outside Files block and not named in a decisions.md hunk`)
+          .join("; ") +
+        "; (+2 more in the report)",
+    );
+    for (const p of paths) expect(r.report).toContain(`- ${p} outside Files block`);
+  });
+
   it("adapter importing another flags", () => {
     const r = judge("adapter-import.diff");
     expect(r.exitCode).toBe(1);

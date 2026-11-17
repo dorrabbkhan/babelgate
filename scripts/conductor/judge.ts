@@ -65,7 +65,14 @@ export interface JudgeDeps {
   fetchTitle?: (pr: string) => string;
 }
 
-const truncate = (s: string, n = 180) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+// One stdout line per check: whole reasons only, never cut mid-path. What
+// doesn't fit is counted; the report file lists every reason.
+const summarize = (reasons: string[], n = 300) => {
+  let out = reasons[0].length > n ? reasons[0].slice(0, n - 1) + "…" : reasons[0];
+  let i = 1;
+  for (; i < reasons.length && out.length + 2 + reasons[i].length <= n; i++) out += "; " + reasons[i];
+  return i < reasons.length ? `${out}; (+${reasons.length - i} more in the report)` : out;
+};
 const firstLine = (e: unknown) =>
   String(e instanceof Error ? e.message : e).split("\n")[0];
 
@@ -189,7 +196,7 @@ export function runJudge(opts: JudgeOpts, deps: JudgeDeps = {}): JudgeResult {
 
   const nFlags = checks.filter((c) => c.status === "FLAG").length;
   const lines = checks.map(
-    (c) => `${c.status} ${c.id}${c.reasons.length ? " " + truncate(c.reasons.join("; ")) : ""}`,
+    (c) => `${c.status} ${c.id}${c.reasons.length ? " " + summarize(c.reasons) : ""}`,
   );
   lines.push(nFlags ? `JUDGE: FLAG (${nFlags})` : "JUDGE: PASS");
   const stdout = lines.slice(0, 60).join("\n");
