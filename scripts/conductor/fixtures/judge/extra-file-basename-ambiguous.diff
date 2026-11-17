@@ -1,0 +1,26 @@
+diff --git a/src/a/same.ts b/src/a/same.ts
+index 1111111..2222222 100644
+--- a/src/a/same.ts
++++ b/src/a/same.ts
+@@ -1,2 +1,3 @@
+ export const a = 1;
++export const b = 2;
+ 
+diff --git a/src/b/same.ts b/src/b/same.ts
+index 1111111..2222222 100644
+--- a/src/b/same.ts
++++ b/src/b/same.ts
+@@ -1,2 +1,3 @@
+ export const a = 1;
++export const b = 2;
+ 
+diff --git a/docs/decisions.md b/docs/decisions.md
+index 1111111..2222222 100644
+--- a/docs/decisions.md
++++ b/docs/decisions.md
+@@ -100,3 +100,6 @@
+ ## v1.5 Task 0a: conductor tooling
+ 
++- Files outside the Files block: `same.ts` — needed for the example.
++
+ ## older entry
