@@ -247,6 +247,36 @@ describe("loadYamlConfig", () => {
     }
   });
 
+  it("reasoning: false lands on the entry, absent means true (v1.5 spec §3.1)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-reasoning-"));
+    try {
+      const file = join(dir, "cfg.yaml");
+      writeFileSync(
+        file,
+        [
+          "default: ollama",
+          "providers:",
+          "  ollama:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          "  anthropic:",
+          "    type: anthropic",
+          "    base_url: https://api.anthropic.test",
+          "    api_key_env: BABELGATE_TEST_KEY",
+          "    reasoning: false",
+          "",
+        ].join("\n"),
+      );
+      const config = loadYamlConfig(file, {
+        BABELGATE_TEST_KEY: "k",
+      });
+      expect(config.registry.get("anthropic").reasoning).toBe(false);
+      expect(config.registry.get("ollama").reasoning).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("live_prices, local and top-level prices: parse (spec §3.6)", () => {
     const dir = mkdtempSync(join(tmpdir(), "babelgate-prices-"));
     try {

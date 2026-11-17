@@ -39,6 +39,7 @@ import {
   toClientFacing,
   type AttemptResult,
 } from "./attempt-targets";
+import type { ReasoningPolicySource } from "./reasoning-policy";
 
 /** The pieces of a won stream attempt: response stream, abort handle, decoder. */
 export interface UpstreamAttempt {
@@ -65,6 +66,7 @@ export function attemptStreamTarget(
   config: GatewayConfig,
   requestId: string,
   signal: AbortSignal | undefined,
+  policySource?: ReasoningPolicySource,
 ) {
   return async (
     entry: ProviderEntry,
@@ -86,7 +88,7 @@ export function attemptStreamTarget(
         end: () => runWithAttempt(attempt, () => raw.end()),
       };
       const targetBody = adapters[entry.type].fromCanonicalRequest(
-        canonicalForTarget(canonical, entry, target),
+        canonicalForTarget(canonical, entry, target, policySource),
       );
       // §3.5: one target snapshot per hop (fallbacks included).
       snapshot("target", targetBody);

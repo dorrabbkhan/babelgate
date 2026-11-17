@@ -17,7 +17,12 @@ import {
 } from "../../utils/canonical-error";
 import { recordNote } from "../../observe/context";
 import { UnsupportedResponseFormatError } from "../../utils/errors";
-import { budgetFor } from "../reasoning-effort";
+import {
+  EFFORT_LADDER,
+  budgetFor,
+  effortForBudget,
+  type Effort,
+} from "../reasoning-effort";
 import {
   decodeOrigin,
   originMatchesCurrent,
@@ -78,17 +83,6 @@ export const anthropicAdapter: ProviderAdapter<MessageCreateParams, Message> = {
  * path, never its content.
  */
 function logDropped(request: MessageCreateParams): void {
-  if (request.thinking !== undefined) {
-    recordNote(
-      {
-        stage: "decode",
-        adapter: "anthropic",
-        code: "thinking_dropped",
-        path: "thinking",
-      },
-      'Dropping request field "thinking" (no canonical equivalent)',
-    );
-  }
   if (request.metadata !== undefined) {
     recordNote(
       {
@@ -113,10 +107,78 @@ function logDropped(request: MessageCreateParams): void {
   }
 }
 
+type CanonicalReasoning = NonNullable<
+  NonNullable<CanonicalRequest["config"]>["reasoning"]
+>;
+
+/**
+ * `thinking` + `output_config.effort` → `config.reasoning` (v1.5
+ * spec §3.1; field shapes per
+ * https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+ * and
+ * https://platform.claude.com/docs/en/build-with-claude/effort).
+ * `{type:"enabled", budget_tokens}` maps the budget to the nearest
+ * lower ladder level and keeps it; `{type:"adaptive"}` maps
+ * `output_config.effort` (Anthropic's level field per the SDK's
+ * OutputConfig — `"max"` lowers to the canonical ceiling `xhigh`,
+ * the Responses decoder's convention); `{type:"disabled"}` maps to
+ * `none`. Every other shape — an unknown `type`, `enabled` without
+ * a numeric budget, `adaptive` without a level, `null` and other
+ * non-object values — keeps the v1.4 `thinking_dropped` note.
+ */
+function toCanonicalReasoning(
+  request: MessageCreateParams,
+): CanonicalReasoning | undefined {
+  const thinking = request.thinking;
+  if (thinking === undefined) return undefined;
+  const t =
+    typeof thinking === "object" && thinking !== null
+      ? (thinking as { type?: unknown; budget_tokens?: unknown })
+      : {};
+  if (t.type === "disabled") return { effort: "none" };
+  if (t.type === "enabled" && typeof t.budget_tokens === "number") {
+    return {
+      effort: effortForBudget(t.budget_tokens),
+      budgetTokens: t.budget_tokens,
+    };
+  }
+  if (t.type === "adaptive") {
+    const effort = request.output_config?.effort;
+    if (typeof effort === "string") {
+      if ((EFFORT_LADDER as readonly string[]).includes(effort)) {
+        return { effort: effort as Effort };
+      }
+      if (effort === "max") {
+        recordNote(
+          {
+            stage: "decode",
+            adapter: "anthropic",
+            code: "reasoning_effort_lowered",
+            path: "output_config.effort",
+          },
+          'Lowering reasoning effort "max" to "xhigh" (canonical maximum)',
+        );
+        return { effort: "xhigh" };
+      }
+    }
+  }
+  recordNote(
+    {
+      stage: "decode",
+      adapter: "anthropic",
+      code: "thinking_dropped",
+      path: "thinking",
+    },
+    'Dropping request field "thinking" (no canonical equivalent)',
+  );
+  return undefined;
+}
+
 export function toCanonicalRequest(
   request: MessageCreateParams,
 ): CanonicalRequest {
   logDropped(request);
+  const reasoning = toCanonicalReasoning(request);
 
   const messages: CanonicalMessage[] = request.messages.flatMap((m, i) =>
     toCanonicalMessage(m, i),
@@ -183,6 +245,7 @@ export function toCanonicalRequest(
     ...(systemPrompt !== undefined && { systemPrompt }),
     config: {
       maxTokens: request.max_tokens,
+      ...(reasoning !== undefined && { reasoning }),
       ...(request.temperature !== undefined && {
         temperature: request.temperature,
       }),

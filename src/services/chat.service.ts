@@ -120,7 +120,10 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
             const targetBody = adapters[
               entry.type
             ].fromCanonicalRequest(
-              canonicalForTarget(canonical, entry, target),
+              canonicalForTarget(canonical, entry, target, {
+                source,
+                sourceBody: input.sourceBody,
+              }),
             );
             // §3.5: one target snapshot per hop (fallbacks included).
             snapshot("target", targetBody);

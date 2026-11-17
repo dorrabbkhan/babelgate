@@ -963,33 +963,38 @@ describe('OpenAI Adapter', () => {
     });
   });
 
-  describe('reasoning fields still dropped (v1.4 spec §3.3)', () => {
-    it('chat reasoning_effort produces no config.reasoning, body unchanged for every target', () => {
+  describe('reasoning request config (v1.5 spec §3.1)', () => {
+    it('chat reasoning_effort maps to config.reasoning, encoded for every target', () => {
       const canonical = toCanonicalRequest({
         model: 'm',
         reasoning_effort: 'high',
         messages: [{ role: 'user', content: 'hi' }],
       } as ChatCompletionRequest);
 
-      expect(canonical.config?.reasoning).toBeUndefined();
+      expect(canonical.config?.reasoning).toEqual({ effort: 'high' });
 
       expect(fromCanonicalRequest(canonical)).toEqual({
         model: 'm',
+        reasoning_effort: 'high',
         messages: [{ role: 'user', content: 'hi' }],
       });
       expect(anthropicFromCanonical(canonical)).toEqual({
         model: 'm',
         messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 4096,
+        max_tokens: 25600,
+        thinking: { type: 'enabled', budget_tokens: 24576 },
       });
       expect(geminiFromCanonical(canonical)).toEqual({
         contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-        generationConfig: {},
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 24576 },
+        },
       });
       expect(ollamaFromCanonical(canonical)).toEqual({
         model: 'm',
         messages: [{ role: 'user', content: 'hi' }],
         stream: false,
+        think: 'high',
       });
       expect(responsesFromCanonical(canonical)).toEqual({
         model: 'm',
@@ -1000,7 +1005,65 @@ describe('OpenAI Adapter', () => {
             content: [{ type: 'input_text', text: 'hi' }],
           },
         ],
+        reasoning: { effort: 'high' },
+        include: ['reasoning.encrypted_content'],
         store: false,
+      });
+    });
+
+    it('each reasoning_effort level decodes verbatim', () => {
+      for (const effort of [
+        'none',
+        'minimal',
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+      ] as const) {
+        const canonical = toCanonicalRequest({
+          model: 'm',
+          reasoning_effort: effort,
+          messages: [{ role: 'user', content: 'hi' }],
+        } as ChatCompletionRequest);
+        expect(canonical.config?.reasoning).toEqual({ effort });
+      }
+    });
+
+    it('reasoning_effort "max" lowers to xhigh with a note', () => {
+      let canonical: ReturnType<typeof toCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        canonical = toCanonicalRequest({
+          model: 'm',
+          reasoning_effort: 'max',
+          messages: [{ role: 'user', content: 'hi' }],
+        } as ChatCompletionRequest);
+      });
+
+      expect(canonical?.config?.reasoning).toEqual({ effort: 'xhigh' });
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'openai',
+        code: 'reasoning_effort_lowered',
+        path: 'reasoning_effort',
+      });
+    });
+
+    it('an unknown reasoning_effort string is dropped with a note', () => {
+      let canonical: ReturnType<typeof toCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        canonical = toCanonicalRequest({
+          model: 'm',
+          reasoning_effort: 'ultra',
+          messages: [{ role: 'user', content: 'hi' }],
+        } as unknown as ChatCompletionRequest);
+      });
+
+      expect(canonical?.config?.reasoning).toBeUndefined();
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'openai',
+        code: 'field_dropped',
+        path: 'reasoning_effort',
       });
     });
   });

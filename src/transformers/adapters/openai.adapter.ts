@@ -29,6 +29,7 @@ import type {
 } from "../../types/openai.types";
 import { isSchemaObject } from "../response-format";
 import { decodeOrigin, originMatchesCurrent } from "../reasoning-origin";
+import { EFFORT_LADDER, type Effort } from "../reasoning-effort";
 import {
   createStreamDecoder,
   createStreamEncoder,
@@ -52,9 +53,57 @@ export const openaiAdapter: ProviderAdapter<
 
 // ============ REQUEST: OpenAI → Canonical ============
 
+type CanonicalReasoning = NonNullable<
+  NonNullable<CanonicalRequest["config"]>["reasoning"]
+>;
+
+/**
+ * `reasoning_effort` → `config.reasoning.effort` (v1.5 spec §3.1;
+ * field per
+ * https://platform.openai.com/docs/api-reference/chat/create#chat-create-reasoning_effort).
+ * The shared OpenAI vocabulary (ReasoningEffort in shared.d.ts) is
+ * the canonical ladder plus `"max"`, which has no canonical slot →
+ * `xhigh` with a note (the Responses decoder's convention); an
+ * unknown or non-string value keeps a `field_dropped` note.
+ */
+function toCanonicalReasoning(
+  request: ChatCompletionRequest,
+): CanonicalReasoning | undefined {
+  const effort = request.reasoning_effort;
+  if (effort === undefined || effort === null) return undefined;
+  if (typeof effort === "string") {
+    if ((EFFORT_LADDER as readonly string[]).includes(effort)) {
+      return { effort: effort as Effort };
+    }
+    if (effort === "max") {
+      recordNote(
+        {
+          stage: "decode",
+          adapter: "openai",
+          code: "reasoning_effort_lowered",
+          path: "reasoning_effort",
+        },
+        'Lowering reasoning effort "max" to "xhigh" (canonical maximum)',
+      );
+      return { effort: "xhigh" };
+    }
+  }
+  recordNote(
+    {
+      stage: "decode",
+      adapter: "openai",
+      code: "field_dropped",
+      path: "reasoning_effort",
+    },
+    'Dropping request field "reasoning_effort" (not a level string)',
+  );
+  return undefined;
+}
+
 export function toCanonicalRequest(
   request: ChatCompletionRequest,
 ): CanonicalRequest {
+  const reasoning = toCanonicalReasoning(request);
   const messages: CanonicalMessage[] = [];
   let systemPrompt: string | undefined;
 
@@ -113,6 +162,7 @@ export function toCanonicalRequest(
         request.presence_penalty !== null && {
           presencePenalty: request.presence_penalty,
         }),
+      ...(reasoning !== undefined && { reasoning }),
     },
     ...(request.stream === true && { stream: true }),
     ...(request.stream === false && { stream: false }),

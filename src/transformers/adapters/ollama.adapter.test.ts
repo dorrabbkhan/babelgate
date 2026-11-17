@@ -989,35 +989,41 @@ describe("cache hints on tool results (Task 17a)", () => {
     });
   });
 
-  describe("reasoning fields still dropped (v1.4 spec §3.3)", () => {
-    it("ollama think produces no config.reasoning, body unchanged for every target", () => {
+  describe("reasoning request config (v1.5 spec §3.1)", () => {
+    it("ollama think maps to config.reasoning, encoded for every target", () => {
       const canonical = toCanonicalRequest({
         model: "m",
         think: true,
         messages: [{ role: "user", content: "hi" }],
       } as OllamaChatRequest);
 
-      expect(canonical.config?.reasoning).toBeUndefined();
+      expect(canonical.config?.reasoning).toEqual({ effort: "medium" });
 
       expect(fromCanonicalRequest(canonical)).toEqual({
         model: "m",
         messages: [{ role: "user", content: "hi" }],
         stream: true,
+        think: "medium",
       });
       expect(anthropicFromCanonical(canonical)).toEqual({
         model: "m",
         messages: [{ role: "user", content: "hi" }],
-        max_tokens: 4096,
+        max_tokens: 9216,
+        thinking: { type: "enabled", budget_tokens: 8192 },
         stream: true,
       });
       expect(openaiFromCanonical(canonical)).toEqual({
         model: "m",
+        reasoning_effort: "medium",
         messages: [{ role: "user", content: "hi" }],
         stream: true,
         stream_options: { include_usage: true },
       });
       expect(geminiFromCanonical(canonical)).toEqual({
         contents: [{ role: "user", parts: [{ text: "hi" }] }],
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 8192 },
+        },
       });
       expect(responsesFromCanonical(canonical)).toEqual({
         model: "m",
@@ -1028,9 +1034,31 @@ describe("cache hints on tool results (Task 17a)", () => {
             content: [{ type: "input_text", text: "hi" }],
           },
         ],
+        reasoning: { effort: "medium" },
+        include: ["reasoning.encrypted_content"],
         store: false,
         stream: true,
       });
+    });
+
+    it("a think level string maps to config.reasoning.effort", () => {
+      const canonical = toCanonicalRequest({
+        model: "m",
+        think: "low",
+        messages: [{ role: "user", content: "hi" }],
+      } as OllamaChatRequest);
+
+      expect(canonical.config?.reasoning).toEqual({ effort: "low" });
+    });
+
+    it("think false maps to effort none", () => {
+      const canonical = toCanonicalRequest({
+        model: "m",
+        think: false,
+        messages: [{ role: "user", content: "hi" }],
+      } as OllamaChatRequest);
+
+      expect(canonical.config?.reasoning).toEqual({ effort: "none" });
     });
   });
 

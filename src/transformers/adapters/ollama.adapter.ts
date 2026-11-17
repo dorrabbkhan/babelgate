@@ -24,6 +24,7 @@ import {
 } from "../response-format";
 import { systemText } from "../system-text";
 import { decodeOrigin, originMatchesCurrent } from "../reasoning-origin";
+import { EFFORT_LADDER, type Effort } from "../reasoning-effort";
 import type {
   OllamaChatRequest,
   OllamaChatResponse,
@@ -64,9 +65,49 @@ export const ollamaAdapter: ProviderAdapter<
 
 // ============ REQUEST: Ollama → Canonical ============
 
+type CanonicalReasoning = NonNullable<
+  NonNullable<CanonicalRequest["config"]>["reasoning"]
+>;
+
+/**
+ * `think` → `config.reasoning` (v1.5 spec §3.1): `true` asks for
+ * thinking at the model's default — canonical `medium`; a level
+ * string carries the level (canonical ladder values are accepted —
+ * the encoder lowers what a target can't take); `false` is an
+ * explicit off → `none`. Wire shape per
+ * https://docs.ollama.com/capabilities/thinking
+ * (`boolean | "low" | "medium" | "high"`); anything else keeps a
+ * `field_dropped` note.
+ */
+function toCanonicalReasoning(
+  request: OllamaChatRequest,
+): CanonicalReasoning | undefined {
+  const think = request.think;
+  if (think === undefined) return undefined;
+  if (think === true) return { effort: "medium" };
+  if (think === false) return { effort: "none" };
+  if (
+    typeof think === "string" &&
+    (EFFORT_LADDER as readonly string[]).includes(think)
+  ) {
+    return { effort: think as Effort };
+  }
+  recordNote(
+    {
+      stage: "decode",
+      adapter: "ollama",
+      code: "field_dropped",
+      path: "think",
+    },
+    'Dropping request field "think" (not a boolean or level string)',
+  );
+  return undefined;
+}
+
 export function toCanonicalRequest(
   request: OllamaChatRequest,
 ): CanonicalRequest {
+  const reasoning = toCanonicalReasoning(request);
   // Wire ids are kept when present; id-less calls draw call_0, call_1,…
   // (docs/decisions.md "v1.1 Task 3" convention).
   const ids = sequentialIds();
@@ -114,6 +155,10 @@ export function toCanonicalRequest(
       ...(opts.stop && { stopSequences: opts.stop }),
       ...(opts.seed !== undefined && { seed: opts.seed }),
     };
+  }
+
+  if (reasoning !== undefined) {
+    result.config = { ...(result.config ?? {}), reasoning };
   }
 
   // Ollama's /api/chat streams NDJSON unless the client sends

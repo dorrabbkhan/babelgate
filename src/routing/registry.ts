@@ -38,6 +38,13 @@ export interface ProviderEntry {
    * (openai/ollama targets only, spec §3.3) — opt-in, default off.
    */
   reasoningPassback?: boolean;
+  /**
+   * Honour the client's reasoning request config for this provider
+   * (v1.5 spec §3.1) — absent means true; `false` restores v1.4:
+   * the mapped config is stripped before encode with the source's
+   * v1.4 note.
+   */
+  reasoning?: boolean;
   timeoutMs?: number;
   streamIdleMs?: number;
 }
