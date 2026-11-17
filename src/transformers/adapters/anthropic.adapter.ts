@@ -113,21 +113,28 @@ type CanonicalReasoning = NonNullable<
 
 /**
  * `thinking` + `output_config.effort` → `config.reasoning` (v1.5
- * spec §3.1). `{type:"enabled", budget_tokens}` maps the budget to
- * the nearest lower ladder level and keeps it; `{type:"adaptive"}`
- * maps `output_config.effort` (Anthropic's level field per the SDK's
+ * spec §3.1; field shapes per
+ * https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+ * and
+ * https://platform.claude.com/docs/en/build-with-claude/effort).
+ * `{type:"enabled", budget_tokens}` maps the budget to the nearest
+ * lower ladder level and keeps it; `{type:"adaptive"}` maps
+ * `output_config.effort` (Anthropic's level field per the SDK's
  * OutputConfig — `"max"` lowers to the canonical ceiling `xhigh`,
  * the Responses decoder's convention); `{type:"disabled"}` maps to
  * `none`. Every other shape — an unknown `type`, `enabled` without
- * a numeric budget, `adaptive` without a level, non-object values —
- * keeps the v1.4 `thinking_dropped` note.
+ * a numeric budget, `adaptive` without a level, `null` and other
+ * non-object values — keeps the v1.4 `thinking_dropped` note.
  */
 function toCanonicalReasoning(
   request: MessageCreateParams,
 ): CanonicalReasoning | undefined {
   const thinking = request.thinking;
-  if (thinking === undefined || thinking === null) return undefined;
-  const t = thinking as { type?: unknown; budget_tokens?: unknown };
+  if (thinking === undefined) return undefined;
+  const t =
+    typeof thinking === "object" && thinking !== null
+      ? (thinking as { type?: unknown; budget_tokens?: unknown })
+      : {};
   if (t.type === "disabled") return { effort: "none" };
   if (t.type === "enabled" && typeof t.budget_tokens === "number") {
     return {

@@ -5789,8 +5789,9 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   its own wire shape).
 - **Ambiguities resolved.** (a) `adaptive` without `output_config.effort`
   and every other unmapped `thinking` shape (`enabled` without a numeric
-  budget, `between_tools`, non-objects) keep the v1.4 `thinking_dropped`
-  note — §3.1's table maps only the named shapes. (b) `"max"` effort
+  budget, `between_tools`, `null` and other non-object values) keep the
+  v1.4 `thinking_dropped` note — §3.1's table maps only the named
+  shapes. (b) `"max"` effort
   (present in both SDK vocabularies: `OutputConfig.effort` and
   `Shared.ReasoningEffort`) lowers to `xhigh` with the Responses
   decoder's `reasoning_effort_lowered` convention; other unknown levels
@@ -5801,6 +5802,19 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   v1.4, so none is recorded for them. (d) The `/ui` playground path
   (`canonical-stream.service.ts`) passes no policy source — a canonical
   request's own `config.reasoning` stays honoured, matching v1.4.
+- **Evidence (fix round 1).** Every reasoning field name cited against
+  the provider's doc: Anthropic `thinking` —
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking;
+  Anthropic `output_config.effort` —
+  https://platform.claude.com/docs/en/build-with-claude/effort; OpenAI
+  Chat `reasoning_effort` —
+  https://platform.openai.com/docs/api-reference/chat/create#chat-create-reasoning_effort;
+  Gemini `thinkingConfig` —
+  https://ai.google.dev/api/generate-content#ThinkingConfig; Ollama
+  `think` — https://docs.ollama.com/capabilities/thinking. The
+  `xhigh`/`max` level values were confirmed in the installed SDK types
+  (`@anthropic-ai/sdk` `messages.d.ts` `OutputConfig.effort`; `openai`
+  `shared.d.ts` `ReasoningEffort`).
 - **`reasoning: false` (D6 opt-out).** New optional `reasoning` key on
   provider entries (`gateway.schema.ts` `z.boolean().optional()`, absent
   = true) → `ProviderEntry.reasoning` →

@@ -58,7 +58,9 @@ type CanonicalReasoning = NonNullable<
 >;
 
 /**
- * `reasoning_effort` → `config.reasoning.effort` (v1.5 spec §3.1).
+ * `reasoning_effort` → `config.reasoning.effort` (v1.5 spec §3.1;
+ * field per
+ * https://platform.openai.com/docs/api-reference/chat/create#chat-create-reasoning_effort).
  * The shared OpenAI vocabulary (ReasoningEffort in shared.d.ts) is
  * the canonical ladder plus `"max"`, which has no canonical slot →
  * `xhigh` with a note (the Responses decoder's convention); an

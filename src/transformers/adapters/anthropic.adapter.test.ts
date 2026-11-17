@@ -1550,6 +1550,55 @@ describe('Anthropic Adapter', () => {
       });
     });
 
+    it('thinking: null records thinking_dropped', () => {
+      const input = {
+        model: 'claude-sonnet-5',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        thinking: null,
+      } as unknown as MessageCreateParams;
+
+      let canonical: ReturnType<typeof toCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        canonical = toCanonicalRequest(input);
+      });
+
+      expect(canonical?.config?.reasoning).toBeUndefined();
+      expect(trace.notes).toEqual([
+        {
+          stage: 'decode',
+          adapter: 'anthropic',
+          code: 'thinking_dropped',
+          path: 'thinking',
+        },
+      ]);
+    });
+
+    it('adaptive thinking with output_config effort max lowers to xhigh with a note', () => {
+      const input = {
+        model: 'claude-sonnet-5',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'max' },
+      } as unknown as MessageCreateParams;
+
+      let canonical: ReturnType<typeof toCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        canonical = toCanonicalRequest(input);
+      });
+
+      expect(canonical?.config?.reasoning).toEqual({ effort: 'xhigh' });
+      expect(trace.notes).toEqual([
+        {
+          stage: 'decode',
+          adapter: 'anthropic',
+          code: 'reasoning_effort_lowered',
+          path: 'output_config.effort',
+        },
+      ]);
+    });
+
     it('metadata request field records metadata_dropped', () => {
       const input: MessageCreateParams = {
         model: 'claude-3-opus-20240229',
