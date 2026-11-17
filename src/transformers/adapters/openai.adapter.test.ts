@@ -108,6 +108,36 @@ describe('OpenAI Adapter', () => {
         });
       }
     });
+
+    it('returned reasoning_content dropped with note', () => {
+      // v1.5 spec §3.1 (Task 5) + conductor's call (b): a Chat
+      // client echoing `reasoning_content` on an assistant turn
+      // carries no origin — no encoder could send it — so the field
+      // drops with a `reasoning_dropped` note naming its path.
+      const input = {
+        model: 'gpt-4',
+        messages: [
+          { role: 'user', content: 'Hello' },
+          {
+            role: 'assistant',
+            content: 'the answer',
+            reasoning_content: 'hmm',
+          },
+          { role: 'user', content: 'again' },
+        ],
+      } as unknown as ChatCompletionRequest;
+
+      const trace = traced(() => {
+        const result = toCanonicalRequest(input);
+        expect(result.messages[1].content).toBe('the answer');
+      });
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'openai',
+        code: 'reasoning_dropped',
+        path: 'messages[1].reasoning_content',
+      });
+    });
   });
 
   describe('fromCanonicalRequest', () => {
@@ -466,9 +496,11 @@ describe('OpenAI Adapter', () => {
       expect(result.id).toMatch(/^chatcmpl-/);
     });
 
-    it('openai client gets the text when the upstream reasons', () => {
-      // Task 8 fix: a parts array may carry reasoning — an OpenAI
-      // client receives only the joined text parts.
+    it('chat client receives reasoning_content', () => {
+      // v1.5 spec §3.1 (Task 5): a parts array's reasoning parts
+      // reach the Chat client as `message.reasoning_content` — the
+      // DeepSeek/OpenRouter field — joined "\n\n"; the text parts
+      // stay in `content`.
       const result = fromCanonicalResponse({
         id: 'chatcmpl-r',
         model: 'm',
@@ -483,15 +515,49 @@ describe('OpenAI Adapter', () => {
               },
             },
             { type: 'text', text: 'the answer' },
+            {
+              type: 'reasoning',
+              reasoning: {
+                text: 'second thought',
+                origin: { provider: '', model: 'm' },
+              },
+            },
           ],
         },
         finishReason: 'stop',
       });
 
       expect(result.choices[0].message.content).toBe('the answer');
-      const body = JSON.stringify(result);
-      expect(body).not.toContain('hmm');
-      expect(body).not.toContain('reasoning_content');
+      expect(
+        (result.choices[0].message as { reasoning_content?: string })
+          .reasoning_content,
+      ).toBe('hmm\n\nsecond thought');
+    });
+
+    it('redacted reasoning not emitted as text', () => {
+      // A redacted reasoning part carries no readable text — the
+      // client gets the answer and no `reasoning_content`.
+      const result = fromCanonicalResponse({
+        id: 'chatcmpl-rx',
+        model: 'm',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'reasoning',
+              reasoning: {
+                redacted: true,
+                origin: { provider: '', model: 'm' },
+              },
+            },
+            { type: 'text', text: 'the answer' },
+          ],
+        },
+        finishReason: 'stop',
+      });
+
+      expect(result.choices[0].message.content).toBe('the answer');
+      expect(JSON.stringify(result)).not.toContain('reasoning_content');
     });
 
     it('openai client gets the text of a signed text part', () => {

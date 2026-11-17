@@ -4,31 +4,22 @@ import type { CanonicalStreamEvent } from "../../src/types/canonical.types";
 import { unpackEnvelope } from "../../src/transformers/reasoning-envelope";
 
 /**
- * Global Constraints / spec §3.3: non-Responses clients receive no
- * reasoning. Every target encoder drops reasoning_start /
- * reasoning_delta / reasoning_signature — a stream carrying them must
- * encode byte-identically to the same stream without them.
+ * Global Constraints / spec §3.3: reasoning events never produce
+ * signature bytes on a client that has no signature field.
  *
  * v1.5 Task 4 (owner note, docs/conductor/notes/v1.5/task4.md):
  * Anthropic and Gemini encoders now emit reasoning — as a thinking
  * block / signature_delta and a `{text, thought: true}` part
- * respectively — so they leave the mid-stream case below for exact
- * byte-asserting twins in this file. Fix round: the text_signature
- * case now also excludes Anthropic — a signature closes the signed
- * text block and rides a trailing envelope, asserted exactly in its
- * own case below; for the rest a signature with no carrier still
- * produces no wire bytes.
+ * respectively — so they left the mid-stream byte-identical case for
+ * exact byte-asserting twins in this file.
+ *
+ * v1.5 Task 5 (spec §3.1): Chat and Ollama encoders now emit
+ * reasoning text too — `delta.reasoning_content` chunks and
+ * `message.thinking` fragments — so they also left the mid-stream
+ * byte-identical case (now gone entirely) for exact byte-asserting
+ * twins below. Signatures still have no Chat or Ollama field: a
+ * signature with no carrier produces no wire bytes on every client.
  */
-
-const PROVIDERS: Provider[] = [
-  "openai",
-  "anthropic",
-  "gemini",
-  "ollama",
-];
-
-/** Providers whose encoders still emit no reasoning bytes. */
-const TEXT_ONLY_PROVIDERS: Provider[] = ["openai", "ollama"];
 
 /**
  * Providers where a `text_signature` produces no wire bytes. Fix round
@@ -97,49 +88,6 @@ describe("stream encoders drop reasoning events", () => {
   // Ollama stamps each chunk with the wall clock; freeze it so the two
   // encodes compare byte-for-byte.
   afterEach(() => vi.useRealTimers());
-
-  it.each(TEXT_ONLY_PROVIDERS)(
-    "%s: reasoning block mid-stream leaves the wire bytes unchanged",
-    (provider) => {
-      vi.useFakeTimers();
-      vi.setSystemTime(new Date("2026-11-13T00:00:00Z"));
-      const signature = {
-        origin: { provider: "p", model: "m" },
-        data: "OPAQUE",
-      };
-      const plain: CanonicalStreamEvent[] = [
-        { type: "message_start", id: "msg_1", model: "m" },
-        { type: "text_delta", text: "Hello " },
-        { type: "text_delta", text: "world" },
-        {
-          type: "usage",
-          usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
-        },
-        { type: "message_end", finishReason: "stop" },
-      ];
-      const withReasoning: CanonicalStreamEvent[] = [
-        { type: "message_start", id: "msg_1", model: "m" },
-        { type: "text_delta", text: "Hello " },
-        {
-          type: "reasoning_start",
-          index: 0,
-          origin: { provider: "p", model: "m" },
-        },
-        { type: "reasoning_delta", index: 0, text: "think" },
-        { type: "reasoning_signature", index: 0, signature },
-        { type: "text_delta", text: "world" },
-        {
-          type: "usage",
-          usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
-        },
-        { type: "message_end", finishReason: "stop" },
-      ];
-
-      expect(encode(provider, withReasoning)).toBe(
-        encode(provider, plain),
-      );
-    },
-  );
 
   it.each(SIG_NO_WIRE_PROVIDERS)(
     "%s: client encoders ignore text_signature",
@@ -304,6 +252,112 @@ describe("stream encoders drop reasoning events", () => {
       { text: "Hello " },
     ]);
     expect(frames[2].candidates[0].finishReason).toBe("STOP");
+  });
+
+  // ── v1.5 Task 5 (spec §3.1): Chat and Ollama now carry reasoning
+  // text to the client — exact emitted bytes asserted like the Task 4
+  // twins above; the signature still has no field on either format. ──
+
+  it("openai: reasoning block streams as reasoning_content deltas, signature never emitted", () => {
+    const origin = { provider: "p", model: "m" };
+    const signature = {
+      origin: { provider: "p", model: "m" },
+      data: "OPAQUE",
+    };
+    const out = encode("openai", [
+      { type: "message_start", id: "msg_1", model: "m" },
+      { type: "text_delta", text: "Hello " },
+      { type: "reasoning_start", index: 0, origin },
+      { type: "reasoning_delta", index: 0, text: "think" },
+      { type: "reasoning_signature", index: 0, signature },
+      { type: "text_delta", text: "world" },
+      {
+        type: "usage",
+        usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      },
+      { type: "message_end", finishReason: "stop" },
+    ]);
+
+    // Exact deltas in order: role chunk, content, the reasoning text
+    // as `delta.reasoning_content`, content, the include_usage
+    // `choices: []` frame, then the finish chunk — no signature bytes.
+    const frames = [...out.matchAll(/data: (\{.*\})/g)].map((m) =>
+      JSON.parse(m[1]),
+    );
+    expect(frames).toHaveLength(6);
+    expect(
+      frames.map((f) => f.choices[0]?.delta),
+    ).toEqual([
+      { role: "assistant", content: "" },
+      { content: "Hello " },
+      { reasoning_content: "think" },
+      { content: "world" },
+      undefined,
+      {},
+    ]);
+    expect(frames[4].choices).toEqual([]);
+    expect(frames[4].usage).toEqual({
+      prompt_tokens: 3,
+      completion_tokens: 4,
+      total_tokens: 7,
+    });
+    expect(frames[5].choices[0].finish_reason).toBe("stop");
+    expect(out).toContain("data: [DONE]");
+    expect(out).not.toContain("OPAQUE");
+  });
+
+  it("ollama: reasoning block streams as message.thinking fragments, signature never emitted", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-13T00:00:00Z"));
+    const origin = { provider: "p", model: "m" };
+    const signature = {
+      origin: { provider: "p", model: "m" },
+      data: "OPAQUE",
+    };
+    const out = encode("ollama", [
+      { type: "message_start", id: "msg_1", model: "m" },
+      { type: "text_delta", text: "Hello " },
+      { type: "reasoning_start", index: 0, origin },
+      { type: "reasoning_delta", index: 0, text: "think" },
+      { type: "reasoning_signature", index: 0, signature },
+      { type: "text_delta", text: "world" },
+      {
+        type: "usage",
+        usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      },
+      { type: "message_end", finishReason: "stop" },
+    ]);
+
+    // Exact NDJSON messages in order: content, the reasoning text as
+    // `message.thinking`, content, then the done line — no signature
+    // bytes.
+    const lines = out
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines).toHaveLength(4);
+    expect(
+      lines.map((l) => l.message),
+    ).toEqual([
+      { role: "assistant", content: "Hello " },
+      { role: "assistant", content: "", thinking: "think" },
+      { role: "assistant", content: "world" },
+      { role: "assistant", content: "" },
+    ]);
+    expect(lines[3]).toEqual({
+      model: "m",
+      created_at: "2026-11-13T00:00:00.000Z",
+      message: { role: "assistant", content: "" },
+      done: true,
+      done_reason: "stop",
+      total_duration: 0,
+      load_duration: 0,
+      prompt_eval_count: 3,
+      prompt_eval_duration: 0,
+      eval_count: 4,
+      eval_duration: 0,
+    });
+    expect(out).not.toContain("OPAQUE");
   });
 
   it("anthropic: text_signature closes the text block and rides a trailing envelope", () => {

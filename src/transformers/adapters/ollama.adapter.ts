@@ -115,23 +115,46 @@ export function toCanonicalRequest(
   // api.md "Chat request (With history, with tools)"); pair each one
   // with the earliest unconsumed earlier call of that name (FIFO).
   const pendingByName: PendingCallIds = new Map();
-  const messages: CanonicalMessage[] = (request.messages || []).map((m) => {
-    const out: CanonicalMessage = {
-      role: m.role as CanonicalMessage["role"],
-      content: extractContent(m),
-    };
-    const wireCalls = m.tool_calls as OllamaWireToolCall[] | undefined;
-    if (wireCalls && wireCalls.length > 0) {
-      out.toolCalls = toCanonicalToolCalls(wireCalls, ids);
-      for (const tc of out.toolCalls) {
-        recordCallId(pendingByName, tc.function.name, tc.id);
+  const messages: CanonicalMessage[] = (request.messages || []).map(
+    (m, messageIndex) => {
+      const out: CanonicalMessage = {
+        role: m.role as CanonicalMessage["role"],
+        content: extractContent(m),
+      };
+      // v1.5 spec §3.1 (Task 5) + conductor's call (b): a
+      // client-echoed `thinking` (docs.ollama.com/api/chat — the
+      // field our replies now carry) arrives with no origin — no
+      // encoder could ever send it — so it drops with a
+      // `reasoning_dropped` note naming the path.
+      if (
+        m.role === "assistant" &&
+        typeof m.thinking === "string" &&
+        m.thinking !== ""
+      ) {
+        recordNote(
+          {
+            stage: "decode",
+            adapter: "ollama",
+            code: "reasoning_dropped",
+            path: `messages[${messageIndex}].thinking`,
+          },
+          'Dropping "thinking" on an assistant message (no origin — it can never be sent on)',
+        );
       }
-    }
-    if (typeof m.tool_name === "string" && m.tool_name.length > 0) {
-      out.toolCallId = resolveCallId(pendingByName, m.tool_name) ?? m.tool_name;
-    }
-    return out;
-  });
+      const wireCalls = m.tool_calls as OllamaWireToolCall[] | undefined;
+      if (wireCalls && wireCalls.length > 0) {
+        out.toolCalls = toCanonicalToolCalls(wireCalls, ids);
+        for (const tc of out.toolCalls) {
+          recordCallId(pendingByName, tc.function.name, tc.id);
+        }
+      }
+      if (typeof m.tool_name === "string" && m.tool_name.length > 0) {
+        out.toolCallId =
+          resolveCallId(pendingByName, m.tool_name) ?? m.tool_name;
+      }
+      return out;
+    },
+  );
 
   // Extract system prompt from first system message
   const systemMsg = messages.find((m) => m.role === "system");
@@ -549,16 +572,43 @@ export function toCanonicalResponse(
 export function fromCanonicalResponse(
   response: CanonicalResponse,
 ): OllamaChatResponse {
-  // A parts array may carry reasoning and signatures — an Ollama
-  // client never receives them, so only text parts are rendered.
+  // v1.5 spec §3.1 (Task 5): non-redacted reasoning parts reach the
+  // Ollama client as `message.thinking` (text joined "\n\n") — the
+  // field thinking models answer with (docs.ollama.com/api/chat,
+  // docs.ollama.com/capabilities/thinking). Redacted parts carry no
+  // readable text — nothing to emit. Signatures have no Ollama field
+  // and are never emitted; their drop is noted.
+  const parts =
+    typeof response.message.content === "string"
+      ? []
+      : (response.message.content ?? []);
+  const thinkingTexts: string[] = [];
+  for (const part of parts) {
+    if (part.signature !== undefined) {
+      noteSignatureDrop();
+    }
+    if (
+      part.type === "reasoning" &&
+      part.reasoning?.redacted !== true &&
+      part.reasoning?.text !== undefined &&
+      part.reasoning.text !== ""
+    ) {
+      thinkingTexts.push(part.reasoning.text);
+    }
+  }
   const content =
     typeof response.message.content === "string"
       ? response.message.content
-      : (response.message.content ?? [])
+      : parts
           .filter((p) => p.type === "text")
           .map((p) => p.text)
           .join("");
   const toolCalls = response.message.toolCalls;
+  for (const tc of toolCalls ?? []) {
+    if (tc.signature !== undefined) {
+      noteSignatureDrop();
+    }
+  }
   // "stop" covers canonical "tool_call": recorded Ollama answers that
   // end in tool calls report done_reason "stop".
   const stopped =
@@ -571,6 +621,9 @@ export function fromCanonicalResponse(
     message: {
       role: "assistant",
       content,
+      ...(thinkingTexts.length > 0 && {
+        thinking: thinkingTexts.join("\n\n"),
+      }),
       ...(toolCalls &&
         toolCalls.length > 0 && {
           tool_calls: toOllamaToolCalls(toolCalls),
@@ -585,6 +638,19 @@ export function fromCanonicalResponse(
     eval_count: response.usage?.outputTokens ?? 0,
     eval_duration: 0,
   } as OllamaChatResponse;
+}
+
+/** Signatures never reach an Ollama client (no field carries them). */
+function noteSignatureDrop(): void {
+  recordNote(
+    {
+      stage: "encode",
+      adapter: "ollama",
+      code: "reasoning_dropped",
+      path: "signature",
+    },
+    "Dropping signature (no Ollama equivalent)",
+  );
 }
 
 // ============ MODEL LIST (/api/tags) ============

@@ -13,6 +13,7 @@ import { makeCanonicalError } from "../../utils/canonical-error";
 import { parseToolArguments } from "../../utils/tool-args";
 import { createLineSplitter, createUtf8Decoder } from "../../utils/sse";
 import { logger } from "../../utils/logger";
+import { recordNote } from "../../observe/context";
 import { decodeOrigin } from "../reasoning-origin";
 import { fromCanonicalError, toCanonicalError } from "./ollama.adapter";
 
@@ -234,6 +235,9 @@ export function createStreamEncoder(
   let finished = false;
   let usage: CanonicalUsage | undefined;
   const calls = new Map<number, { id: string; name: string; args: string }>();
+  // v1.5 spec §3.1 (Task 5): redacted reasoning blocks emit nothing —
+  // their indices are remembered so a stray delta is suppressed too.
+  const redactedReasoning = new Set<number>();
 
   const line = (obj: unknown): string => `${JSON.stringify(obj)}\n`;
   const chunk = (message: Obj): string =>
@@ -287,13 +291,32 @@ export function createStreamEncoder(
             content: event.text,
           });
         case "reasoning_start":
+          // v1.5 spec §3.1 (Task 5): a reasoning block streams as
+          // `message.thinking` fragments — the field thinking models
+          // answer with (docs.ollama.com/api/chat,
+          // docs.ollama.com/capabilities/thinking). The block itself
+          // is just a marker until its deltas arrive.
+          if (event.redacted === true) {
+            redactedReasoning.add(event.index);
+          }
+          return "";
         case "reasoning_delta":
+          if (redactedReasoning.has(event.index)) return "";
+          return chunk({
+            role: "assistant",
+            content: "",
+            thinking: event.text,
+          });
         case "reasoning_signature":
         case "text_signature":
-          // v1.4 §3.3: reasoning replay to this target lands in a
-          // later task; reasoning a target can't take is dropped.
+          // Signatures have no Ollama field — never emitted (spec
+          // §3.1, "Signatures never emitted"); the drop is noted.
+          noteSignatureDrop();
           return "";
         case "tool_call_start":
+          if (event.signature !== undefined) {
+            noteSignatureDrop();
+          }
           calls.set(event.index, {
             id: event.id,
             name: event.name,
@@ -367,4 +390,17 @@ export function createStreamEncoder(
       return "";
     },
   };
+}
+
+/** Signatures never reach an Ollama client (no field carries them). */
+function noteSignatureDrop(): void {
+  recordNote(
+    {
+      stage: "encode",
+      adapter: "ollama",
+      code: "reasoning_dropped",
+      path: "signature",
+    },
+    "Dropping signature (no Ollama equivalent)",
+  );
 }

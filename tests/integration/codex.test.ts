@@ -1833,11 +1833,12 @@ routes:
     expect(gem3).not.toContain("anthropic thinks");
   });
 
-  it("openai client via gemini keeps the answer text", async () => {
-    // Task 8 fix round 1: a Gemini upstream reply that carries a
+  it("openai client via gemini receives reasoning_content and the answer text", async () => {
+    // v1.5 spec §3.1 (Task 5): a Gemini upstream reply that carries a
     // thought part and a signed text part decodes to a parts array —
-    // the OpenAI client gets the joined text parts only (this bug was
-    // already on main via the Task 7/7a Gemini decode path).
+    // the OpenAI client gets the thought text in
+    // `message.reasoning_content` and the signed part's text in
+    // `content`; the signature is never emitted.
     process.env.GEMINI_API_KEY = "test-key";
     useTarget("gemini", REASONING_YAML);
     responseOverrides.gemini = {
@@ -1867,9 +1868,10 @@ routes:
       });
     expect(res.status, JSON.stringify(res.body)).toBe(200);
     expect(res.body.choices[0].message.content).toBe("the answer");
-    const body = JSON.stringify(res.body);
-    expect(body).not.toContain("thinking…");
-    expect(body).not.toContain("SIG");
+    expect(res.body.choices[0].message.reasoning_content).toBe(
+      "thinking…",
+    );
+    expect(JSON.stringify(res.body)).not.toContain("SIG");
   });
 
   it("envelope over cap is omitted with a note (request)", async () => {
