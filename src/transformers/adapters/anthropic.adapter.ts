@@ -9,6 +9,7 @@ import type {
   CanonicalModelList,
   CanonicalResponseFormat,
   CanonicalToolCall,
+  CanonicalContentPart,
   ProviderAdapter,
 } from "../../types/canonical.types";
 import {
@@ -29,6 +30,10 @@ import {
   signatureMatchesCurrent,
 } from "../reasoning-origin";
 import {
+  packEnvelope,
+  type EnvelopePayload,
+} from "../reasoning-envelope";
+import {
   DEFAULT_RESPONSE_FORMAT_NAME,
   isSchemaObject,
   noteDroppedFormatExtras,
@@ -37,6 +42,7 @@ import type {
   MessageCreateParams,
   Message,
   ContentBlock,
+  ContentBlockParam,
   ToolResultBlockParam,
 } from "../../types/anthropic.types";
 import {
@@ -782,26 +788,136 @@ export function mapFinishReason(
 // ============ RESPONSE: Canonical → Anthropic ============
 
 export function fromCanonicalResponse(response: CanonicalResponse): Message {
-  // Task 7: a parts array may carry reasoning — an Anthropic client
-  // never receives thinking, so only text parts are rendered.
-  const text =
-    typeof response.message.content === "string"
-      ? response.message.content
-      : (response.message.content ?? [])
-          .filter((p) => p.type === "text")
-          .map((p) => p.text)
-          .join("");
+  // v1.5 spec §3.1 (Task 4) + conductor's call (a): reasoning reaches
+  // the Anthropic client inside the `bg1.` envelope — each thinking
+  // block's `signature` packs its reasoning part (real signature
+  // included, inside the envelope) plus the tool-call and text
+  // signatures up to the next reasoning part. A turn with signatures
+  // but no reasoning part gets one `thinking{""}` block first.
+  const message = response.message;
+  const parts: CanonicalContentPart[] =
+    typeof message.content === "string"
+      ? message.content === ""
+        ? []
+        : [{ type: "text", text: message.content }]
+      : (message.content ?? []);
 
-  // Text comes before tool_use blocks (spec §3.4).
-  const content: Array<
-    | { type: "text"; text: string }
-    | { type: "tool_use"; id: string; name: string; input: unknown }
-  > = [];
-  if (text) {
-    content.push({ type: "text", text });
+  const sigAt: {
+    pos: number;
+    entry: EnvelopePayload["signatures"][number];
+  }[] = [];
+  let textIndex = 0;
+  for (const [i, part] of parts.entries()) {
+    if (part.type === "text") {
+      if (part.signature !== undefined) {
+        sigAt.push({
+          pos: i,
+          entry: { textIndex, signature: part.signature },
+        });
+      }
+      textIndex++;
+    } else if (
+      part.type !== "reasoning" &&
+      part.signature !== undefined
+    ) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "anthropic",
+          code: "reasoning_dropped",
+          path: "signature",
+        },
+        "Dropping a signature on a non-text part (no Anthropic field carries it)",
+      );
+    }
   }
-  for (const tc of response.message.toolCalls ?? []) {
-    content.push(toToolUseBlock(tc));
+  for (const tc of message.toolCalls ?? []) {
+    if (tc.signature !== undefined) {
+      sigAt.push({
+        pos: parts.length,
+        entry: { toolCallId: tc.id, signature: tc.signature },
+      });
+    }
+  }
+
+  const reasoningAt = parts
+    .map((p, i) => (p.type === "reasoning" ? i : -1))
+    .filter((i) => i >= 0);
+  const segmentSigs = (
+    after: number,
+    before: number,
+  ): EnvelopePayload["signatures"] =>
+    sigAt
+      .filter((s) => s.pos > after && s.pos < before)
+      .map((s) => s.entry);
+  const leading = sigAt
+    .filter(
+      (s) => reasoningAt.length === 0 || s.pos < reasoningAt[0],
+    )
+    .map((s) => s.entry);
+
+  const noteOversize = () =>
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "anthropic",
+        code: "reasoning_dropped",
+        path: "reasoning",
+      },
+      "Dropping a thinking block's signature (envelope over the 1 MiB cap)",
+    );
+
+  const content: ContentBlockParam[] = [];
+
+  if (leading.length > 0) {
+    const env = packEnvelope({
+      v: 1,
+      reasoning: [],
+      signatures: leading,
+    });
+    if (env === undefined) noteOversize();
+    content.push({
+      type: "thinking",
+      thinking: "",
+      signature: env ?? "",
+    });
+  }
+
+  for (const [i, part] of parts.entries()) {
+    if (part.type === "text") {
+      content.push({ type: "text", text: part.text ?? "" });
+      continue;
+    }
+    if (part.type === "reasoning" && part.reasoning) {
+      const next =
+        reasoningAt[
+          reasoningAt.indexOf(i) + 1
+        ] ?? Number.POSITIVE_INFINITY;
+      const env = packEnvelope({
+        v: 1,
+        reasoning: [part],
+        signatures: segmentSigs(i, next),
+      });
+      if (env === undefined) noteOversize();
+      if (part.reasoning.redacted === true) {
+        content.push({
+          type: "redacted_thinking",
+          data: env ?? "",
+        });
+      } else {
+        content.push({
+          type: "thinking",
+          thinking: part.reasoning.text ?? "",
+          signature: env ?? "",
+        });
+      }
+      continue;
+    }
+  }
+  for (const tc of message.toolCalls ?? []) {
+    // The call's signature rides the turn's envelopes, so the wire
+    // block itself carries no signature note.
+    content.push(toToolUseBlock(tc, { noteSignature: false }));
   }
   if (content.length === 0) {
     content.push({ type: "text", text: "" });
@@ -811,7 +927,7 @@ export function fromCanonicalResponse(response: CanonicalResponse): Message {
     id: response.id || `msg_${randomUUID()}`,
     type: "message",
     role: "assistant",
-    content: content as Message["content"],
+    content: content as unknown as Message["content"],
     model: response.model,
     stop_reason: mapToAnthropicStopReason(response.finishReason),
     stop_sequence: null,

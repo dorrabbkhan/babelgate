@@ -6,8 +6,9 @@ import {
   toCanonicalResponse,
   fromCanonicalResponse,
 } from './gemini.adapter';
-import type { CanonicalRequest, CanonicalResponse } from '../../types/canonical.types';
+import type { CanonicalContentPart, CanonicalRequest, CanonicalResponse } from '../../types/canonical.types';
 import type { GenerateContentRequest, GenerateContentResponse, Content, FunctionResponsePart } from '../../types/gemini.types';
+import { unpackEnvelope } from '../reasoning-envelope';
 import { sequentialIds } from '../../utils/ids';
 import { ValidationError } from '../../utils/errors';
 import { fromCanonicalRequest as anthropicFromCanonical } from './anthropic.adapter';
@@ -1666,29 +1667,182 @@ describe('cache hints on tool results (Task 17a)', () => {
       });
     });
 
-    it('gemini client never receives thought parts', () => {
+    it('gemini client receives thought parts with envelope', () => {
+      // v1.5 §3.1 + conductor's call (a): reasoning reaches the
+      // Gemini client inside the `bg1.` envelope on the first
+      // thought part's `thoughtSignature`.
+      const reasoningPart: CanonicalContentPart = {
+        type: 'reasoning',
+        reasoning: { text: 'hmm', origin: ORIGIN },
+        signature: { origin: ORIGIN, data: 'sig_1' },
+      };
       const canonical: CanonicalResponse = {
         id: 'r1',
         model: 'gemini-2.5-flash',
         finishReason: 'stop',
         message: {
           role: 'assistant',
-          content: [
-            {
-              type: 'reasoning',
-              reasoning: { text: 'hmm', origin: ORIGIN },
-              signature: { origin: ORIGIN, data: 'sig_1' },
-            },
-            { type: 'text', text: 'answer' },
-          ],
+          content: [reasoningPart, { type: 'text', text: 'answer' }],
         },
       };
 
       const wire = fromCanonicalResponse(canonical);
 
-      expect(wire.candidates?.[0]?.content?.parts).toEqual([
-        { text: 'answer' },
-      ]);
+      const parts = wire.candidates?.[0]?.content?.parts as [
+        { text: string; thought: boolean; thoughtSignature: string },
+        { text: string },
+      ];
+      expect(parts).toHaveLength(2);
+      expect(parts[0].text).toBe('hmm');
+      expect(parts[0].thought).toBe(true);
+      expect(unpackEnvelope(parts[0].thoughtSignature)).toEqual({
+        v: 1,
+        reasoning: [reasoningPart],
+        signatures: [],
+      });
+      expect(parts[1]).toEqual({ text: 'answer' });
+    });
+
+    it('gemini envelope round-trips to identical canonical parts', () => {
+      // Reply → client's next request → decode equals the original
+      // parts, signatures and tool-call signatures (Task 4).
+      const origin = { provider: 'p', model: 'm' };
+      const reasoningPart: CanonicalContentPart = {
+        type: 'reasoning',
+        reasoning: { text: 'hmm', origin },
+        signature: { origin, data: 'sig_r' },
+      };
+      const textPart: CanonicalContentPart = {
+        type: 'text',
+        text: 'answer',
+        signature: { origin, data: 'sig_t' },
+      };
+      const call = {
+        id: 'call_1',
+        type: 'function' as const,
+        function: { name: 'exec', arguments: '{"cmd":"ls"}' },
+        signature: { origin, data: 'sig_c' },
+      };
+      const canonical: CanonicalResponse = {
+        id: 'r1',
+        model: 'gemini-2.5-flash',
+        finishReason: 'tool_call',
+        message: {
+          role: 'assistant',
+          content: [reasoningPart, textPart],
+          toolCalls: [call],
+        },
+      };
+
+      const wire = fromCanonicalResponse(canonical);
+      const decoded = toCanonicalRequest({
+        contents: [
+          {
+            role: 'model',
+            parts: wire.candidates?.[0]?.content?.parts ?? [],
+          },
+        ],
+      } as unknown as GenerateContentRequest);
+
+      expect(decoded.messages[0].content).toEqual(
+        canonical.message.content,
+      );
+      expect(decoded.messages[0].toolCalls).toEqual(
+        canonical.message.toolCalls,
+      );
+    });
+
+    it('signatures with no thought part land on the first functionCall', () => {
+      const origin = { provider: 'p', model: 'm' };
+      const callSig = { origin, data: 'sig_c' };
+      const canonical: CanonicalResponse = {
+        id: 'r1',
+        model: 'gemini-2.5-flash',
+        finishReason: 'tool_call',
+        message: {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'exec', arguments: '{}' },
+              signature: callSig,
+            },
+          ],
+        },
+      };
+
+      const wire = fromCanonicalResponse(canonical);
+      const parts = wire.candidates?.[0]?.content?.parts as {
+        functionCall?: unknown;
+        thoughtSignature?: string;
+      }[];
+      expect(unpackEnvelope(parts[0].thoughtSignature ?? '')).toEqual({
+        v: 1,
+        reasoning: [],
+        signatures: [{ toolCallId: 'call_1', signature: callSig }],
+      });
+    });
+
+    it('raw thoughtSignature from client dropped with note', () => {
+      // Conductor's call (c): a raw non-`bg1.` thoughtSignature on the
+      // canonical path is dropped with `reasoning_dropped`.
+      const input = {
+        contents: [
+          {
+            role: 'model',
+            parts: [
+              {
+                text: 'thinking it over',
+                thought: true,
+                thoughtSignature: 'opaque-upstream-sig',
+              },
+              { text: 'answer' },
+            ],
+          },
+        ],
+      } as unknown as GenerateContentRequest;
+
+      let request: CanonicalRequest | undefined;
+      const trace = traced(() => {
+        request = toCanonicalRequest(input);
+      });
+
+      expect(request?.messages[0].content).toBe('answer');
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'gemini',
+        code: 'reasoning_dropped',
+        path: 'contents[0].parts[0].thoughtSignature',
+      });
+    });
+
+    it('thought part without an envelope drops with a note', () => {
+      const input = {
+        contents: [
+          {
+            role: 'model',
+            parts: [
+              { text: 'thinking it over', thought: true },
+              { text: 'answer' },
+            ],
+          },
+        ],
+      } as unknown as GenerateContentRequest;
+
+      let request: CanonicalRequest | undefined;
+      const trace = traced(() => {
+        request = toCanonicalRequest(input);
+      });
+
+      expect(request?.messages[0].content).toBe('answer');
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'gemini',
+        code: 'reasoning_dropped',
+        path: 'contents[0].parts[0].thoughtSignature',
+      });
     });
   });
 });

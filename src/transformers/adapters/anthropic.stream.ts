@@ -1,5 +1,7 @@
 import type {
   CanonicalFinishReason,
+  CanonicalReasoningOrigin,
+  CanonicalReasoningSignature,
   CanonicalStreamEvent,
   CanonicalUsage,
   IdGenerator,
@@ -19,6 +21,10 @@ import {
 import { logger } from "../../utils/logger";
 import { recordNote } from "../../observe/context";
 import { decodeOrigin } from "../reasoning-origin";
+import {
+  packEnvelope,
+  type EnvelopePayload,
+} from "../reasoning-envelope";
 import { estimateInputTokens } from "../../utils/token-estimate";
 import {
   fromCanonicalError,
@@ -372,6 +378,29 @@ export function createStreamEncoder(
   let usage: CanonicalUsage | undefined;
   const calls = new Map<number, { id: string; name: string; args: string }>();
 
+  // v1.5 §3.1 (Task 4): a reasoning block streams as a thinking block
+  // — content_block_start{thinking}, thinking_deltas, one
+  // signature_delta carrying the `bg1.` envelope (the part, its real
+  // signature, and any signatures that arrived since the previous
+  // reasoning block) before content_block_stop. A redacted part has
+  // no deltas: its envelope is the block's `data`, emitted whole at
+  // close. Signatures that never meet a reasoning block are dropped
+  // with `reasoning_dropped`.
+  interface ReasoningBlock {
+    index: number;
+    wireIndex?: number;
+    origin: CanonicalReasoningOrigin;
+    redacted: boolean;
+    text: string;
+    signature?: CanonicalReasoningSignature;
+  }
+  let openReasoning: ReasoningBlock | undefined;
+  const pendingSigs: EnvelopePayload["signatures"] = [];
+  // Mirrors reassembleStream: text_signature signs the current text
+  // part — the last one opened, or a fresh empty part — so textIndex
+  // counts text parts, not text deltas.
+  const textParts: { signed: boolean }[] = [];
+
   const sse = (type: string, data: Obj): string =>
     formatSse(JSON.stringify(data), type);
 
@@ -383,6 +412,90 @@ export function createStreamEncoder(
       type: "content_block_stop",
       index,
     });
+  }
+
+  function noteReasoningDropped(path: string, why: string): void {
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "anthropic",
+        code: "reasoning_dropped",
+        path,
+      },
+      why,
+    );
+  }
+
+  function envelopeFor(
+    block: ReasoningBlock,
+  ): EnvelopePayload {
+    return {
+      v: 1,
+      reasoning: [
+        {
+          type: "reasoning",
+          reasoning: {
+            text: block.text,
+            origin: block.origin,
+            ...(block.redacted && { redacted: true }),
+          },
+          ...(block.signature !== undefined && {
+            signature: block.signature,
+          }),
+        },
+      ],
+      signatures: pendingSigs.splice(0),
+    };
+  }
+
+  /** Emit the open reasoning block's close (or whole redacted block). */
+  function closeReasoning(): string {
+    const block = openReasoning;
+    if (block === undefined) return "";
+    openReasoning = undefined;
+    const env = packEnvelope(envelopeFor(block));
+    if (env === undefined) {
+      noteReasoningDropped(
+        "reasoning",
+        "Dropping a thinking block's signature (envelope over the 1 MiB cap)",
+      );
+    }
+    if (block.redacted) {
+      const index = nextBlockIndex++;
+      return (
+        sse("content_block_start", {
+          type: "content_block_start",
+          index,
+          content_block: { type: "redacted_thinking", data: env ?? "" },
+        }) +
+        sse("content_block_stop", {
+          type: "content_block_stop",
+          index,
+        })
+      );
+    }
+    return (
+      (env !== undefined
+        ? sse("content_block_delta", {
+            type: "content_block_delta",
+            index: block.wireIndex,
+            delta: { type: "signature_delta", signature: env },
+          })
+        : "") +
+      sse("content_block_stop", {
+        type: "content_block_stop",
+        index: block.wireIndex,
+      })
+    );
+  }
+
+  function dropPendingSigs(): void {
+    if (pendingSigs.length === 0) return;
+    pendingSigs.length = 0;
+    noteReasoningDropped(
+      "signature",
+      "Dropping signatures with no following reasoning block to carry them",
+    );
   }
 
   return {
@@ -405,7 +518,7 @@ export function createStreamEncoder(
             },
           });
         case "text_delta": {
-          let out = "";
+          let out = closeReasoning();
           if (openTextIndex === undefined) {
             openTextIndex = nextBlockIndex++;
             out += sse("content_block_start", {
@@ -413,6 +526,10 @@ export function createStreamEncoder(
               index: openTextIndex,
               content_block: { type: "text", text: "" },
             });
+          }
+          const last = textParts[textParts.length - 1];
+          if (last === undefined || last.signed) {
+            textParts.push({ signed: false });
           }
           return (
             out +
@@ -423,15 +540,89 @@ export function createStreamEncoder(
             })
           );
         }
-        case "reasoning_start":
-        case "reasoning_delta":
-        case "reasoning_signature":
-        case "text_signature":
-          // v1.4 §3.3: reasoning replay to this target lands in a
-          // later task; reasoning a target can't take is dropped.
+        case "reasoning_start": {
+          // A reasoning block closes the one before it and any open
+          // text block — Anthropic never overlaps content blocks.
+          const out = closeText() + closeReasoning();
+          if (event.redacted === true) {
+            // No thinking deltas: the block (and its envelope) emits
+            // whole when it closes.
+            openReasoning = {
+              index: event.index,
+              origin: event.origin,
+              redacted: true,
+              text: "",
+            };
+            return out;
+          }
+          const wireIndex = nextBlockIndex++;
+          openReasoning = {
+            index: event.index,
+            wireIndex,
+            origin: event.origin,
+            redacted: false,
+            text: "",
+          };
+          return (
+            out +
+            sse("content_block_start", {
+              type: "content_block_start",
+              index: wireIndex,
+              content_block: { type: "thinking", thinking: "" },
+            })
+          );
+        }
+        case "reasoning_delta": {
+          if (
+            openReasoning?.index !== event.index ||
+            openReasoning.redacted
+          )
+            return "";
+          openReasoning.text += event.text;
+          return sse("content_block_delta", {
+            type: "content_block_delta",
+            index: openReasoning.wireIndex,
+            delta: { type: "thinking_delta", thinking: event.text },
+          });
+        }
+        case "reasoning_signature": {
+          // The part's real signature rides inside the envelope —
+          // never on the wire (conductor's call (a)).
+          if (openReasoning?.index === event.index) {
+            openReasoning.signature = event.signature;
+          }
           return "";
+        }
+        case "text_signature": {
+          // Canonically the signed text part follows the open
+          // reasoning block, so the signature joins its envelope
+          // ("signatures up to the next reasoning part") — buffered,
+          // not a wire event; the block closes on the next delta.
+          const last = textParts[textParts.length - 1];
+          let index = textParts.length - 1;
+          if (last === undefined || last.signed) {
+            textParts.push({ signed: true });
+            index = textParts.length - 1;
+          } else {
+            last.signed = true;
+          }
+          pendingSigs.push({
+            textIndex: index,
+            signature: event.signature,
+          });
+          return "";
+        }
         case "tool_call_start": {
-          const out = closeText();
+          // The call's signature canonically follows the open
+          // reasoning block — buffered before the close drains the
+          // pending list into its envelope.
+          if (event.signature !== undefined) {
+            pendingSigs.push({
+              toolCallId: event.id,
+              signature: event.signature,
+            });
+          }
+          const out = closeReasoning() + closeText();
           calls.set(event.index, {
             id: event.id,
             name: event.name,
@@ -485,9 +676,12 @@ export function createStreamEncoder(
         case "usage":
           usage = event.usage;
           return "";
-        case "message_end":
+        case "message_end": {
           finished = true;
+          const out = closeReasoning();
+          dropPendingSigs();
           return (
+            out +
             closeText() +
             sse("message_delta", {
               type: "message_delta",
@@ -502,15 +696,20 @@ export function createStreamEncoder(
             }) +
             sse("message_stop", { type: "message_stop" })
           );
-        case "error":
+        }
+        case "error": {
           finished = true;
+          const out = closeReasoning();
+          dropPendingSigs();
           return (
+            out +
             closeText() +
             formatSse(
               JSON.stringify(fromCanonicalError(event.error)),
               "error",
             )
           );
+        }
       }
     },
     end() {

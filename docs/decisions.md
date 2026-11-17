@@ -5855,3 +5855,95 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   `"think":"low"`; with `reasoning: false` the upstream body had no
   `think` and the trace logged `thinking_dropped` (request/response in
   the PR).
+
+## v1.5 Task 4 — reasoning passback to Anthropic and Gemini clients via `bg1.` envelopes (spec §3.1)
+
+- **Scope.** Anthropic and Gemini *client* replies now carry reasoning:
+  canonical reasoning parts emit as `thinking`/`redacted_thinking`
+  blocks (Anthropic) and `{text, thought: true}` parts (Gemini), and
+  every signature rides a shared `bg1.` envelope
+  (`src/transformers/reasoning-envelope.ts`) instead of the raw
+  provider field. Client requests decode envelopes back into canonical
+  reasoning parts plus text/tool-call signatures; raw non-`bg1.`
+  carriers drop with `reasoning_dropped` and their content path.
+- **Conductor calls (owner notes `docs/conductor/notes/v1.5/task4.md`,
+  2026-11-17).** (a) Anthropic/Gemini canonical client replies use
+  `bg1.` envelopes even when the originating provider is Anthropic or
+  Gemini — raw signatures are only for pass-through (the
+  upstream-bound request encoders still emit same-origin signatures in
+  the provider's own fields). (c) A raw client-provided signature —
+  `thinking.signature`, `redacted_thinking.data`, or any part-level
+  `thoughtSignature` that is not a valid `bg1.` envelope — is dropped
+  with `reasoning_dropped`, never interpreted or relayed.
+- **Anthropic encode.** Each reasoning part's envelope holds that part
+  plus the text/tool-call signatures positioned after it and before
+  the next reasoning part ("signatures up to the next reasoning
+  part"). A turn with signatures but no reasoning emits one leading
+  `thinking` block with empty `thinking` carrying the envelope. An
+  envelope over the 1 MiB cap emits the block with an empty
+  `signature`/`data` and records `reasoning_dropped`
+  (`path:"reasoning"`). The stream encoder emits
+  `content_block_start{thinking}` → `thinking_delta`… → exactly one
+  `signature_delta` (the envelope) → `content_block_stop`, and a
+  redacted part as a `redacted_thinking` block whose `data` is the
+  envelope.
+- **Gemini encode.** The turn's envelope (all reasoning parts and
+  signatures) rides the first thought part's `thoughtSignature`, or
+  the first `functionCall` part's when there is no thought part —
+  matching how the Gemini API attaches `thoughtSignature` to the first
+  part of a turn. The stream encoder emits each closed reasoning block
+  as one `{text, thought:true}` part whose `thoughtSignature` is the
+  per-block envelope; a functionCall part carries buffered text
+  signatures plus its own in an envelope.
+- **D5 extension (owner-approved).** In
+  `tests/contracts/stream-reasoning-drop.test.ts` the
+  `it.each(PROVIDERS)` case `"%s: reasoning block mid-stream leaves
+  the wire bytes unchanged"` now iterates only `openai` and `ollama`
+  (`TEXT_ONLY_PROVIDERS`); Anthropic and Gemini were replaced by exact
+  tests asserting events/bytes and unpacked envelope contents. The
+  `text_signature` case is unchanged. Per the same note, existing
+  tests that pinned reasoning being dropped were changed only to
+  assert the new behaviour at least as exactly — none deleted, none
+  weakened.
+- **Changed tests (name · full path).**
+  - `"%s: reasoning block mid-stream leaves the wire bytes unchanged"` —
+    `tests/contracts/stream-reasoning-drop.test.ts` (provider list
+    `openai`/`ollama` only, per D5).
+  - Replaced (assert the new behaviour at least as exactly):
+    - `"thinking content block with envelope decodes to reasoning"`
+      (was `"thinking content block records thinking_dropped with its
+      path"`) — `src/transformers/adapters/anthropic.adapter.test.ts`
+    - `"anthropic client receives thinking with envelope signature"`
+      (was `"anthropic client never receives thinking"`) —
+      `src/transformers/adapters/anthropic.adapter.test.ts`
+    - `"gemini client receives thought parts with envelope"` (was
+      `"gemini client never receives thought parts"`) —
+      `src/transformers/adapters/gemini.adapter.test.ts`
+  - Added:
+    - `"anthropic: reasoning block streams as thinking deltas with an
+      envelope signature_delta"` and `"gemini: reasoning block streams
+      as a thought part with an envelope thoughtSignature"` —
+      `tests/contracts/stream-reasoning-drop.test.ts`
+    - `"raw anthropic signature from client dropped with note"`,
+      `"thinking text without an envelope drops with a note"`,
+      `"redacted_thinking with envelope decodes to a redacted
+      reasoning part"`, `"envelope round-trips to identical canonical
+      parts"`, `"turn with signatures but no reasoning gets a leading
+      empty thinking block"`, `"thinking_delta and signature_delta
+      encoded in order"`, `"fallback mid-session drops foreign
+      envelope"` — `src/transformers/adapters/anthropic.adapter.test.ts`
+    - `"gemini envelope round-trips to identical canonical parts"`,
+      `"signatures with no thought part land on the first
+      functionCall"`, `"raw thoughtSignature from client dropped with
+      note"`, `"thought part without an envelope drops with a note"` —
+      `src/transformers/adapters/gemini.adapter.test.ts`
+    - `"three-turn loop on a mocked Gemini thinking upstream carries
+      reasoning every turn"` —
+      `tests/integration/claude-code.test.ts`
+- **Files outside the Files block:** none. No fixture or contract
+  snapshot changed.
+- **Real-request evidence.** The mocked three-turn Claude Code loop in
+  `tests/integration/claude-code.test.ts` carries thought
+  parts/signatures through a Gemini-thinking upstream across turns
+  with no `reasoning_dropped` in the trace. A live request/response
+  pair for the PR body needs provider keys — run by the conductor.
