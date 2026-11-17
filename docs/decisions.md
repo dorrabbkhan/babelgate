@@ -6332,3 +6332,117 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   block names no test files but the task requires them).
 - **Live check.** Real request/response against `npm run dev` with a
   local stub upstream — in the PR body.
+
+## v1.5 Task 8 — same-format pass-through for Anthropic and Chat; `passthrough:` key (spec §3.3, D6)
+
+- **Predicate.** `isPassthrough(source, entry)` is
+  `source === entry.type && (entry.type === "responses" ||
+  entry.passthrough === true)` — a `type: responses` entry relays
+  unconditionally (the v1.4 rule); an `anthropic`/`openai` entry
+  relays only when the new `passthrough` key opts it in. The flag
+  never crosses formats, and an absent key keeps every same-format
+  anthropic/openai route on the canonical path. Task 9's `preset`
+  will imply the key when it is absent; this task owns only the key.
+- **Schema scope.** `gateway.schema.ts` accepts `passthrough` only
+  on `type: anthropic` and `type: openai` provider entries — a
+  `responses` entry passes through anyway and no gemini/ollama relay
+  exists, so the key on any other type is a startup error naming the
+  field (the same strict-schema pattern as `api_key_env`).
+- **Request body.** `passthroughTargetBody` is the client's bytes
+  with `model` rewritten and the entry's own max-tokens field
+  carrying the clamp `maxTokensClampOf` computes: `max_output_tokens`
+  (responses), `max_tokens` (anthropic), and on chat whichever of
+  `max_completion_tokens`/`max_tokens` the client sent (`max_tokens`
+  when neither did). `stream_options.include_usage` and every other
+  field relay untouched.
+- **Relay refactor.** `passthrough-relay.ts` is now a dialect-neutral
+  SSE engine (`relayUpstreamStream` + `RelayDialect`): which events
+  carry a restorable `model`, which types are terminal/error, the
+  synthesized failure frame and an optional observation decoder come
+  from the dialect descriptor. The header relay policy, first-byte
+  fallback contract, idle timeout, abort handling, wire tap and
+  gzip sniffing are unchanged. `passthrough-dialects.ts` holds the
+  three descriptors: responses (the five lifecycle events, bare
+  `error`, `response.failed` synthesis — byte-identical to v1.4),
+  anthropic (`message.model` restored in `message_start` only,
+  `message_stop` terminal, `event: error`, `api_error` frame via the
+  adapter's own `fromCanonicalError`), chat (every chunk's `model`
+  restored, `data: [DONE]` terminal and verbatim, `{"error":{…}}`
+  frames, failure synthesis = the bridged encoder's error line +
+  `[DONE]`). Its `failedFrame`s go through each adapter's
+  `fromCanonicalError` / `toResponsesResponseObject`, so a mid-flight
+  failure reaches the client in exactly the shape the bridged
+  encoder emits.
+- **Observation.** `PassthroughObservation` gains `events?:
+  CanonicalStreamEvent[]`: the anthropic/chat relays feed every
+  relayed byte through the source's own stream decoder
+  (`createObserver`), so the trace's usage, finish reason and tool
+  calls come from the adapter's existing field map — no second
+  wire-format field map anywhere. Both decoders hold usage until the
+  wire terminator (`message_stop` / `[DONE]`), so a cut stream
+  contributes nothing. Responses keeps the v1.4 channel
+  (`terminal.response` through `toCanonicalResponse`); unary replies
+  of all three dialects decode through `adapters[entry.type]
+  .toCanonicalResponse`, wrapped so an unreadable relay body cannot
+  fail the response the client already has. Diagnostics run on the
+  decoded calls; `markPassthrough` still clears the routing decode's
+  notes and removes the `canonical` ring stage.
+- **Two engine fixes the dialects exposed.** (a) The drain loop now
+  checks the abort signal between SSE blocks — a multi-event
+  upstream chunk no longer flushes whole after Ctrl-C (the v1.4
+  responses test streams were one block per chunk, so the gap never
+  fired). (b) A final SSE event without its blank-line terminator
+  (both new fixtures end on a bare `\n`) is classified at EOF — it
+  may be the terminal event — instead of relayed unclassified and
+  followed by a spurious synthesized failure.
+- **count_tokens.** `proxy.service.ts` moves the local count_tokens
+  answer behind `planRoute` and calls `passthroughCountTokens`: the
+  first plan target that is a same-format pass-through entry WITH a
+  count_tokens upstream route (`PROVIDER_ROUTES[entry.type]` —
+  anthropic's `POST /v1/messages/count_tokens`, whose `requestPath`
+  `adapters/index.ts` now names) gets the body verbatim with `model`
+  rewritten and its real count relayed with `x-babelgate-*` headers;
+  the first non-relayable target answers the §3.5 chars/4 estimate
+  exactly as v1.5 did before this task. Forwarded hops run through
+  `attemptTargets`, so the usual fallback contract applies and a
+  non-2xx upstream is client-facing. Anthropic count_tokens requests
+  carry no trace scope (observeMiddleware opens one only for chat
+  routes) — nothing changes there.
+- **First-byte rule.** Unchanged: `passthroughStreamAttempt` resolves
+  only after the upstream 2xx arrives, so a failure before the first
+  client byte falls back to the next target — which bridges through
+  canonical when its format differs. After the first byte the relay
+  owns the stream: mid-flight failures synthesise the dialect's own
+  error frame, never a retry.
+- **Ambiguities resolved.** (a) Usage on anthropic/chat streams is
+  read from the observer decoder's canonical `usage` event rather
+  than a dialect field map — the plan's field names
+  (`message_start.usage.input_tokens`, `message_delta.usage
+  .output_tokens`, the `choices: []` usage chunk honouring
+  `stream_options.include_usage`) are exactly what the existing
+  decoders already produce. (b) The anthropic stream encoder's
+  message_start `usage` estimate note does not apply on
+  pass-through — the upstream's real `message_start` is relayed
+  verbatim.
+- **Files outside the Files block:**
+  `src/services/passthrough-dialects.ts` (new — the three dialect
+  descriptors and the task-named `relayAnthropicStream` /
+  `relayChatStream` / `relayResponsesStream`; `passthrough.ts` and
+  `passthrough-relay.ts` were already at the ~400-line rule-7 cap),
+  `src/services/passthrough-trace.ts` (new — the observation→trace
+  finishes `finishPassthroughUnary` / `finishPassthroughTrace` and
+  their `observeBody` / `observeStreamEvents` helpers, moved
+  verbatim out of `passthrough.ts` when this task pushed it past
+  the cap; `passthrough-relay.ts` sits at 460 lines — engine +
+  header policy + shared types, the split went as far as the
+  dialect/relay seam allows),
+  `src/routing/registry.ts` (`ProviderEntry.passthrough` — the
+  internal type the yaml mapping fills),
+  `src/transformers/adapters/index.ts` (anthropic count_tokens route
+  `requestPath` points at the real upstream endpoint so a
+  pass-through can forward it),
+  `tests/mocks/upstreams.ts` (anthropic `/v1/messages/count_tokens`
+  mock returning `{input_tokens: 1234}` — required by the no-network
+  rule for the new forwarding tests).
+- **Live check.** Real request/response against `npm run dev` with a
+  local stub upstream — in the PR body.

@@ -9,10 +9,12 @@ import {
   isPassthrough,
   passthroughTargetBody,
 } from "./passthrough";
+import type { PassthroughObservation } from "./passthrough-relay";
 import {
+  relayAnthropicStream,
+  relayChatStream,
   relayResponsesStream,
-  type PassthroughObservation,
-} from "./passthrough-relay";
+} from "./passthrough-dialects";
 
 /**
  * The pass-through relay (v1.4 spec §3.4): Responses source →
@@ -120,6 +122,18 @@ const lifecycleEvent = (type: string, model = "upstream-model") =>
 const DELTA =
   'data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"hi"}\n\n';
 
+const ANT_ENTRY: ProviderEntry = {
+  name: "ant",
+  type: "anthropic",
+  baseUrl: "http://anthropic.mock",
+};
+
+const CHAT_ENTRY: ProviderEntry = {
+  name: "chat",
+  type: "openai",
+  baseUrl: "http://openai.mock",
+};
+
 describe("isPassthrough", () => {
   it("is true only for a responses source on a responses entry", () => {
     expect(isPassthrough("responses", ENTRY)).toBe(true);
@@ -132,6 +146,35 @@ describe("isPassthrough", () => {
     ).toBe(false);
     expect(
       isPassthrough("gemini", { ...ENTRY, type: "anthropic" }),
+    ).toBe(false);
+  });
+
+  // v1.5 spec §3.3 (D6): same-format anthropic/openai entries relay
+  // only when `passthrough: true` opts them in — no flag keeps the
+  // canonical path.
+  it("anthropic and openai entries need passthrough: true", () => {
+    expect(
+      isPassthrough("anthropic", { ...ANT_ENTRY, passthrough: true }),
+    ).toBe(true);
+    expect(
+      isPassthrough("openai", { ...CHAT_ENTRY, passthrough: true }),
+    ).toBe(true);
+    expect(isPassthrough("anthropic", ANT_ENTRY)).toBe(false);
+    expect(isPassthrough("openai", CHAT_ENTRY)).toBe(false);
+  });
+
+  it("the flag never crosses provider formats", () => {
+    expect(
+      isPassthrough("anthropic", { ...CHAT_ENTRY, passthrough: true }),
+    ).toBe(false);
+    expect(
+      isPassthrough("openai", { ...ANT_ENTRY, passthrough: true }),
+    ).toBe(false);
+    expect(
+      isPassthrough("gemini", { ...ANT_ENTRY, passthrough: true }),
+    ).toBe(false);
+    expect(
+      isPassthrough("responses", { ...ANT_ENTRY, passthrough: true }),
     ).toBe(false);
   });
 });
@@ -208,6 +251,41 @@ describe("passthroughTargetBody", () => {
         ENTRY,
       ),
     ).not.toHaveProperty("max_output_tokens");
+  });
+
+  // v1.5 spec §3.3: the clamp lands on the entry's own max-tokens
+  // field — the one its encoder writes on the bridged path.
+  it("clamps max_tokens on an anthropic entry", () => {
+    const forwarded = passthroughTargetBody(
+      { model: "client-model", max_tokens: 512, stream: true },
+      TARGET,
+      { ...CANONICAL, config: { maxTokens: 512 } },
+      { ...ANT_ENTRY, maxOutputTokens: 100 },
+    );
+    expect(forwarded.max_tokens).toBe(100);
+    expect(forwarded).not.toHaveProperty("max_output_tokens");
+    expect(forwarded.stream).toBe(true);
+  });
+
+  it("clamps max_completion_tokens when the chat client sent it", () => {
+    const forwarded = passthroughTargetBody(
+      { model: "client-model", max_completion_tokens: 512 },
+      TARGET,
+      { ...CANONICAL, config: { maxTokens: 512 } },
+      { ...CHAT_ENTRY, maxOutputTokens: 100 },
+    );
+    expect(forwarded.max_completion_tokens).toBe(100);
+    expect(forwarded).not.toHaveProperty("max_tokens");
+  });
+
+  it("clamps max_tokens on a chat entry without max_completion_tokens", () => {
+    const forwarded = passthroughTargetBody(
+      { model: "client-model", max_tokens: 512 },
+      TARGET,
+      { ...CANONICAL, config: { maxTokens: 512 } },
+      { ...CHAT_ENTRY, maxOutputTokens: 100 },
+    );
+    expect(forwarded.max_tokens).toBe(100);
   });
 });
 
@@ -479,6 +557,238 @@ describe("relayResponsesStream", () => {
     });
     const iter = gen[Symbol.asyncIterator]();
     await iter.next(); // the delta
+    ac.abort();
+    const rest = await collect({
+      [Symbol.asyncIterator]: () => iter,
+    } as AsyncGenerator<string>);
+    expect(rest).toBe("");
+    expect(cancelled).toBe(true);
+  });
+});
+
+// Anthropic SSE event names per
+// https://docs.anthropic.com/en/api/messages-streaming.
+const ANT_STREAM = [
+  "event: message_start",
+  'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"upstream-model","content":[],"usage":{"input_tokens":25,"output_tokens":1}}}',
+  "",
+  "event: content_block_start",
+  'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+  "",
+  "event: content_block_delta",
+  'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}',
+  "",
+  "event: content_block_stop",
+  'data: {"type":"content_block_stop","index":0}',
+  "",
+  "event: message_delta",
+  'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":15}}',
+  "",
+  "event: message_stop",
+  'data: {"type":"message_stop"}',
+  "",
+  "",
+].join("\n");
+
+function relayAnthropic(
+  chunks: Array<string | Uint8Array>,
+  opts?: {
+    headers?: Record<string, string>;
+    observation?: PassthroughObservation;
+    signal?: AbortSignal;
+    idleMs?: number;
+  },
+): Promise<string> {
+  return collect(
+    relayAnthropicStream({
+      upstream: streamOf(chunks),
+      upstreamHeaders: opts?.headers,
+      requestedModel: "client-model",
+      idleMs: opts?.idleMs ?? 60_000,
+      signal: opts?.signal ?? new AbortController().signal,
+      observation: opts?.observation ?? observation(),
+    }),
+  );
+}
+
+describe("relayAnthropicStream", () => {
+  it("message_start model is restored; every other byte is identical", async () => {
+    const obs = observation();
+    const out = await relayAnthropic([ANT_STREAM], { observation: obs });
+    const blocks = out.split("\n\n").filter((b) => b !== "");
+    const start = JSON.parse(
+      blocks[0].split("\n")[1].slice(5),
+    ) as { message: { model: string } };
+    expect(start.message.model).toBe("client-model");
+    // Non-lifecycle blocks relay verbatim — the content_block_delta
+    // block reaches the client exactly as the upstream sent it.
+    expect(blocks[2]).toBe(
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}',
+    );
+    expect(blocks.at(-1)).toBe(
+      'event: message_stop\ndata: {"type":"message_stop"}',
+    );
+    expect(obs.terminal?.type).toBe("message_stop");
+  });
+
+  it("usage from message_start and message_delta lands in observation.events", async () => {
+    const obs = observation();
+    await relayAnthropic([ANT_STREAM], { observation: obs });
+    const usage = obs.events?.find((e) => e.type === "usage");
+    expect(usage).toBeDefined();
+    expect(usage).toMatchObject({
+      type: "usage",
+      usage: { inputTokens: 25, outputTokens: 15 },
+    });
+    expect(
+      obs.events?.find((e) => e.type === "message_end"),
+    ).toMatchObject({ finishReason: "stop" });
+  });
+
+  it("an upstream error event relays verbatim and marks the observation", async () => {
+    const errBlock =
+      'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"overloaded"}}\n\n';
+    const obs = observation();
+    const out = await relayAnthropic([ANT_STREAM + errBlock], {
+      observation: obs,
+    });
+    expect(out.endsWith(errBlock)).toBe(true);
+    expect(obs.errorKind).toBe("upstream");
+  });
+
+  it("upstream close without message_stop ends in a synthesized error event", async () => {
+    const deltaOnly =
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}\n\n';
+    const obs = observation();
+    const out = await relayAnthropic([deltaOnly], { observation: obs });
+    expect(out).toContain("event: error\n");
+    expect(out).toContain('"api_error"');
+    expect(obs.errorKind).toBeDefined();
+  });
+
+  it("client abort ends the relay quietly", async () => {
+    const ac = new AbortController();
+    let cancelled = false;
+    const upstream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(ANT_STREAM));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const gen = relayAnthropicStream({
+      upstream,
+      requestedModel: "client-model",
+      idleMs: 60_000,
+      signal: ac.signal,
+      observation: observation(),
+    });
+    const iter = gen[Symbol.asyncIterator]();
+    await iter.next();
+    ac.abort();
+    const rest = await collect({
+      [Symbol.asyncIterator]: () => iter,
+    } as AsyncGenerator<string>);
+    expect(rest).toBe("");
+    expect(cancelled).toBe(true);
+  });
+});
+
+// Chat Completions chunk shape per
+// https://platform.openai.com/docs/api-reference/chat/streaming —
+// every chunk carries `model`, `data: [DONE]` ends the stream, and a
+// `choices: []` chunk carries `usage` when the client asked for it via
+// `stream_options.include_usage`.
+const CHAT_CHUNK =
+  'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"upstream-model","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}\n\n';
+
+function relayChat(
+  chunks: Array<string | Uint8Array>,
+  opts?: {
+    headers?: Record<string, string>;
+    observation?: PassthroughObservation;
+    signal?: AbortSignal;
+    idleMs?: number;
+  },
+): Promise<string> {
+  return collect(
+    relayChatStream({
+      upstream: streamOf(chunks),
+      upstreamHeaders: opts?.headers,
+      requestedModel: "client-model",
+      idleMs: opts?.idleMs ?? 60_000,
+      signal: opts?.signal ?? new AbortController().signal,
+      observation: opts?.observation ?? observation(),
+    }),
+  );
+}
+
+describe("relayChatStream", () => {
+  it("every chunk's model is restored; data: [DONE] is verbatim and terminal", async () => {
+    const obs = observation();
+    const out = await relayChat([CHAT_CHUNK + "data: [DONE]\n\n"], {
+      observation: obs,
+    });
+    expect(out).toContain('"model":"client-model"');
+    expect(out).not.toContain("upstream-model");
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(obs.terminal?.type).toBe("[DONE]");
+  });
+
+  it("a usage chunk lands in observation.events", async () => {
+    const stream =
+      CHAT_CHUNK +
+      'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"upstream-model","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}\n\n' +
+      "data: [DONE]\n\n";
+    const obs = observation();
+    await relayChat([stream], { observation: obs });
+    const usage = obs.events?.find((e) => e.type === "usage");
+    expect(usage).toMatchObject({
+      type: "usage",
+      usage: { inputTokens: 10, outputTokens: 5 },
+    });
+  });
+
+  it("an in-stream error chunk relays verbatim and marks the observation", async () => {
+    const errBlock =
+      'data: {"error":{"message":"overloaded","type":"server_error","param":null,"code":"overloaded"}}\n\n';
+    const obs = observation();
+    const out = await relayChat([CHAT_CHUNK + errBlock], {
+      observation: obs,
+    });
+    expect(out).toContain(errBlock.trimEnd());
+    expect(obs.errorKind).toBe("upstream");
+  });
+
+  it("upstream close without [DONE] ends in a synthesized error chunk then [DONE]", async () => {
+    const obs = observation();
+    const out = await relayChat([CHAT_CHUNK], { observation: obs });
+    expect(out).toContain('"error"');
+    expect(out.endsWith("data: [DONE]\n\n")).toBe(true);
+    expect(obs.errorKind).toBeDefined();
+  });
+
+  it("client abort ends the relay quietly", async () => {
+    const ac = new AbortController();
+    let cancelled = false;
+    const upstream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(CHAT_CHUNK));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const gen = relayChatStream({
+      upstream,
+      requestedModel: "client-model",
+      idleMs: 60_000,
+      signal: ac.signal,
+      observation: observation(),
+    });
+    const iter = gen[Symbol.asyncIterator]();
+    await iter.next();
     ac.abort();
     const rest = await collect({
       [Symbol.asyncIterator]: () => iter,

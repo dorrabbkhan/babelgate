@@ -35,10 +35,10 @@ import {
 } from "./attempt-targets";
 import {
   assertBridgeableBody,
-  finishPassthroughUnary,
   isPassthrough,
   passthroughUnaryAttempt,
 } from "./passthrough";
+import { finishPassthroughUnary } from "./passthrough-trace";
 import type {
   ProxyRequestOptions,
   ProxyResult,

@@ -56,6 +56,8 @@ import {
   resetStreamCase,
   responseOverrides,
   responseOverrides2,
+  cachedUsage,
+  resetCachedUsage,
   MOCK_BASE_URLS,
   OPENAI2_BASE_URL,
   DEAD_BASE_URL,
@@ -1811,5 +1813,351 @@ describe("pass-through tracing (v1.4 spec §3.4)", () => {
     } finally {
       await new Promise<void>((r) => listener.close(() => r()));
     }
+  });
+});
+
+// v1.5 spec §3.3 (D6): `passthrough: true` on an anthropic or openai
+// provider relays the same-format source unchanged — trace, usage,
+// cost, abort and the pre-first-byte fallback rule all behave as on
+// the v1.4 responses path.
+describe("anthropic and chat pass-through tracing (v1.5 spec §3.3)", () => {
+  const PT_YAML = `default: shim
+providers:
+  shim:
+    type: anthropic
+    base_url: ${MOCK_BASE_URLS.anthropic}
+    api_key_env: ANTHROPIC_API_KEY
+    passthrough: true
+  chatshim:
+    type: openai
+    base_url: ${MOCK_BASE_URLS.openai}
+    api_key_env: OPENAI_API_KEY
+    passthrough: true
+  dead:
+    type: anthropic
+    base_url: ${DEAD_BASE_URL}
+    api_key_env: ANTHROPIC_API_KEY
+    passthrough: true
+routes:
+  - match: "dead-*"
+    to: dead/gone
+    fallback: [chatshim/fallback-model]
+  - match: "chat-*"
+    to: chatshim/gpt-shim
+  - match: "*"
+    to: shim/claude-sonnet-4-5
+`;
+
+  function usePassthroughConfig(): void {
+    writeFileSync(TMP_CONFIG, PT_YAML);
+    process.env.BABELGATE_CONFIG = TMP_CONFIG;
+    resetConfig();
+  }
+
+  afterEach(() => {
+    resetCachedUsage();
+  });
+
+  it("usage and cost recorded on anthropic pass-through", async () => {
+    usePassthroughConfig();
+    const res = await postStream("/v1/messages", {
+      ...(anthropicFixtures.requests.basic as Record<string, unknown>),
+      model: "claude-anything",
+      stream: true,
+    });
+    expect(res.status, res.body as string).toBe(200);
+
+    // The relayed SSE carries the client's model in message_start.
+    const start = (res.body as string).match(
+      /data: (\{[^\n]*"message_start"[^\n]*\})/,
+    );
+    expect(start).not.toBeNull();
+    const message = JSON.parse(start![1]) as {
+      message: { model: string };
+    };
+    expect(message.message.model).toBe("claude-anything");
+
+    await waitForTraces(1);
+    expect(traces[0]).toMatchObject({
+      sourceApi: "anthropic",
+      winner: "shim",
+      stream: true,
+      status: "ok",
+      passthrough: true,
+      // message_start's 25 in / message_delta's 15 out — the recorded
+      // anthropic text.sse fixture's counts.
+      inputTokens: 25,
+      outputTokens: 15,
+    });
+    // shim's routed model is claude-sonnet-4-5 (bundled price
+    // 3 USD/15 USD per 1M): 25×3 + 15×15.
+    expect(traces[0].costUsd).toBeCloseTo((25 * 3 + 15 * 15) / 1e6, 12);
+  });
+
+  it("usage recorded on chat pass-through stream", async () => {
+    usePassthroughConfig();
+    cachedUsage.openai = true;
+    const client = {
+      model: "chat-anything",
+      stream: true,
+      stream_options: { include_usage: true },
+      messages: [{ role: "user", content: "hi" }],
+    };
+    const res = await postStream("/v1/chat/completions", client);
+    expect(res.status, res.body as string).toBe(200);
+
+    // The forwarded body is the client's bytes with only `model`
+    // rewritten — stream_options relayed verbatim.
+    expect(JSON.stringify(capturedRequests.openai[0])).toBe(
+      JSON.stringify({ ...client, model: "gpt-shim" }),
+    );
+    // Chunks carry the client's model; [DONE] ends the relay.
+    expect(res.body as string).toContain('"model":"chat-anything"');
+    expect(res.body as string).toContain("data: [DONE]");
+
+    await waitForTraces(1);
+    expect(traces[0]).toMatchObject({
+      sourceApi: "openai",
+      winner: "chatshim",
+      stream: true,
+      status: "ok",
+      passthrough: true,
+      inputTokens: 1000,
+      outputTokens: 5,
+      cacheReadTokens: 900,
+      cacheWriteTokens: 90,
+    });
+  });
+
+  // Review Focus 3: Ctrl-C mid-relay on the anthropic dialect —
+  // exactly one trace, aborted, the upstream fetch really aborts.
+  it("aborted anthropic pass-through emits one trace", async () => {
+    usePassthroughConfig();
+    let upstreamAborted = false;
+    server.use(
+      http.post(
+        `${MOCK_BASE_URLS.anthropic}/v1/messages`,
+        ({ request }) => {
+          request.signal.addEventListener("abort", () => {
+            upstreamAborted = true;
+          });
+          const enc = new TextEncoder();
+          const body = new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(
+                enc.encode(
+                  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"one"}}\n\n',
+                ),
+              );
+              c.enqueue(
+                enc.encode(
+                  'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"two"}}\n\n',
+                ),
+              );
+              // stays open — the client leaves before message_stop
+            },
+            cancel() {
+              upstreamAborted = true;
+            },
+          });
+          return new HttpResponse(body, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      ),
+    );
+
+    const listener = app.listen(0);
+    try {
+      const port = (listener.address() as AddressInfo).port;
+      const ac = new AbortController();
+      const res = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-anything",
+          max_tokens: 16,
+          stream: true,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+        signal: ac.signal,
+      });
+      expect(res.status).toBe(200);
+
+      const reader = res.body!.getReader();
+      const utf8 = new TextDecoder();
+      let text = "";
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) break;
+        text += utf8.decode(r.value, { stream: true });
+        if ((text.match(/content_block_delta/g) ?? []).length >= 2)
+          break;
+      }
+      // two deltas in, Ctrl-C
+      ac.abort();
+      await reader.read().catch(() => {});
+
+      await waitForTraces(1);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        sourceApi: "anthropic",
+        winner: "shim",
+        stream: true,
+        status: "aborted",
+        httpStatus: 200,
+        passthrough: true,
+      });
+      // message_stop never arrived → no usage.
+      expect(traces[0].inputTokens).toBeUndefined();
+      expect(traces[0].outputTokens).toBeUndefined();
+
+      const deadline = Date.now() + 3000;
+      while (!upstreamAborted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(upstreamAborted).toBe(true);
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      await new Promise<void>((r) => listener.close(() => r()));
+    }
+  });
+
+  // The Chat twin of Review Focus 3.
+  it("aborted chat pass-through emits one trace", async () => {
+    usePassthroughConfig();
+    let upstreamAborted = false;
+    server.use(
+      http.post(
+        `${MOCK_BASE_URLS.openai}/v1/chat/completions`,
+        ({ request }) => {
+          request.signal.addEventListener("abort", () => {
+            upstreamAborted = true;
+          });
+          const enc = new TextEncoder();
+          const body = new ReadableStream<Uint8Array>({
+            start(c) {
+              c.enqueue(
+                enc.encode(
+                  'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-shim","choices":[{"index":0,"delta":{"content":"one"},"finish_reason":null}]}\n\n',
+                ),
+              );
+              c.enqueue(
+                enc.encode(
+                  'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-shim","choices":[{"index":0,"delta":{"content":"two"},"finish_reason":null}]}\n\n',
+                ),
+              );
+              // stays open — the client leaves before [DONE]
+            },
+            cancel() {
+              upstreamAborted = true;
+            },
+          });
+          return new HttpResponse(body, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      ),
+    );
+
+    const listener = app.listen(0);
+    try {
+      const port = (listener.address() as AddressInfo).port;
+      const ac = new AbortController();
+      const res = await fetch(
+        `http://127.0.0.1:${port}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "chat-anything",
+            stream: true,
+            messages: [{ role: "user", content: "hi" }],
+          }),
+          signal: ac.signal,
+        },
+      );
+      expect(res.status).toBe(200);
+
+      const reader = res.body!.getReader();
+      const utf8 = new TextDecoder();
+      let text = "";
+      for (;;) {
+        const r = await reader.read();
+        if (r.done) break;
+        text += utf8.decode(r.value, { stream: true });
+        if ((text.match(/chat.completion.chunk/g) ?? []).length >= 2)
+          break;
+      }
+      // two chunks in, Ctrl-C
+      ac.abort();
+      await reader.read().catch(() => {});
+
+      await waitForTraces(1);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        sourceApi: "openai",
+        winner: "chatshim",
+        stream: true,
+        status: "aborted",
+        httpStatus: 200,
+        passthrough: true,
+      });
+      expect(traces[0].inputTokens).toBeUndefined();
+      expect(traces[0].outputTokens).toBeUndefined();
+
+      const deadline = Date.now() + 3000;
+      while (!upstreamAborted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(upstreamAborted).toBe(true);
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      await new Promise<void>((r) => listener.close(() => r()));
+    }
+  });
+
+  // First-byte rule: a pass-through attempt that fails before any
+  // byte reaches the client falls back — the next target bridges
+  // through canonical like any other hop.
+  it("fallback before first byte to a canonical target", async () => {
+    usePassthroughConfig();
+    const res = await request(app)
+      .post("/v1/messages")
+      .send({
+        ...(anthropicFixtures.requests.basic as Record<string, unknown>),
+        model: "dead-anything",
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // The fallback ran the bridge: the upstream body is the openai
+    // encoder's, not the client's bytes.
+    expect(capturedRequests.openai).toHaveLength(1);
+    expect(capturedRequests.openai[0]).toMatchObject({
+      model: "fallback-model",
+    });
+    expect(res.body.type).toBe("message");
+    expect(res.body.model).toBe("dead-anything");
+
+    await waitForTraces(1);
+    expect(traces[0]).toMatchObject({
+      sourceApi: "anthropic",
+      winner: "chatshim",
+      status: "ok",
+    });
+    expect(traces[0].passthrough).toBeUndefined();
+    expect(traces[0].hops).toHaveLength(2);
+    expect(traces[0].hops[0]).toMatchObject({
+      provider: "dead",
+      outcome: "transport",
+    });
+    expect(traces[0].hops[1]).toMatchObject({
+      provider: "chatshim",
+      outcome: "ok",
+    });
   });
 });

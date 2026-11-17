@@ -17,6 +17,7 @@ export interface GatewayFileProvider {
   repair_tool_calls?: boolean;
   reasoning_passback?: boolean;
   reasoning?: boolean;
+  passthrough?: boolean;
   timeout_ms?: number;
   stream_idle_ms?: number;
 }
@@ -85,6 +86,10 @@ const providerEntrySchema = z
     repair_tool_calls: z.boolean().optional(),
     reasoning_passback: z.boolean().optional(),
     reasoning: z.boolean().optional(),
+    // v1.5 spec §3.3: same-format pass-through opt-in. Only anthropic
+    // and openai entries have a relay (responses entries pass through
+    // automatically; a shim preset implies it — Task 9).
+    passthrough: z.boolean().optional(),
     timeout_ms: z.number().int().positive().optional(),
     stream_idle_ms: z.number().int().positive().optional(),
   })
@@ -94,6 +99,18 @@ const providerEntrySchema = z
         code: "custom",
         path: ["api_key_env"],
         message: 'required unless type is "ollama"',
+      });
+    }
+    if (
+      entry.passthrough !== undefined &&
+      entry.type !== "anthropic" &&
+      entry.type !== "openai"
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["passthrough"],
+        message:
+          'only valid on "anthropic" or "openai" providers ("responses" providers pass through automatically)',
       });
     }
   });

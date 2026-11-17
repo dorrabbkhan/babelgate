@@ -199,10 +199,12 @@ export const PROVIDER_ROUTES: Record<Provider, ProviderRoute[]> = {
     {
       // Answered locally (spec §3.5) — must precede the /v1/messages
       // chat route: it shares that prefix and routes match in order.
+      // requestPath is the upstream endpoint a same-format
+      // pass-through forwards to (v1.5 §3.3, Task 8).
       kind: "count_tokens",
       method: "POST",
       pathPrefix: "/v1/messages/count_tokens",
-      requestPath: () => "/v1/messages",
+      requestPath: () => "/v1/messages/count_tokens",
       countTokensBody: (estimate) => ({ input_tokens: estimate }),
     },
     {

@@ -1,29 +1,36 @@
 /**
- * Responses pass-through SSE relay (v1.4 spec §3.4): upstream bytes
- * → client bytes. SSE blocks are relayed at event boundaries; only
- * the five lifecycle events are JSON-parsed (to restore
- * `response.model`); everything else is verbatim. Split from
- * passthrough.ts (rule 7): this file owns the wire relay, that one
- * owns the routing decision, request body and trace.
+ * Pass-through SSE relay: upstream bytes → client bytes. SSE blocks
+ * are relayed at event boundaries, verbatim except where the dialect
+ * names a `model` holder — then that one object is JSON-parsed,
+ * `model` set to the client's model, and the block re-rendered
+ * keeping every non-`data:` field line (`event:`, `id:`, comments)
+ * in place. The relay itself is dialect-neutral: what counts as a
+ * lifecycle event, a terminal event and an in-stream error, plus the
+ * synthesized failure frame, comes from a `RelayDialect` descriptor
+ * (passthrough-dialects.ts holds the three dialects, one per
+ * source format). This file also owns the upstream-header relay
+ * policy and `PassthroughObservation`; passthrough.ts keeps the
+ * routing decision, the request body and the trace finish.
  *
- * Wire-format sources (every event/field this file touches):
- *  - The Responses SSE event set (`response.created`,
- *    `response.in_progress`, `response.completed`,
- *    `response.incomplete`, `response.failed`, and the bare `error`
- *    event): https://platform.openai.com/docs/api-reference/responses-streaming
- *  - Codex's Responses parser, which reads the same event set and
- *    takes `type` from the `data:` payload (no `event:` lines) —
- *    `codex-rs/codex-api/src/sse/responses.rs` at 0.169.0 (E19).
- *  - The Response object inside each `response.*` event:
- *    https://platform.openai.com/docs/api-reference/responses/object
+ * Observation: beside the wire-level `terminal`/`errorKind`, the
+ * anthropic and openai dialects run the relayed bytes through the
+ * source's own stream decoder — the canonical events that come out
+ * (`observation.events`) give finishPassthroughTrace usage, finish
+ * reason and tool calls without a second wire-format field map (the
+ * same "pure observation" argument as responses's terminal.response
+ * decode). The responses dialect needs none: its terminal event
+ * already carries the whole Response object.
  */
-import { toResponsesResponseObject } from "../transformers/adapters/responses.response";
 import {
   currentTrace,
   snapshot,
   STREAM_WIRE_CAP_BYTES,
 } from "../observe/context";
-import { createUtf8Decoder, formatSse } from "../utils/sse";
+import type {
+  CanonicalStreamEvent,
+  StreamDecoder,
+} from "../types/canonical.types";
+import { createUtf8Decoder } from "../utils/sse";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type Obj = Record<string, any>;
@@ -78,55 +85,108 @@ export function relayResponseHeaders(
   return out;
 }
 
+// ============ Observation + dialect ============
+
 /**
  * What the relay learned while streaming — read by
  * finishPassthroughTrace. `terminal` is the reply's terminal
- * lifecycle event (`response.completed` / `.incomplete` / `.failed`,
- * per the streaming reference); `errorKind` is set when a bare
- * `error` SSE event was relayed or a failure was synthesized.
+ * wire event (`response.completed` / `.incomplete` / `.failed` on
+ * responses, `message_stop` on anthropic, `[DONE]` on chat);
+ * `errorKind` is set when an in-stream error frame was relayed or a
+ * failure was synthesized. `events` is the anthropic/chat
+ * observation channel: the canonical events the source dialect's
+ * own decoder produced from the relayed bytes (absent on the
+ * responses relay, which decodes `terminal.response` instead).
  */
 export interface PassthroughObservation {
   terminal?: { type: string; response?: Obj };
   errorKind?: string;
+  events?: CanonicalStreamEvent[];
 }
 
-/** The five lifecycle events whose `response.model` is restored
- *  (streaming reference; codex-rs `ResponseEvent` variants). */
-const LIFECYCLE_EVENTS = new Set([
-  "response.created",
-  "response.in_progress",
-  "response.completed",
-  "response.incomplete",
-  "response.failed",
-]);
+/**
+ * The wire-format knowledge one pass-through dialect contributes
+ * (v1.5 spec §3.3). Everything the generic relay needs to classify
+ * and rewrite SSE blocks without knowing the dialect itself.
+ */
+export interface RelayDialect {
+  /**
+   * The wire event type of a parsed `data:` JSON payload; the SSE
+   * `event:` line is passed as the fallback for dialects that take
+   * `type` from the payload first (all three do — Codex's
+   * precedence). Undefined → the block relays verbatim and is
+   * neither terminal nor an error.
+   */
+  eventType(parsed: Obj, sseEvent: string | undefined): string | undefined;
+  /**
+   * The wire event type of a `data:` payload that is not JSON —
+   * Chat's `data: [DONE]` terminator. Undefined → verbatim,
+   * unclassified.
+   */
+  rawDataType?(data: string): string | undefined;
+  /**
+   * The object inside `parsed` whose `model` is restored (the
+   * lifecycle event's nested payload: `response` on responses,
+   * `message` on anthropic's message_start, the chunk itself on
+   * chat). Undefined → the block relays verbatim.
+   */
+  modelHolder?(type: string | undefined, parsed: Obj): Obj | undefined;
+  /** Wire types that end a healthy reply. */
+  terminal: ReadonlySet<string>;
+  /** Wire types that mark the reply failed. */
+  error: ReadonlySet<string>;
+  /**
+   * The failure frame synthesized in this dialect when the upstream
+   * stream dies mid-flight without a terminal event — the same
+   * shape the bridged encoder emits for a canonical error.
+   */
+  failedFrame(requestedModel: string, message: string): string;
+  /**
+   * The observation decoder for this dialect — the source adapter's
+   * own stream decoder, fed every relayed byte so the trace reads
+   * usage, finish reason and tool calls from `observation.events`.
+   * Absent on responses: its terminal event already carries the
+   * whole Response object.
+   */
+  createObserver?(model: string): StreamDecoder;
+}
 
-/** Terminal lifecycle events — the reply's final state. */
-const TERMINAL_EVENTS = new Set([
-  "response.completed",
-  "response.incomplete",
-  "response.failed",
-]);
+/** Options shared by every dialect's relay entry point. */
+export interface RelayStreamOpts {
+  upstream: ReadableStream<Uint8Array>;
+  upstreamHeaders?: Record<string, string>;
+  requestedModel: string;
+  idleMs: number;
+  signal: AbortSignal;
+  observation: PassthroughObservation;
+}
 
 interface RelayBlock {
   /** bytes sent downstream for this SSE block */
   text: string;
-  /** the event's type when the block carried a Responses event */
+  /** the event's wire type when the block carried one */
   type?: string;
-  /** the parsed `response` object of a lifecycle event */
+  /** the parsed payload object a lifecycle event's model was restored in */
   response?: Obj;
+}
+
+function isObj(v: unknown): v is Obj {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
 /**
  * One complete SSE block (terminated by the blank line), relayed
- * verbatim unless it is one of the five lifecycle events — then its
- * `data:` JSON is parsed, `response.model` set to the client's model
- * and the block re-rendered keeping every non-`data:` field line
- * (`event:`, `id:`, comments) in place. The event type comes from the
- * payload's `type`, the SSE `event:` line only when absent — the
- * same precedence Codex's parser uses (codex-rs 0.169.0). Unparseable
- * data and `data: [DONE]` are relayed untouched.
+ * verbatim unless the dialect names a `model` holder in its `data:`
+ * JSON — then the JSON is re-rendered with `model` set to the
+ * client's model, keeping every non-`data:` field line in place.
+ * Unparseable data is relayed untouched, classified only by the
+ * dialect's `rawDataType` (Chat's `[DONE]`).
  */
-function relayBlock(block: string, requestedModel: string): RelayBlock {
+function relayBlock(
+  block: string,
+  requestedModel: string,
+  dialect: RelayDialect,
+): RelayBlock {
   const eol = block.includes("\r\n") ? "\r\n" : "\n";
   const lines = block.split(/\r?\n/);
   while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
@@ -151,24 +211,20 @@ function relayBlock(block: string, requestedModel: string): RelayBlock {
     }
     parsed = p as Obj;
   } catch {
-    // `data: [DONE]` and anything else that isn't JSON: verbatim.
-    return { text: block };
+    // `data: [DONE]` and anything else that isn't JSON: verbatim,
+    // classified only through the dialect's raw-data hook.
+    const type = dialect.rawDataType?.(dataLines.join("\n"));
+    return type === undefined ? { text: block } : { text: block, type };
   }
 
-  const type = typeof parsed.type === "string" ? parsed.type : eventType;
-  const response = parsed.response;
-  if (
-    type === undefined ||
-    !LIFECYCLE_EVENTS.has(type) ||
-    response === null ||
-    typeof response !== "object" ||
-    Array.isArray(response)
-  ) {
+  const type = dialect.eventType(parsed, eventType);
+  const holder = dialect.modelHolder?.(type, parsed);
+  if (holder === undefined || !isObj(holder)) {
     return { text: block, ...(type !== undefined && { type }) };
   }
 
-  // A lifecycle event: `response.model` restored (object reference).
-  (response as Obj).model = requestedModel;
+  // A lifecycle event: `model` restored in the holder object.
+  holder.model = requestedModel;
   const kept = lines.filter(
     (l) =>
       l !== "" &&
@@ -177,32 +233,7 @@ function relayBlock(block: string, requestedModel: string): RelayBlock {
   const text =
     (kept.length > 0 ? kept.join(eol) + eol : "") +
     `data: ${JSON.stringify(parsed)}${eol}${eol}`;
-  return { text, type, response: response as Obj };
-}
-
-/**
- * The `response.failed` frame synthesized when the upstream stream
- * dies mid-flight without a terminal event — the same frame shape the
- * Responses encoder emits for a canonical error (streaming
- * reference; `toResponsesResponseObject` keeps the field set
- * identical to the bridged path's).
- */
-function failedFrame(requestedModel: string, message: string): string {
-  const response = toResponsesResponseObject({
-    id: "resp_babelgate",
-    createdAt: Math.floor(Date.now() / 1000),
-    status: "failed",
-    model: requestedModel,
-    output: [],
-    outputText: "",
-    error: { code: "api_error", message },
-    incompleteDetails: null,
-    usage: null,
-  });
-  return formatSse(
-    JSON.stringify({ type: "response.failed", response }),
-    "response.failed",
-  );
+  return { text, type, response: holder };
 }
 
 /**
@@ -262,26 +293,23 @@ async function openReader(
 }
 
 /**
- * upstream bytes → client bytes (§3.4): SSE blocks are relayed at
- * event boundaries; only the five lifecycle events are JSON-parsed
- * (to restore `response.model`); everything else is verbatim. The
- * relay buffers only up to an event boundary — a complete event in a
- * chunk goes out before the next upstream chunk is awaited.
- * Termination mirrors the canonical pipeline: a client abort ends
- * quietly, an idle gap or read error before a terminal event ends in
- * a synthesized `response.failed`, and after a terminal event the
+ * upstream bytes → client bytes (v1.4 §3.4, v1.5 §3.3): SSE blocks
+ * are relayed at event boundaries; only blocks whose `data:` JSON
+ * the dialect names a `model` holder for are parsed (so `model` can
+ * be restored); everything else is verbatim. The relay buffers only
+ * up to an event boundary — a complete event in a chunk goes out
+ * before the next upstream chunk is awaited. Termination mirrors
+ * the canonical pipeline: a client abort ends quietly, an idle gap
+ * or read error before a terminal event ends in the dialect's
+ * synthesized failure frame, and after a terminal event the
  * upstream may keep the body open — the relay follows until close.
  * The wire tap is the same §3.5 `response.wire` snapshot the
  * canonical pipeline takes (a no-op when the ring is off).
  */
-export async function* relayResponsesStream(opts: {
-  upstream: ReadableStream<Uint8Array>;
-  upstreamHeaders?: Record<string, string>;
-  requestedModel: string;
-  idleMs: number;
-  signal: AbortSignal;
-  observation: PassthroughObservation;
-}): AsyncGenerator<string> {
+export async function* relayUpstreamStream(
+  opts: RelayStreamOpts,
+  dialect: RelayDialect,
+): AsyncGenerator<string> {
   const {
     upstreamHeaders,
     requestedModel,
@@ -298,6 +326,11 @@ export async function* relayResponsesStream(opts: {
   let wireCapped = false;
   let pending = "";
 
+  // anthropic/chat: the source's own decoder observes the relayed
+  // bytes — usage, finish reason and tool calls for the trace.
+  const observer = dialect.createObserver?.(requestedModel);
+  if (observer !== undefined) observation.events ??= [];
+
   const cancel = () => {
     reader.cancel().catch(() => {});
   };
@@ -306,25 +339,36 @@ export async function* relayResponsesStream(opts: {
   const terminalSeen = () =>
     observation.terminal !== undefined || observation.errorKind !== undefined;
 
+  function classify(out: RelayBlock): void {
+    if (out.type !== undefined && dialect.error.has(out.type)) {
+      observation.errorKind = "upstream";
+    } else if (
+      out.type !== undefined &&
+      dialect.terminal.has(out.type)
+    ) {
+      observation.terminal = { type: out.type, response: out.response };
+    }
+  }
+
   function* drain(): Generator<string> {
     for (;;) {
+      // A client abort stops the relay between blocks too — a
+      // multi-event upstream chunk is not flushed whole after the
+      // client is gone.
+      if (signal.aborted) return;
       const boundary = /\r?\n\r?\n/.exec(pending);
       if (boundary === null) return;
       const block = pending.slice(0, boundary.index + boundary[0].length);
       pending = pending.slice(boundary.index + boundary[0].length);
-      const out = relayBlock(block, requestedModel);
-      if (out.type === "error") {
-        observation.errorKind = "upstream";
-      } else if (out.type !== undefined && TERMINAL_EVENTS.has(out.type)) {
-        observation.terminal = { type: out.type, response: out.response };
-      }
+      const out = relayBlock(block, requestedModel, dialect);
+      classify(out);
       yield out.text;
     }
   }
 
   function* fail(kind: string, message: string): Generator<string> {
     observation.errorKind = kind;
-    yield failedFrame(requestedModel, message);
+    yield dialect.failedFrame(requestedModel, message);
   }
 
   try {
@@ -370,10 +414,19 @@ export async function* relayResponsesStream(opts: {
       }
 
       if (chunk.done) {
+        if (observer !== undefined) {
+          observation.events!.push(...observer.end());
+        }
         pending += utf8(new Uint8Array(0));
         yield* drain();
         if (pending !== "") {
-          yield pending;
+          // The stream's last event may arrive without its blank-line
+          // terminator (the anthropic/chat fixtures both end on a
+          // bare `\n`): it is still a complete event — classify it,
+          // since it may be the terminal one.
+          const out = relayBlock(pending, requestedModel, dialect);
+          classify(out);
+          yield out.text;
           pending = "";
         }
         if (!terminalSeen()) {
@@ -390,6 +443,9 @@ export async function* relayResponsesStream(opts: {
         if (wireText.length > STREAM_WIRE_CAP_BYTES) wireCapped = true;
       }
 
+      if (observer !== undefined) {
+        observation.events!.push(...observer.feed(chunk.value));
+      }
       pending += utf8(chunk.value);
       yield* drain();
     }

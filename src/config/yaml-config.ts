@@ -181,6 +181,11 @@ export function loadYamlConfig(
         ...(provider.reasoning === undefined
           ? {}
           : { reasoning: provider.reasoning }),
+        // §3.3 (D6): explicit `passthrough:` opt-in; Task 9's `preset`
+        // implies it when the key is absent.
+        ...(provider.passthrough === undefined
+          ? {}
+          : { passthrough: provider.passthrough }),
         timeoutMs: provider.timeout_ms,
         streamIdleMs: provider.stream_idle_ms,
       };

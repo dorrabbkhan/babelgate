@@ -580,3 +580,176 @@ describe("Claude Code reasoning loop (v1.5 spec §3.1, Task 4)", () => {
     expect(notes).not.toContain("reasoning_dropped");
   });
 });
+
+// v1.5 spec §3.3 (D6): an anthropic provider with `passthrough: true`
+// relays the Claude Code dialect unchanged — no canonical round trip.
+describe("anthropic pass-through (v1.5 spec §3.3, Task 8)", () => {
+  const PT_CONFIG = join(__dirname, ".tmp-passthrough.yaml");
+  const PT_YAML = `default: shim
+providers:
+  shim:
+    type: anthropic
+    base_url: ${MOCK_BASE_URLS.anthropic}
+    api_key_env: ANTHROPIC_API_KEY
+    passthrough: true
+routes:
+  - match: "*"
+    to: shim/claude-upstream
+`;
+  const BRIDGE_YAML = `default: shim
+providers:
+  shim:
+    type: anthropic
+    base_url: ${MOCK_BASE_URLS.anthropic}
+    api_key_env: ANTHROPIC_API_KEY
+routes:
+  - match: "*"
+    to: shim/claude-upstream
+`;
+
+  afterEach(() => {
+    rmSync(PT_CONFIG, { force: true });
+    traces.length = 0;
+  });
+
+  // `x_custom_marker` survives a byte-for-byte relay but not a
+  // canonical round trip — it is the path discriminator.
+  const PT_BODY = {
+    model: "claude-client-model",
+    max_tokens: 128,
+    system: [
+      {
+        type: "text",
+        text: "You are Claude Code, Anthropic's official CLI.",
+        cache_control: { type: "ephemeral" },
+      },
+    ],
+    tools: [
+      {
+        name: "Bash",
+        description: "Run a shell command",
+        input_schema: {
+          type: "object",
+          properties: { command: { type: "string" } },
+        },
+      },
+    ],
+    tool_choice: { type: "auto" },
+    metadata: { user_id: "u1" },
+    x_custom_marker: "passthrough-probe",
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+  };
+
+  function useYaml(text: string): void {
+    writeFileSync(PT_CONFIG, text);
+    process.env.BABELGATE_CONFIG = PT_CONFIG;
+    resetConfig();
+  }
+
+  it("anthropic pass-through forwards bytes unchanged", async () => {
+    useYaml(PT_YAML);
+
+    const before = traces.length;
+    const res = await request(app).post("/v1/messages").send(PT_BODY);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // The upstream body is the client's bytes with only `model`
+    // rewritten — byte-identical after that one substitution.
+    expect(capturedRequests.anthropic).toHaveLength(1);
+    expect(JSON.stringify(capturedRequests.anthropic[0])).toBe(
+      JSON.stringify({ ...PT_BODY, model: "claude-upstream" }),
+    );
+
+    // The reply carries the client's model back, not the upstream's.
+    expect(res.body.model).toBe("claude-client-model");
+
+    await waitForTraces(before + 1);
+    expect(traces.at(-1)).toMatchObject({
+      sourceApi: "anthropic",
+      winner: "shim",
+      passthrough: true,
+    });
+  });
+
+  it("passthrough:true opts in", async () => {
+    // The flag alone selects the relay — same provider shape as the
+    // bridge case below, only this one key differs.
+    useYaml(PT_YAML);
+
+    const before = traces.length;
+    const res = await postStream("/v1/messages", {
+      ...PT_BODY,
+      stream: true,
+    });
+    expect(res.status, res.body as string).toBe(200);
+
+    // Streaming reply: upstream SSE relayed, message_start's model
+    // restored to the client's name.
+    const start = sseEvent(res.body as string, "message_start");
+    expect((start.message as { model?: string }).model).toBe(
+      "claude-client-model",
+    );
+    expect(res.body as string).not.toContain("claude-upstream");
+
+    await waitForTraces(before + 1);
+    expect(traces.at(-1)).toMatchObject({
+      passthrough: true,
+      status: "ok",
+    });
+  });
+
+  it("no preset and no flag keeps canonical path", async () => {
+    useYaml(BRIDGE_YAML);
+
+    const before = traces.length;
+    const res = await request(app).post("/v1/messages").send(PT_BODY);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // Bridged: the upstream body is the anthropic encoder's output —
+    // the unknown marker field did not survive the canonical
+    // round trip.
+    expect(capturedRequests.anthropic).toHaveLength(1);
+    const sent = capturedRequests.anthropic[0] as Record<string, unknown>;
+    expect(sent).not.toHaveProperty("x_custom_marker");
+    expect(sent.model).toBe("claude-upstream");
+    expect(res.body.model).toBe("claude-client-model");
+
+    await waitForTraces(before + 1);
+    expect(traces.at(-1).passthrough).toBeUndefined();
+  });
+
+  it("count_tokens is forwarded on anthropic pass-through", async () => {
+    useYaml(PT_YAML);
+
+    const res = await request(app)
+      .post("/v1/messages/count_tokens")
+      .send({
+        model: "claude-client-model",
+        messages: [{ role: "user", content: "hi" }],
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // The upstream's real count — no local estimate header.
+    expect(res.body).toEqual({ input_tokens: 1234 });
+    expect(res.headers["x-babelgate-token-estimate"]).toBeUndefined();
+    expect(capturedRequests.anthropic).toHaveLength(1);
+    expect(capturedRequests.anthropic[0]).toMatchObject({
+      model: "claude-upstream",
+    });
+  });
+
+  it("count_tokens stays local without passthrough", async () => {
+    useYaml(BRIDGE_YAML);
+
+    const res = await request(app)
+      .post("/v1/messages/count_tokens")
+      .send({
+        model: "claude-client-model",
+        messages: [{ role: "user", content: "hi" }],
+      });
+    expect(res.status).toBe(200);
+    expect(res.headers["x-babelgate-token-estimate"]).toBe("true");
+    expect(res.body).toHaveProperty("input_tokens");
+    expect(capturedRequests.anthropic).toHaveLength(0);
+  });
+});
