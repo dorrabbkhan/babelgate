@@ -152,6 +152,23 @@ describe("judge.ts (spec §3.0.1)", () => {
     expect(line(r, "files-block")).toMatch(/^PASS files-block/);
   });
 
+  it("extra file named in decisions by unique basename passes", () => {
+    const r = judge("extra-file-basename.diff");
+    expect(line(r, "files-block")).toMatch(/^PASS files-block extra files named in decisions\.md$/);
+  });
+
+  it("basename shared by two diff files does not count as named", () => {
+    const r = judge("extra-file-basename-ambiguous.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "files-block")).toMatch(/^FLAG files-block .*src\/a\/same\.ts.*src\/b\/same\.ts/);
+  });
+
+  it("basename inside another path or longer name does not count as named", () => {
+    const r = judge("extra-file-basename-other-path.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "files-block")).toMatch(/^FLAG files-block .*src\/x\/one\.adapter\.ts outside Files block/);
+  });
+
   it("adapter importing another flags", () => {
     const r = judge("adapter-import.diff");
     expect(r.exitCode).toBe(1);

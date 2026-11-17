@@ -189,6 +189,21 @@ export function checkSkips(files: DiffFile[]): Check {
 
 // ---------- 4. files-block ----------
 
+const baseName = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A file counts as named when decisions.md has its full path, or its bare basename
+ * (not part of a longer name or path) and no other file in the diff shares that
+ * basename (v1.5 Task 2: entries listed `anthropic.messages.ts`, not the path).
+ */
+function namedInDecisions(decText: string, path: string, files: DiffFile[]): boolean {
+  if (decText.includes(path)) return true;
+  const base = baseName(path);
+  if (files.filter((f) => baseName(f.path) === base).length > 1) return false;
+  return new RegExp(`(^|[^\\w./-])${reEscape(base)}(?![\\w/-]|\\.\\w)`).test(decText);
+}
+
 export function checkFilesBlock(
   files: DiffFile[],
   planText: string | null,
@@ -202,7 +217,7 @@ export function checkFilesBlock(
   );
   if (!extras.length) return pass("files-block", "every diff file is in the task's Files block");
   const decText = decisionsAdditions(files);
-  const unnamed = extras.filter((e) => !decText.includes(e.path));
+  const unnamed = extras.filter((e) => !namedInDecisions(decText, e.path, files));
   return unnamed.length
     ? flag(
         "files-block",
