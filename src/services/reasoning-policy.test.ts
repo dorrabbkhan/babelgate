@@ -148,6 +148,48 @@ describe("applyReasoningPolicy (v1.5 spec §3.1)", () => {
     }
   });
 
+  it("reasoning:false keeps decode-time level notes (owner-accepted exception)", () => {
+    // Decoders record level-normalisation notes at decode, before the
+    // per-attempt policy runs — the trace cannot retract them, so a
+    // "max" level still records reasoning_effort_lowered under
+    // reasoning:false (decisions.md v1.5 Task 3, owner-accepted
+    // 2026-11-17, option 1 on #118).
+    const body = {
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      reasoning_effort: "max",
+    };
+    let stripped: CanonicalRequest | undefined;
+    const trace = traced(() => {
+      const canonical = adapters.openai.toCanonicalRequest(body);
+      stripped = applyReasoningPolicy(
+        canonical,
+        entry("anthropic", false),
+        "openai",
+        body,
+      );
+    });
+
+    expect(stripped?.config?.reasoning).toBeUndefined();
+    // Exactly the decode-time level note — nothing more, nothing
+    // retracted.
+    expect(trace.notes).toEqual([
+      {
+        stage: "decode",
+        adapter: "openai",
+        code: "reasoning_effort_lowered",
+        path: "reasoning_effort",
+      },
+    ]);
+    // Byte-identical upstream body: what v1.4 encoded for the same
+    // request without reasoning_effort.
+    expect(adapters.anthropic.fromCanonicalRequest(stripped!)).toEqual({
+      model: "m",
+      max_tokens: 4096,
+      messages: [{ role: "user", content: "hi" }],
+    });
+  });
+
   it("responses source unaffected by reasoning:false", () => {
     const body = {
       model: "m",

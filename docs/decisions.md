@@ -5802,6 +5802,16 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   v1.4, so none is recorded for them. (d) The `/ui` playground path
   (`canonical-stream.service.ts`) passes no policy source — a canonical
   request's own `config.reasoning` stays honoured, matching v1.4.
+- **`reasoning: false` note exception (owner-accepted 2026-11-17,
+  option 1 on #118).** Decoders record level-normalisation notes at
+  decode, before the per-attempt policy runs, and the trace cannot
+  retract them. So under `reasoning: false`, a `"max"` level (Chat
+  `reasoning_effort`, Anthropic `output_config.effort`) still records
+  `reasoning_effort_lowered`, and an unknown level string (Chat
+  `reasoning_effort`, Gemini `thinkingConfig.thinkingLevel`, Ollama
+  `think`) still records `field_dropped`. v1.4 recorded neither.
+  Upstream bodies stay byte-identical to v1.4. These notes describe
+  the client's request, not the routed provider.
 - **Evidence (fix round 1).** Every reasoning field name cited against
   the provider's doc: Anthropic `thinking` —
   https://platform.claude.com/docs/en/build-with-claude/extended-thinking;
