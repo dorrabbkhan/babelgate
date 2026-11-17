@@ -64,14 +64,34 @@ export function filesBlockPatterns(planText: string, task: string): string[] | n
       if (l.trim() === "") continue;
       break;
     }
-    for (const m of l.matchAll(/`([^`]+)`/g)) pats.push(m[1]);
+    // Plans write later entries on a line by bare name, after a full path
+    // in the same directory ("`src/config/gateway.schema.ts`, `yaml-config.ts`").
+    // A bare name resolves against the nearest full path before it on the
+    // line; with none before it ("`anthropic.adapter.ts`", "each
+    // `*.adapter.test.ts`") it matches that file name in any directory.
+    let dir: string | null = null;
+    for (const m of l.matchAll(/`([^`]+)`/g)) {
+      const p = m[1];
+      if (p.includes("/")) {
+        dir = p.slice(0, p.lastIndexOf("/") + 1);
+        pats.push(p);
+      } else pats.push(dir !== null ? dir + p : "**/" + p);
+    }
   }
   return pats.length ? pats : null;
 }
 
 const esc = (s: string) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 const patToRe = (p: string) =>
-  new RegExp("^" + esc(p).replace(/\*\*/g, ".*").replace(/\*/g, "[^/]*") + "$");
+  new RegExp(
+    "^" +
+      esc(p)
+        .replace(/^\*\*\//, "\u0000")
+        .replace(/\*\*/g, ".*")
+        .replace(/\*/g, "[^/]*")
+        .replace("\u0000", "(?:.*/)?") +
+      "$",
+  );
 const matchesPat = (pats: string[], path: string) =>
   pats.some((p) => patToRe(p).test(path));
 
