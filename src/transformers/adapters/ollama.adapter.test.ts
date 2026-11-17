@@ -145,6 +145,36 @@ describe("Ollama Adapter", () => {
 
       expect(result.stream).toBeUndefined();
     });
+
+    it("returned thinking dropped with note", () => {
+      // v1.5 spec §3.1 (Task 5) + conductor's call (b): an Ollama
+      // client echoing `thinking` on an assistant turn carries no
+      // origin — no encoder could send it — so the field drops with
+      // a `reasoning_dropped` note naming its path.
+      const input: OllamaChatRequest = {
+        model: "llama2",
+        messages: [
+          { role: "user", content: "Hello" },
+          {
+            role: "assistant",
+            content: "the answer",
+            thinking: "hmm",
+          },
+          { role: "user", content: "again" },
+        ],
+      };
+
+      const trace = traced(() => {
+        const result = toCanonicalRequest(input);
+        expect(result.messages[1].content).toBe("the answer");
+      });
+      expect(trace.notes).toContainEqual({
+        stage: "decode",
+        adapter: "ollama",
+        code: "reasoning_dropped",
+        path: "messages[1].thinking",
+      });
+    });
   });
 
   describe("fromCanonicalRequest", () => {
@@ -393,9 +423,11 @@ describe("Ollama Adapter", () => {
       expect(fromCanonicalResponse(lengthResponse).done).toBe(false);
     });
 
-    it("ollama client gets the text when the upstream reasons", () => {
-      // Task 8 fix: a parts array may carry reasoning — an Ollama
-      // client receives only the joined text parts.
+    it("ollama client receives thinking", () => {
+      // v1.5 spec §3.1 (Task 5): a parts array's reasoning parts
+      // reach the Ollama client as `message.thinking` joined "\n\n"
+      // (docs.ollama.com/api/chat); the text parts stay in
+      // `content`.
       const result = fromCanonicalResponse({
         id: "ollama-r",
         model: "m",
@@ -410,15 +442,46 @@ describe("Ollama Adapter", () => {
               },
             },
             { type: "text", text: "the answer" },
+            {
+              type: "reasoning",
+              reasoning: {
+                text: "second thought",
+                origin: { provider: "", model: "m" },
+              },
+            },
           ],
         },
         finishReason: "stop",
       });
 
       expect(result.message.content).toBe("the answer");
-      const body = JSON.stringify(result);
-      expect(body).not.toContain("hmm");
-      expect(body).not.toContain("thinking");
+      expect(result.message.thinking).toBe("hmm\n\nsecond thought");
+    });
+
+    it("redacted reasoning not emitted as text", () => {
+      // A redacted reasoning part carries no readable text — the
+      // client gets the answer and no `thinking`.
+      const result = fromCanonicalResponse({
+        id: "ollama-rx",
+        model: "m",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "reasoning",
+              reasoning: {
+                redacted: true,
+                origin: { provider: "", model: "m" },
+              },
+            },
+            { type: "text", text: "the answer" },
+          ],
+        },
+        finishReason: "stop",
+      });
+
+      expect(result.message.content).toBe("the answer");
+      expect(JSON.stringify(result)).not.toContain("thinking");
     });
 
     it("ollama client gets the text of a signed text part", () => {

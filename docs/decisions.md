@@ -6031,3 +6031,80 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
       echoed assistant turn, decoded by `toCanonicalRequest`) is
       asserted `toEqual` against the non-stream `fromCanonicalResponse`
       twin.
+
+## v1.5 Task 5 — reasoning out for Chat and Ollama clients (spec §3.1, conductor's call (b))
+
+- **Scope.** Chat and Ollama *client* replies now carry reasoning
+  text: canonical non-redacted reasoning parts emit as
+  `message.reasoning_content` / `delta.reasoning_content` (Chat) and
+  `message.thinking` / streamed `message.thinking` fragments
+  (Ollama), text joined `\n\n` in the non-streaming encode. Client
+  requests echoing `reasoning_content` / `thinking` on an assistant
+  message drop it with `reasoning_dropped` at
+  `messages[i].reasoning_content` / `messages[i].thinking`
+  (conductor's call (b): text with no origin can never be sent on).
+  Signatures are never emitted on either format; a signature on a
+  content part, a tool call, or a stream event now records
+  `reasoning_dropped` (`path: "signature"`) on the client-facing
+  encode — the same note the upstream-bound encoders already made.
+- **Ambiguities resolved.** (a) The client-facing encoders do not
+  origin-check reasoning parts — the reply's reasoning is text only
+  (no signature can ride along), matching the `clientFacing`
+  convention of `toReasoningItem`. (b) Redacted reasoning emits
+  nothing (no readable text) and no note, matching the
+  upstream-bound `reasoningContent`/`thinkingText` helpers' silent
+  skip; on streams a redacted block's stray deltas are suppressed
+  by index. (c) A reasoning part with `text: ""` or no text is
+  skipped rather than joined, so `reasoning_content`/`thinking` is
+  never an empty string. (d) An empty or non-string returned
+  `reasoning_content`/`thinking` field records no drop note —
+  nothing meaningful was carried.
+- **Wire-format doc citations.** Chat `reasoning_content` (request
+  and `delta` forms): https://api-docs.deepseek.com/guides/reasoning_model
+  and https://openrouter.ai/docs/use-cases/reasoning-tokens — already
+  cited at the v1.4 decode/emit sites, now cited at the response
+  encoders too. Ollama `thinking` on `message`:
+  https://docs.ollama.com/api/chat and
+  https://docs.ollama.com/capabilities/thinking.
+- **Changed tests (name · full path) — pins of the old drop
+  behaviour, each now asserting the new emitted field at least as
+  exactly:** `'openai client gets the text when the upstream
+  reasons'` → `'chat client receives reasoning_content'` —
+  `src/transformers/adapters/openai.adapter.test.ts`;
+  `'ollama client gets the text when the upstream reasons'` →
+  `'ollama client receives thinking'` —
+  `src/transformers/adapters/ollama.adapter.test.ts`;
+  `'%s: reasoning block mid-stream leaves the wire bytes
+  unchanged'` — `tests/contracts/stream-reasoning-drop.test.ts` —
+  removed entirely (every client encoder now emits reasoning; the
+  Task 4 owner note held `openai`/`ollama` back "until Task 5") and
+  replaced in the same file by the exact byte-asserting twins
+  `'openai: reasoning block streams as reasoning_content deltas,
+  signature never emitted'` and
+  `'ollama: reasoning block streams as message.thinking fragments,
+  signature never emitted'` (exact frame/line order, usage frame,
+  `done` line and signature non-emission — the Task 4
+  anthropic/gemini treatment), plus the task-named cases
+  `'chat stream emits reasoning_content deltas first'` and
+  `'ollama stream emits thinking'` in
+  `tests/contracts/stream-decoders.test.ts` (the Files block names
+  that file for the new stream cases). The `text_signature`
+  byte-identical case is unchanged: a signature still produces no
+  wire bytes on openai/gemini/ollama;
+  `'openai client via gemini keeps the answer text'` → `'openai
+  client via gemini receives reasoning_content and the answer
+  text'` — `tests/integration/codex.test.ts` (the signature
+  non-emission assertion is kept verbatim).
+- **Files outside the Files block:**
+  `tests/contracts/stream-reasoning-drop.test.ts` (the task's wire
+  change makes its mid-stream byte-identical case unsatisfiable;
+  exact byte-asserting twins live in the same file),
+  `tests/integration/codex.test.ts` (a Chat-client integration test
+  pinning the old "no reasoning in the reply" behaviour).
+- **Live check.** `npx ts-node src/index.ts` against a local Ollama
+  stub answering with `message.thinking`: `/v1/chat/completions`
+  replied `message.reasoning_content` (streamed
+  `delta.reasoning_content` chunks before content) and `/api/chat`
+  replied `message.thinking` (streamed `message.thinking`
+  fragments); a client-echoed `reasoning_content` never reached the
+  upstream body (request/response in the PR).

@@ -684,4 +684,105 @@ describe("stream decoders", () => {
       { type: "message_end", finishReason: "stop" },
     ]);
   });
+
+  it("chat stream emits reasoning_content deltas first", () => {
+    // v1.5 spec §3.1 (Task 5): canonical reasoning reaches the Chat
+    // client as `delta.reasoning_content` chunks before the content
+    // deltas — the DeepSeek/OpenRouter field
+    // (https://api-docs.deepseek.com/guides/reasoning_model,
+    // https://openrouter.ai/docs/use-cases/reasoning-tokens).
+    // Signatures have no Chat field: never emitted.
+    const origin = { provider: "p", model: "m" };
+    const encoder = adapters.openai.createStreamEncoder({
+      sourceRequest: {
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      },
+      query: {},
+      requestedModel: "m",
+    });
+    const events: CanonicalStreamEvent[] = [
+      { type: "message_start", id: "chatcmpl-x", model: "m" },
+      { type: "reasoning_start", index: 0, origin },
+      { type: "reasoning_delta", index: 0, text: "let me " },
+      {
+        type: "reasoning_signature",
+        index: 0,
+        signature: { origin, data: "SIG" },
+      },
+      { type: "reasoning_delta", index: 0, text: "think" },
+      { type: "text_delta", text: "Hi" },
+      { type: "message_end", finishReason: "stop" },
+    ];
+    let out = "";
+    for (const event of events) out += encoder.encode(event);
+    out += encoder.end();
+
+    const deltas = [...out.matchAll(/data: (\{.*\})/g)].map(
+      (m) => JSON.parse(m[1]).choices[0].delta,
+    );
+    expect(deltas).toEqual([
+      { role: "assistant", content: "" },
+      { reasoning_content: "let me " },
+      { reasoning_content: "think" },
+      { content: "Hi" },
+      {},
+    ]);
+    expect(out).not.toContain("SIG");
+  });
+
+  it("ollama stream emits thinking", () => {
+    // v1.5 spec §3.1 (Task 5): canonical reasoning reaches the
+    // Ollama client as one `message.thinking` fragment per NDJSON
+    // line, ahead of the content lines — the same field the Ollama
+    // decoder reads (docs.ollama.com/api/chat). Signatures have no
+    // Ollama field: never emitted.
+    const origin = { provider: "p", model: "m" };
+    const encoder = adapters.ollama.createStreamEncoder({
+      sourceRequest: {
+        model: "m",
+        messages: [{ role: "user", content: "hi" }],
+        stream: true,
+      },
+      query: {},
+      requestedModel: "m",
+    });
+    const events: CanonicalStreamEvent[] = [
+      { type: "message_start", id: "call_0", model: "m" },
+      { type: "reasoning_start", index: 0, origin },
+      { type: "reasoning_delta", index: 0, text: "let me " },
+      {
+        type: "reasoning_signature",
+        index: 0,
+        signature: { origin, data: "SIG" },
+      },
+      { type: "reasoning_delta", index: 0, text: "think" },
+      { type: "text_delta", text: "Hi" },
+      {
+        type: "usage",
+        usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      },
+      { type: "message_end", finishReason: "stop" },
+    ];
+    let out = "";
+    for (const event of events) out += encoder.encode(event);
+    out += encoder.end();
+
+    const lines = out
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(lines.map((l) => l.message)).toEqual([
+      { role: "assistant", content: "", thinking: "let me " },
+      { role: "assistant", content: "", thinking: "think" },
+      { role: "assistant", content: "Hi" },
+      { role: "assistant", content: "" },
+    ]);
+    expect(lines.at(-1)).toMatchObject({
+      done: true,
+      done_reason: "stop",
+    });
+    expect(out).not.toContain("SIG");
+  });
 });

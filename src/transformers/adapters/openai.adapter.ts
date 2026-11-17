@@ -107,11 +107,11 @@ export function toCanonicalRequest(
   const messages: CanonicalMessage[] = [];
   let systemPrompt: string | undefined;
 
-  for (const msg of request.messages) {
+  for (const [messageIndex, msg] of request.messages.entries()) {
     if (msg.role === "system") {
       systemPrompt = extractTextContent(msg);
     }
-    messages.push(convertToCanonicalMessage(msg));
+    messages.push(convertToCanonicalMessage(msg, messageIndex));
   }
 
   // Canonical has no field for `parallel_tool_calls` (a spec
@@ -277,11 +277,34 @@ function toCanonicalToolChoice(
 
 function convertToCanonicalMessage(
   msg: ChatCompletionMessageParam,
+  messageIndex = 0,
 ): CanonicalMessage {
   const base: CanonicalMessage = {
     role: msg.role as CanonicalMessage["role"],
     content: "",
   };
+
+  // v1.5 spec §3.1 (Task 5) + conductor's call (b): a client-echoed
+  // `reasoning_content` (the DeepSeek/OpenRouter field our replies
+  // now carry) arrives with no origin — no encoder could ever send
+  // it — so it drops with a `reasoning_dropped` note naming the
+  // path. Not in the SDK's assistant-param type; the field is real
+  // on the wire the same way it is in responses.
+  if (msg.role === "assistant") {
+    const returned = (msg as { reasoning_content?: unknown })
+      .reasoning_content;
+    if (typeof returned === "string" && returned !== "") {
+      recordNote(
+        {
+          stage: "decode",
+          adapter: "openai",
+          code: "reasoning_dropped",
+          path: `messages[${messageIndex}].reasoning_content`,
+        },
+        'Dropping "reasoning_content" on an assistant message (no origin — it can never be sent on)',
+      );
+    }
+  }
 
   if ("content" in msg && msg.content !== null) {
     if (typeof msg.content === "string") {
@@ -903,15 +926,53 @@ export function fromCanonicalResponse(
       },
     }));
 
-  // A parts array may carry reasoning and signatures — an OpenAI
-  // client never receives them, so only text parts are rendered.
+  // v1.5 spec §3.1 (Task 5): non-redacted reasoning parts reach the
+  // Chat client as `message.reasoning_content` (text joined "\n\n") —
+  // the DeepSeek/OpenRouter field
+  // (https://api-docs.deepseek.com/guides/reasoning_model,
+  // https://openrouter.ai/docs/use-cases/reasoning-tokens). Redacted
+  // parts carry no readable text — nothing to emit. Signatures have
+  // no Chat field and are never emitted; their drop is noted.
+  const parts =
+    typeof response.message.content === "string"
+      ? []
+      : (response.message.content ?? []);
+  const reasoningTexts: string[] = [];
+  for (const part of parts) {
+    if (part.signature !== undefined) {
+      noteSignatureDrop();
+    }
+    if (
+      part.type === "reasoning" &&
+      part.reasoning?.redacted !== true &&
+      part.reasoning?.text !== undefined &&
+      part.reasoning.text !== ""
+    ) {
+      reasoningTexts.push(part.reasoning.text);
+    }
+  }
+  for (const tc of response.message.toolCalls ?? []) {
+    if (tc.signature !== undefined) {
+      noteSignatureDrop();
+    }
+  }
   const text =
     typeof response.message.content === "string"
       ? response.message.content
-      : (response.message.content ?? [])
+      : parts
           .filter((p) => p.type === "text")
           .map((p) => p.text)
           .join("");
+
+  const message = {
+    role: "assistant" as const,
+    content: text,
+    refusal: null,
+    ...(reasoningTexts.length > 0 && {
+      reasoning_content: reasoningTexts.join("\n\n"),
+    }),
+    ...(toolCalls && { tool_calls: toolCalls }),
+  };
 
   return {
     id: response.id || `chatcmpl-${randomUUID()}`,
@@ -921,12 +982,7 @@ export function fromCanonicalResponse(
     choices: [
       {
         index: 0,
-        message: {
-          role: "assistant",
-          content: text,
-          refusal: null,
-          ...(toolCalls && { tool_calls: toolCalls }),
-        },
+        message: message as ChatCompletionResponse["choices"][0]["message"],
         finish_reason: mapToOpenaiFinishReason(response.finishReason),
         logprobs: null,
       },
@@ -935,6 +991,19 @@ export function fromCanonicalResponse(
       ? openaiUsageFromCanonical(response.usage)
       : undefined,
   };
+}
+
+/** Signatures never reach a Chat client (no field carries them). */
+function noteSignatureDrop(): void {
+  recordNote(
+    {
+      stage: "encode",
+      adapter: "openai",
+      code: "reasoning_dropped",
+      path: "signature",
+    },
+    "Dropping signature (no Chat Completions equivalent)",
+  );
 }
 
 // ============ MODEL LIST ============

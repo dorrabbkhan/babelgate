@@ -10,6 +10,7 @@ import type {
 import type { ChatCompletionRequest } from "../../types/openai.types";
 import { createIdGenerator } from "../../utils/ids";
 import { makeCanonicalError } from "../../utils/canonical-error";
+import { recordNote } from "../../observe/context";
 import { decodeOrigin } from "../reasoning-origin";
 import {
   createLineSplitter,
@@ -223,6 +224,9 @@ export function createStreamEncoder(
     ctx.sourceRequest.stream_options?.include_usage === true;
   const created = Math.floor(Date.now() / 1000);
   let id = "chatcmpl-babelgate";
+  // v1.5 spec §3.1 (Task 5): redacted reasoning blocks emit nothing —
+  // their indices are remembered so a stray delta is suppressed too.
+  const redactedReasoning = new Set<number>();
 
   const chunk = (
     delta: Record<string, unknown>,
@@ -250,13 +254,28 @@ export function createStreamEncoder(
         case "text_delta":
           return chunk({ content: event.text });
         case "reasoning_start":
+          // v1.5 spec §3.1 (Task 5): a reasoning block streams as
+          // `delta.reasoning_content` chunks — the DeepSeek/OpenRouter
+          // field (https://api-docs.deepseek.com/guides/reasoning_model,
+          // https://openrouter.ai/docs/use-cases/reasoning-tokens).
+          // The block itself is just a marker until its deltas arrive.
+          if (event.redacted === true) {
+            redactedReasoning.add(event.index);
+          }
+          return "";
         case "reasoning_delta":
+          if (redactedReasoning.has(event.index)) return "";
+          return chunk({ reasoning_content: event.text });
         case "reasoning_signature":
         case "text_signature":
-          // v1.4 §3.3: reasoning replay to this target lands in a
-          // later task; reasoning a target can't take is dropped.
+          // Signatures have no Chat Completions field — never emitted
+          // (spec §3.1, "Signatures never emitted"); the drop is noted.
+          noteSignatureDrop();
           return "";
         case "tool_call_start":
+          if (event.signature !== undefined) {
+            noteSignatureDrop();
+          }
           return chunk({
             tool_calls: [
               {
@@ -300,4 +319,17 @@ export function createStreamEncoder(
       return formatSse("[DONE]");
     },
   };
+}
+
+/** Signatures never reach a Chat client (no field carries them). */
+function noteSignatureDrop(): void {
+  recordNote(
+    {
+      stage: "encode",
+      adapter: "openai",
+      code: "reasoning_dropped",
+      path: "signature",
+    },
+    "Dropping signature (no Chat Completions equivalent)",
+  );
 }
