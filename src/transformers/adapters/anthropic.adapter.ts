@@ -68,6 +68,24 @@ import {
   createStreamEncoder,
 } from "./anthropic.stream";
 
+import type { MediaSupport } from "../../services/media-inline";
+
+/**
+ * Anthropic media support (v1.5 spec §3.2.2):
+ *  - image `source.type: "url" | "base64"` —
+ *    https://platform.claude.com/docs/en/build-with-claude/vision
+ *  - document `source.type: "url" | "base64" | "text"` —
+ *    https://platform.claude.com/docs/en/build-with-claude/pdf-support
+ *  - tool_result content accepts image blocks —
+ *    https://platform.claude.com/docs/en/build-with-claude/tool-use
+ */
+export const MEDIA_SUPPORT: MediaSupport = {
+  imageUrl: true,
+  documentData: true,
+  documentUrl: true,
+  toolMessageImages: true,
+};
+
 export const anthropicAdapter: ProviderAdapter<MessageCreateParams, Message> = {
   toCanonicalRequest,
   fromCanonicalRequest,

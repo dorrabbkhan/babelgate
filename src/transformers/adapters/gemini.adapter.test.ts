@@ -2120,3 +2120,109 @@ describe('cache hints on tool results (Task 17a)', () => {
     });
   });
 });
+
+describe('media (v1.5 spec §3.2.2)', () => {
+  it('fileData fileUri decodes to a url image', () => {
+    const result = toCanonicalRequest({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              fileData: {
+                mimeType: 'image/png',
+                fileUri: 'https://cdn.example.com/cat.png',
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as GenerateContentRequest);
+    expect(result.messages[0].content).toEqual([
+      {
+        type: 'image',
+        image: {
+          url: 'https://cdn.example.com/cat.png',
+          mimeType: 'image/png',
+        },
+      },
+    ]);
+  });
+
+  it('inlineData pdf decodes to a document part', () => {
+    const result = toCanonicalRequest({
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            {
+              inlineData: {
+                mimeType: 'application/pdf',
+                data: 'JVBERi0=',
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as GenerateContentRequest);
+    expect(result.messages[0].content).toEqual([
+      {
+        type: 'document',
+        document: { data: 'JVBERi0=', mimeType: 'application/pdf' },
+      },
+    ]);
+  });
+
+  it('url image encodes to fileData, pdf document to inlineData', () => {
+    const result = fromCanonicalRequest({
+      model: 'gemini-3',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              image: {
+                url: 'https://cdn.example.com/cat.png',
+                mimeType: 'image/png',
+              },
+            },
+            {
+              type: 'document',
+              document: {
+                data: 'JVBERi0=',
+                mimeType: 'application/pdf',
+              },
+            },
+            {
+              type: 'document',
+              document: {
+                url: 'https://cdn.example.com/spec.pdf',
+                mimeType: 'application/pdf',
+              },
+            },
+          ],
+        },
+      ],
+    });
+    const parts = (result.contents?.[0]?.parts ?? []) as unknown as Record<
+      string,
+      unknown
+    >[];
+    expect(parts).toEqual([
+      {
+        fileData: {
+          fileUri: 'https://cdn.example.com/cat.png',
+          mimeType: 'image/png',
+        },
+      },
+      { inlineData: { mimeType: 'application/pdf', data: 'JVBERi0=' } },
+      {
+        fileData: {
+          fileUri: 'https://cdn.example.com/spec.pdf',
+          mimeType: 'application/pdf',
+        },
+      },
+    ]);
+  });
+});

@@ -29,6 +29,15 @@ export interface GatewayFileRoute {
   fallback?: string[];
 }
 
+/**
+ * The YAML `media:` section (v1.5 spec §3.2.2); `MEDIA_FETCH` /
+ * `MEDIA_ALLOW_PRIVATE` win at load.
+ */
+export interface GatewayFileMedia {
+  fetch?: boolean;
+  allow_private?: boolean;
+}
+
 /** The YAML `observe:` section (spec §3.11); env vars win at load. */
 export interface GatewayFileObserve {
   usage_store?: boolean;
@@ -57,6 +66,7 @@ export interface GatewayFile {
   aliases?: Record<string, string>;
   routes?: GatewayFileRoute[];
   observe?: GatewayFileObserve;
+  media?: GatewayFileMedia;
   prices?: Record<string, GatewayFilePrice>;
 }
 
@@ -124,6 +134,12 @@ export const gatewayFileSchema: z.ZodType<GatewayFile> = z.strictObject({
       inspector_buffer: z.number().int().nonnegative().optional(),
       log_bodies: z.boolean().optional(),
       would_cost_reference: z.string().min(1).optional(),
+    })
+    .optional(),
+  media: z
+    .strictObject({
+      fetch: z.boolean().optional(),
+      allow_private: z.boolean().optional(),
     })
     .optional(),
   prices: z

@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import type {
   CanonicalCacheHint,
+  CanonicalDocument,
   CanonicalRequest,
   CanonicalResponse,
   CanonicalMessage,
@@ -34,6 +35,23 @@ import {
   createStreamDecoder,
   createStreamEncoder,
 } from "./openai.stream";
+
+import type { MediaSupport } from "../../services/media-inline";
+
+/**
+ * Chat Completions media support (v1.5 spec §3.2.2):
+ *  - `image_url.url` takes remote http(s) URLs —
+ *    https://platform.openai.com/docs/guides/images-vision
+ *  - `file` carries base64 `file_data` only — no file_url field —
+ *    https://platform.openai.com/docs/guides/pdf-files
+ *  - tool messages accept text content parts only.
+ */
+export const MEDIA_SUPPORT: MediaSupport = {
+  imageUrl: true,
+  documentData: true,
+  documentUrl: false,
+  toolMessageImages: false,
+};
 
 export const openaiAdapter: ProviderAdapter<
   ChatCompletionRequest,
@@ -345,10 +363,62 @@ function convertToCanonicalMessage(
   return base;
 }
 
+/**
+ * A `data:` URL → base64 + mime; anything else is undefined. File and
+ * image parts share the shape (spec §3.2.2 decode).
+ */
+function parseDataUrl(
+  url: string,
+): { data: string; mimeType: string } | undefined {
+  const match = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+  return match === null
+    ? undefined
+    : { data: match[2], mimeType: match[1] };
+}
+
+/**
+ * `file` part → document (v1.5 spec §3.2.2): `file_data` carries a
+ * `data:` URL or raw base64 — raw base64 is a PDF per
+ * https://platform.openai.com/docs/guides/pdf-files (the only file
+ * type the reference documents). `file_id` is a stored-file
+ * reference the proxy cannot resolve — refused, never silently
+ * dropped.
+ */
+function toCanonicalDocument(file: {
+  file_data?: string;
+  file_id?: string;
+  filename?: string;
+}): CanonicalDocument {
+  const name =
+    typeof file.filename === "string" && file.filename !== ""
+      ? { name: file.filename }
+      : {};
+  if (typeof file.file_data === "string" && file.file_data !== "") {
+    const parsed = parseDataUrl(file.file_data);
+    const data = parsed?.data ?? file.file_data;
+    const mimeType = parsed?.mimeType ?? "application/pdf";
+    if (mimeType !== "application/pdf" && mimeType !== "text/plain") {
+      throw new ValidationError(
+        `OpenAI file part has unsupported file_data mime type "${mimeType}"`,
+      );
+    }
+    return { data, mimeType, ...name };
+  }
+  if (typeof file.file_id === "string" && file.file_id !== "") {
+    throw new ValidationError(
+      'OpenAI file part "file_id" is a stored-file reference with no fetchable bytes',
+    );
+  }
+  throw new ValidationError(
+    'OpenAI "file" content part needs "file_data"',
+  );
+}
+
 function convertToCanonicalPart(part: {
   type: string;
   text?: string;
   image_url?: { url: string };
+  file?: { file_data?: string; file_id?: string; filename?: string };
 }): CanonicalContentPart {
   if (part.type === "text" && part.text) {
     return { type: "text", text: part.text };
@@ -365,8 +435,21 @@ function convertToCanonicalPart(part: {
         image: { data, mimeType },
       };
     }
-    // URL-based images - store as text placeholder
-    return { type: "text", text: `[Image: ${url}]` };
+    // v1.5 spec §3.2.2 (E4): a remote image URL keeps its URL —
+    // media-inline fetches or passes it through per target.
+    return { type: "image", image: { url } };
+  }
+
+  if (part.type === "file" && part.file) {
+    return { type: "document", document: toCanonicalDocument(part.file) };
+  }
+
+  if (part.type === "input_audio") {
+    // No canonical audio part (v1.5 spec §3.2.2) — a loud 400, never
+    // an empty text part pretending to carry the audio.
+    throw new ValidationError(
+      'Unsupported OpenAI content part type "input_audio"',
+    );
   }
 
   return { type: "text", text: "" };
@@ -720,6 +803,11 @@ function convertFromCanonicalContent(
           image_url: { url: string };
           cache_control?: OpenAICacheControl;
         }
+      | {
+          type: "file";
+          file: { file_data: string; filename?: string };
+          cache_control?: OpenAICacheControl;
+        }
     > {
   if (typeof content === "string") return content;
 
@@ -735,16 +823,48 @@ function convertFromCanonicalContent(
       };
     }
     if (part.type === "image" && part.image) {
-      if (part.image.data === undefined) {
-        // URL images resolve to bytes in the services (v1.5 Task 6).
+      // v1.5 §3.2.2: a URL passes through unchanged — image_url.url
+      // accepts http(s) on the wire
+      // (https://platform.openai.com/docs/guides/images-vision).
+      const url =
+        part.image.data === undefined
+          ? part.image.url!
+          : `data:${part.image.mimeType};base64,${part.image.data}`;
+      return {
+        type: "image_url" as const,
+        image_url: { url },
+        ...(cacheControl && { cache_control: cacheControl }),
+      };
+    }
+    if (part.type === "document" && part.document) {
+      const document = part.document;
+      // Text documents become text parts for every target (§3.2.2);
+      // a url-only text document needs the services' fetch first.
+      if (document.mimeType === "text/plain") {
+        if (document.data === undefined) {
+          throw new ValidationError(
+            'Unsupported "document" content: "url" without "data"',
+          );
+        }
+        return {
+          type: "text" as const,
+          text: Buffer.from(document.data, "base64").toString("utf8"),
+          ...(cacheControl && { cache_control: cacheControl }),
+        };
+      }
+      if (document.url !== undefined || document.data === undefined) {
+        // Chat Completions `file` carries bytes only — no file_url
+        // field (https://platform.openai.com/docs/guides/pdf-files);
+        // media-inline fetches the URL first.
         throw new ValidationError(
-          'Unsupported "image" content: "url" without "data"',
+          'Unsupported "document" content: "url" without "data"',
         );
       }
       return {
-        type: "image_url" as const,
-        image_url: {
-          url: `data:${part.image.mimeType};base64,${part.image.data}`,
+        type: "file" as const,
+        file: {
+          file_data: `data:${document.mimeType};base64,${document.data}`,
+          ...(document.name !== undefined && { filename: document.name }),
         },
         ...(cacheControl && { cache_control: cacheControl }),
       };

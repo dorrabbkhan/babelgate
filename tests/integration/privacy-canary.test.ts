@@ -709,6 +709,116 @@ describe("privacy canary (spec §4.1)", () => {
     expect(detail!.bodies).toBeUndefined();
   });
 
+  it("media bytes reach only the ring; the URL may appear", async () => {
+    // v1.5 spec §3.2.2: "The URL is logged, the bytes never are."
+    // A URL image and a PDF document ride the OpenAI dialect; the
+    // openai target takes both by URL/by bytes — the PDF's base64 is
+    // content and must stay out of every surface but the body ring,
+    // while the image URL is allowed wherever media is described.
+    const CANARY_PDF_B64 = Buffer.from(
+      "CANARY-PDFBYTES-qW8e4Rt7",
+    ).toString("base64");
+    const CANARY_IMGURL =
+      "http://media.example/CANARY-IMGURL-hJ5k2Mn9/pic.png";
+
+    const exporter = new RecordingExporter();
+    const otel = await createOtelSink(exporter);
+    registerSink(otel);
+    const sse = await connectLive();
+    expect(sse.status).toBe(200);
+
+    const before = traces.length;
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({
+        model: "gpt-4",
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: `echo ${CANARY_PROMPT}` },
+              {
+                type: "image_url",
+                image_url: { url: CANARY_IMGURL },
+              },
+              {
+                type: "file",
+                file: {
+                  file_data: `data:application/pdf;base64,${CANARY_PDF_B64}`,
+                  filename: "canary.pdf",
+                },
+              },
+            ],
+          },
+        ],
+      } as object);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    await waitForTraces(before + 1);
+    getUsageStore()!.flush();
+    const requestId = traces[traces.length - 1].requestId;
+    await waitForSseFinished(sse);
+    const liveText = sse.text();
+    sse.close();
+
+    // Sanity: the media really was in flight — the PDF bytes and the
+    // image URL reached the upstream body.
+    const upstreamText = JSON.stringify(capturedRequests.openai);
+    expect(upstreamText).toContain(CANARY_PDF_B64);
+    expect(upstreamText).toContain(CANARY_IMGURL);
+
+    const metrics = await request(app).get("/metrics");
+    expect(metrics.status).toBe(200);
+    const routing = await request(app).get("/ui/api/routing").set(UI);
+    expect(routing.status).toBe(200);
+    const requestsApi = await request(app)
+      .get("/ui/api/requests")
+      .set(UI);
+    expect(requestsApi.status).toBe(200);
+
+    await otel.shutdown();
+    const store = getUsageStore()!;
+    const tableRows = store.listRequests({ limit: 500 }).rows;
+    const detail = store.getRequest(requestId);
+    expect(detail).toBeDefined();
+
+    const haystacks: Record<string, string> = {
+      log: logText(),
+      metrics: metrics.text,
+      otelSpans: JSON.stringify(
+        exporter.spans.map((s) => ({
+          name: s.name,
+          attributes: s.attributes,
+          status: s.status,
+          events: s.events,
+        })),
+      ),
+      live: liveText,
+      routing: JSON.stringify(routing.body),
+      requestsApi: JSON.stringify(requestsApi.body),
+      requestsTable: JSON.stringify({
+        ...detail,
+        bodies: undefined,
+        rows: tableRows,
+      }),
+    };
+    for (const [surface, text] of Object.entries(haystacks)) {
+      for (const canary of [...ALL_CANARIES, CANARY_PDF_B64]) {
+        expect(text, `${surface} leaked ${canary}`).not.toContain(canary);
+      }
+    }
+
+    // The ring is the one place bodies belong — media bytes and the
+    // URL included.
+    const ring = getBodyRing()!.get(requestId);
+    expect(ring).toBeDefined();
+    const ringText = JSON.stringify(ring);
+    expect(ringText).toContain(CANARY_PDF_B64);
+    expect(ringText).toContain(CANARY_IMGURL);
+    expect(ringText).not.toContain(CANARY_KEY);
+
+    expect(detail!.bodies).toBeUndefined();
+  });
+
   it("canary reaches the bodies table only with LOG_BODIES=true", async () => {
     process.env.LOG_BODIES = "true";
     resetConfig();

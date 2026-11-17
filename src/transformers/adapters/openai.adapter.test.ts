@@ -1402,4 +1402,112 @@ describe('reasoning_content (v1.4 spec §3.3)', () => {
     ) as unknown as { messages: Array<Record<string, unknown>> };
     expect(wire.messages[0]).not.toHaveProperty('reasoning_content');
   });
+
+  describe('media (v1.5 spec §3.2.2)', () => {
+    it('http image_url decodes to url image', () => {
+      const result = toCanonicalRequest({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: 'https://cdn.example.com/cat.png' },
+              },
+            ],
+          },
+        ],
+      } as ChatCompletionRequest);
+      expect(result.messages[0].content).toEqual([
+        {
+          type: 'image',
+          image: { url: 'https://cdn.example.com/cat.png' },
+        },
+      ]);
+    });
+
+    it('file part decodes to document', () => {
+      const result = toCanonicalRequest({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'file',
+                file: {
+                  file_data: 'data:application/pdf;base64,JVBERi0=',
+                  filename: 'spec.pdf',
+                },
+              },
+            ],
+          },
+        ],
+      } as ChatCompletionRequest);
+      expect(result.messages[0].content).toEqual([
+        {
+          type: 'document',
+          document: {
+            data: 'JVBERi0=',
+            mimeType: 'application/pdf',
+            name: 'spec.pdf',
+          },
+        },
+      ]);
+    });
+
+    it('url image encodes to image_url unchanged', () => {
+      const result = fromCanonicalRequest({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                image: { url: 'https://cdn.example.com/cat.png' },
+              },
+            ],
+          },
+        ],
+      });
+      expect(result.messages[0].content).toEqual([
+        {
+          type: 'image_url',
+          image_url: { url: 'https://cdn.example.com/cat.png' },
+        },
+      ]);
+    });
+
+    it('document encodes to a file part', () => {
+      const result = fromCanonicalRequest({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                document: {
+                  data: 'JVBERi0=',
+                  mimeType: 'application/pdf',
+                  name: 'spec.pdf',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      expect(result.messages[0].content).toEqual([
+        {
+          type: 'file',
+          file: {
+            file_data: 'data:application/pdf;base64,JVBERi0=',
+            filename: 'spec.pdf',
+          },
+        },
+      ]);
+    });
+  });
 });

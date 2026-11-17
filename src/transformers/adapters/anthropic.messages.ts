@@ -201,6 +201,90 @@ function toolResultContentToString(
     .join("\n");
 }
 
+/**
+ * Anthropic `document` block → canonical document part (v1.5 spec
+ * §3.2.2). Source variants per
+ * https://platform.claude.com/docs/en/build-with-claude/pdf-support:
+ * base64 (PDF bytes), text (plain-text source carried as utf-8 →
+ * base64), url (PDFs only on the wire). `content` (a nested block
+ * array) and `file` (stored-file references) have no canonical
+ * equivalent — a 400 naming the source type, never a silent drop.
+ */
+function toCanonicalDocumentPart(
+  block: {
+    source: unknown;
+    title?: string | null;
+    cache_control?: unknown;
+  },
+  path: string,
+): CanonicalContentPart {
+  const source = (block.source ?? {}) as {
+    type?: string;
+    media_type?: string;
+    data?: string;
+    url?: string;
+  };
+  const name =
+    typeof block.title === "string" && block.title !== ""
+      ? { name: block.title }
+      : {};
+  const cache =
+    block.cache_control !== undefined && block.cache_control !== null
+      ? {
+          cache: toCacheHint(
+            block.cache_control as Parameters<typeof toCacheHint>[0],
+          ),
+        }
+      : {};
+  switch (source.type) {
+    case "base64":
+      if (source.media_type !== "application/pdf" || !source.data) {
+        throw new ValidationError(
+          `Unsupported document source media_type "${source.media_type ?? "none"}" at ${path}`,
+        );
+      }
+      return {
+        type: "document",
+        document: {
+          data: source.data,
+          mimeType: "application/pdf",
+          ...name,
+        },
+        ...cache,
+      };
+    case "text":
+      if (typeof source.data !== "string") {
+        throw new ValidationError(
+          `Unsupported document text source at ${path}`,
+        );
+      }
+      return {
+        type: "document",
+        document: {
+          data: Buffer.from(source.data, "utf8").toString("base64"),
+          mimeType: "text/plain",
+          ...name,
+        },
+        ...cache,
+      };
+    case "url":
+      if (typeof source.url !== "string" || source.url === "") {
+        throw new ValidationError(
+          `Unsupported document url source at ${path}`,
+        );
+      }
+      return {
+        type: "document",
+        document: { url: source.url, mimeType: "application/pdf", ...name },
+        ...cache,
+      };
+    default:
+      throw new ValidationError(
+        `Unsupported document source type "${source.type ?? "none"}" at ${path}`,
+      );
+  }
+}
+
 function toolUseToCanonical(block: ToolUseBlockParam): CanonicalToolCall {
   return {
     id: block.id,
@@ -303,6 +387,7 @@ function extractContent(
         type: string;
         media_type?: string;
         data?: string;
+        url?: string;
       };
       if (source.type === "base64" && source.data) {
         parts.push({
@@ -316,10 +401,37 @@ function extractContent(
             cache: toCacheHint(block.cache_control),
           }),
         });
+      } else if (source.type === "url" && typeof source.url === "string") {
+        // v1.5 spec §3.2.2: a URL image source keeps its URL —
+        // media-inline fetches or passes it through per target.
+        // https://platform.claude.com/docs/en/build-with-claude/vision
+        parts.push({
+          type: "image",
+          image: { url: source.url },
+          ...(block.cache_control && {
+            cache: toCacheHint(block.cache_control),
+          }),
+        });
       } else {
-        // image without a usable base64 source keeps the old placeholder
-        parts.push({ type: "text", text: "" });
+        // file / unrecognised image sources — a loud 400, never an
+        // empty text part pretending to carry the image.
+        throw new ValidationError(
+          `Unsupported image source type "${source.type}"`,
+        );
       }
+      continue;
+    }
+    if (block.type === "document" && "source" in block) {
+      parts.push(
+        toCanonicalDocumentPart(
+          block as {
+            source: unknown;
+            title?: string | null;
+            cache_control?: unknown;
+          },
+          `messages[${messageIndex}].content[${blockIndex}]`,
+        ),
+      );
       continue;
     }
     if (block.type === "thinking" || block.type === "redacted_thinking") {
@@ -487,7 +599,17 @@ type AnthropicContentBlock =
     }
   | {
       type: "image";
-      source: { type: "base64"; media_type: ImageMediaType; data: string };
+      source:
+        | { type: "base64"; media_type: ImageMediaType; data: string }
+        | { type: "url"; url: string };
+      cache_control?: CacheControlEphemeral;
+    }
+  | {
+      type: "document";
+      source:
+        | { type: "base64"; media_type: "application/pdf"; data: string }
+        | { type: "url"; url: string };
+      title?: string;
       cache_control?: CacheControlEphemeral;
     }
   | { type: "thinking"; thinking: string; signature: string }
@@ -520,23 +642,25 @@ function convertToAnthropicContent(
       continue;
     }
     if (part.type === "image" && part.image) {
-      if (part.image.data === undefined) {
-        // URL images resolve to bytes in the services (v1.5 Task 6);
-        // until then a url variant cannot be encoded — never emit
-        // `data:undefined` silently.
-        throw new ValidationError(
-          'Unsupported "image" content: "url" without "data"',
-        );
-      }
+      // v1.5 §3.2.2: image source takes a URL on the wire —
+      // https://platform.claude.com/docs/en/build-with-claude/vision
+      const source =
+        part.image.data === undefined
+          ? { type: "url" as const, url: part.image.url! }
+          : {
+              type: "base64" as const,
+              media_type: validateMediaType(part.image.mimeType),
+              data: part.image.data,
+            };
       blocks.push({
         type: "image",
-        source: {
-          type: "base64" as const,
-          media_type: validateMediaType(part.image.mimeType),
-          data: part.image.data,
-        },
+        source,
         ...(cacheControl && { cache_control: cacheControl }),
       });
+      continue;
+    }
+    if (part.type === "document" && part.document) {
+      blocks.push(toDocumentBlock(part.document, cacheControl));
       continue;
     }
     if (part.type === "reasoning" && part.reasoning) {
@@ -583,6 +707,60 @@ function convertToAnthropicContent(
   }
 
   return blocks;
+}
+
+/**
+ * Canonical document → Anthropic `document` block (v1.5 §3.2.2):
+ * PDF bytes → base64 source; a URL → url source (the wire supports
+ * PDFs by URL); `name` rides as `title`. A text/plain document —
+ * converted to a text part by media-inline — defensively encodes
+ * as a text block when its data reaches the encoder; a text/plain
+ * URL can only arrive un-fetched, which nothing can encode.
+ * https://platform.claude.com/docs/en/build-with-claude/pdf-support
+ */
+function toDocumentBlock(
+  document: {
+    data?: string;
+    url?: string;
+    mimeType: string;
+    name?: string;
+  },
+  cacheControl: CacheControlEphemeral | undefined,
+): AnthropicContentBlock {
+  const title =
+    document.name !== undefined ? { title: document.name } : {};
+  if (document.mimeType === "text/plain") {
+    if (document.data === undefined) {
+      throw new ValidationError(
+        'Unsupported "document" content: "url" without "data"',
+      );
+    }
+    return {
+      type: "text",
+      text: Buffer.from(document.data, "base64").toString("utf8"),
+      ...(cacheControl && { cache_control: cacheControl }),
+    };
+  }
+  const source =
+    document.url !== undefined
+      ? { type: "url" as const, url: document.url }
+      : document.data !== undefined
+        ? {
+            type: "base64" as const,
+            media_type: "application/pdf" as const,
+            data: document.data,
+          }
+        : (() => {
+            throw new ValidationError(
+              'Unsupported "document" content: neither "url" nor "data"',
+            );
+          })();
+  return {
+    type: "document",
+    source,
+    ...title,
+    ...(cacheControl && { cache_control: cacheControl }),
+  };
 }
 
 function validateMediaType(type: string): ImageMediaType {

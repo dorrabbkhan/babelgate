@@ -105,6 +105,21 @@ type GeminiGenerateContentResponse = GenerateContentResponse & {
   modelVersion?: string;
 };
 
+import type { MediaSupport } from "../../services/media-inline";
+
+/**
+ * Gemini media support (v1.5 spec §3.2.2): `inlineData` carries image
+ * and PDF bytes, `fileData.fileUri` carries URL media —
+ * https://ai.google.dev/api/generate-content#Part
+ * tool messages (functionResponse parts) carry no image slot.
+ */
+export const MEDIA_SUPPORT: MediaSupport = {
+  imageUrl: true,
+  documentData: true,
+  documentUrl: true,
+  toolMessageImages: false,
+};
+
 export const geminiAdapter: ProviderAdapter<
   GenerateContentRequest,
   GenerateContentResponse
@@ -481,6 +496,7 @@ function extractContentParts(
       thought?: boolean;
       thoughtSignature?: unknown;
       inlineData?: { data: string; mimeType: string };
+      fileData?: { mimeType: string; fileUri: string };
     };
     const carrier =
       typeof p.thoughtSignature === "string" &&
@@ -530,6 +546,21 @@ function extractContentParts(
       continue;
     }
     if (p.inlineData != null) {
+      const mimeType = p.inlineData.mimeType;
+      // v1.5 spec §3.2.2: inlineData carries images and documents —
+      // https://ai.google.dev/api/generate-content#Part
+      if (mimeType === "application/pdf" || mimeType === "text/plain") {
+        out.push({
+          type: "document",
+          document: { data: p.inlineData.data, mimeType },
+        });
+        continue;
+      }
+      if (!mimeType.startsWith("image/")) {
+        throw new ValidationError(
+          `Unsupported inlineData mime type "${mimeType}" at contents[${contentIndex}].parts[${j}]`,
+        );
+      }
       out.push({
         type: "image",
         image: {
@@ -540,6 +571,32 @@ function extractContentParts(
           }
             ? T
             : never,
+        },
+      });
+      continue;
+    }
+    if (p.fileData != null) {
+      // fileData.fileUri is Gemini's URL slot — files-api URIs and
+      // public http(s) URLs (v1.5 spec §3.2.2):
+      // https://ai.google.dev/api/generate-content#FileData
+      const { mimeType, fileUri } = p.fileData;
+      if (mimeType === "application/pdf" || mimeType === "text/plain") {
+        out.push({
+          type: "document",
+          document: { url: fileUri, mimeType },
+        });
+        continue;
+      }
+      if (!mimeType.startsWith("image/")) {
+        throw new ValidationError(
+          `Unsupported fileData mime type "${mimeType}" at contents[${contentIndex}].parts[${j}]`,
+        );
+      }
+      out.push({
+        type: "image",
+        image: {
+          url: fileUri,
+          mimeType: mimeType as CanonicalImageMimeType,
         },
       });
       continue;
@@ -1007,11 +1064,18 @@ function convertToParts(content: string | CanonicalContentPart[]): Part[] {
       continue;
     }
     if (part.type === "image" && part.image) {
+      // v1.5 §3.2.2: a URL image is fileData.fileUri on the wire —
+      // https://ai.google.dev/api/generate-content#FileData
       if (part.image.data === undefined) {
-        // URL images resolve to bytes in the services (v1.5 Task 6).
-        throw new ValidationError(
-          'Unsupported "image" content: "url" without "data"',
-        );
+        parts.push({
+          fileData: {
+            fileUri: part.image.url!,
+            ...(part.image.mimeType !== undefined && {
+              mimeType: part.image.mimeType,
+            }),
+          },
+        } as Part);
+        continue;
       }
       parts.push({
         inlineData: {
@@ -1019,6 +1083,10 @@ function convertToParts(content: string | CanonicalContentPart[]): Part[] {
           data: part.image.data,
         },
       });
+      continue;
+    }
+    if (part.type === "document" && part.document) {
+      parts.push(toDocumentPart(part.document));
       continue;
     }
     if (part.type === "reasoning" && part.reasoning) {
@@ -1039,6 +1107,44 @@ function convertToParts(content: string | CanonicalContentPart[]): Part[] {
     parts.push({ text: "" });
   }
   return parts;
+}
+
+/**
+ * Canonical document → Gemini part (v1.5 §3.2.2): PDF bytes →
+ * inlineData; a URL → fileData.fileUri
+ * (https://ai.google.dev/api/generate-content#Part). A text/plain
+ * document decodes to a text part (media-inline already converts it —
+ * this is the defensive path for a direct encode).
+ */
+function toDocumentPart(document: {
+  data?: string;
+  url?: string;
+  mimeType: string;
+  name?: string;
+}): Part {
+  if (document.mimeType === "text/plain") {
+    if (document.data === undefined) {
+      throw new ValidationError(
+        'Unsupported "document" content: "url" without "data"',
+      );
+    }
+    return {
+      text: Buffer.from(document.data, "base64").toString("utf8"),
+    } as Part;
+  }
+  if (document.url !== undefined) {
+    return {
+      fileData: { fileUri: document.url, mimeType: document.mimeType },
+    } as Part;
+  }
+  if (document.data === undefined) {
+    throw new ValidationError(
+      'Unsupported "document" content: neither "url" nor "data"',
+    );
+  }
+  return {
+    inlineData: { mimeType: document.mimeType, data: document.data },
+  };
 }
 
 // ============ RESPONSE: Gemini → Canonical ============

@@ -501,6 +501,75 @@ describe("loadYamlConfig", () => {
     }
   });
 
+  it("media: keys map to the media block and env wins (v1.5 spec §3.2.2)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-media-"));
+    try {
+      let n = 0;
+      const yaml = (media: string[]) => {
+        const file = join(dir, `cfg-${n++}.yaml`);
+        writeFileSync(
+          file,
+          [
+            "default: ollama",
+            "providers:",
+            "  ollama:",
+            "    type: ollama",
+            "    base_url: http://localhost:11434",
+            ...media,
+            "",
+          ].join("\n"),
+        );
+        return file;
+      };
+
+      const full = yaml(["media:", "  fetch: false", "  allow_private: true"]);
+      expect(loadYamlConfig(full, {}).media).toStrictEqual({
+        fetch: false,
+        allowPrivate: true,
+      });
+
+      // No media: section → the §3.2.2 defaults.
+      expect(loadYamlConfig(yaml([]), {}).media).toStrictEqual({
+        fetch: true,
+        allowPrivate: false,
+      });
+
+      // Env wins over both media: keys.
+      expect(
+        loadYamlConfig(full, {
+          MEDIA_FETCH: "on",
+          MEDIA_ALLOW_PRIVATE: "false",
+        }).media,
+      ).toStrictEqual({ fetch: true, allowPrivate: false });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("media: unknown keys are a startup error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-media-bad-"));
+    try {
+      const file = join(dir, "cfg.yaml");
+      writeFileSync(
+        file,
+        [
+          "default: ollama",
+          "providers:",
+          "  ollama:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          "media:",
+          "  fetchme: true",
+          "",
+        ].join("\n"),
+      );
+      expect(() => loadYamlConfig(file, {})).toThrow(ConfigurationError);
+      expect(() => loadYamlConfig(file, {})).toThrow(/media/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("a missing explicit path is a startup error", () => {
     expect(() => loadYamlConfig(fixture("does-not-exist.yaml"), {})).toThrowError(
       "Config file not found",

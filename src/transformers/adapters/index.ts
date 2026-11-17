@@ -3,7 +3,13 @@ import { geminiAdapter } from "./gemini.adapter";
 import { ollamaAdapter } from "./ollama.adapter";
 import { anthropicAdapter } from "./anthropic.adapter";
 import { responsesAdapter } from "./responses.adapter";
+import { MEDIA_SUPPORT as openaiMedia } from "./openai.adapter";
+import { MEDIA_SUPPORT as geminiMedia } from "./gemini.adapter";
+import { MEDIA_SUPPORT as ollamaMedia } from "./ollama.adapter";
+import { MEDIA_SUPPORT as anthropicMedia } from "./anthropic.adapter";
+import { MEDIA_SUPPORT as responsesMedia } from "./responses.adapter";
 import type { ProviderAdapter } from "../../types/canonical.types";
+import type { MediaSupport } from "../../services/media-inline";
 
 export type Provider =
   | "openai"
@@ -11,6 +17,20 @@ export type Provider =
   | "ollama"
   | "anthropic"
   | "responses";
+
+/**
+ * What each provider's wire can carry (v1.5 spec §3.2.2) — the
+ * services read this per attempt to pass URL media through, fetch
+ * and inline URL media for byte-only targets, or refuse what the
+ * target cannot express.
+ */
+export const MEDIA_SUPPORT: Record<Provider, MediaSupport> = {
+  openai: openaiMedia,
+  gemini: geminiMedia,
+  ollama: ollamaMedia,
+  anthropic: anthropicMedia,
+  responses: responsesMedia,
+};
 
 export const adapters: Record<Provider, ProviderAdapter<unknown, unknown>> = {
   openai: openaiAdapter as ProviderAdapter<unknown, unknown>,

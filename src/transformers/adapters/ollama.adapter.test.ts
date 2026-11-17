@@ -1296,3 +1296,53 @@ describe("thinking (v1.4 spec §3.3)", () => {
     expect(wire.messages?.[0]).not.toHaveProperty("thinking");
   });
 });
+
+describe('media (v1.5 spec §3.2.2)', () => {
+  it('a pdf document part is refused naming it', () => {
+    // Ollama has no document field (https://docs.ollama.com/api/chat);
+    // media-inline refuses before encode — this pins the same refusal
+    // when a document reaches the encoder directly.
+    expect(() =>
+      fromCanonicalRequest({
+        model: 'llama3',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                document: {
+                  data: 'JVBERi0=',
+                  mimeType: 'application/pdf',
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    ).toThrow(ValidationError);
+  });
+
+  it('a text/plain document part becomes message text', () => {
+    const result = fromCanonicalRequest({
+      model: 'llama3',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'read' },
+            {
+              type: 'document',
+              document: {
+                data: Buffer.from('plain words').toString('base64'),
+                mimeType: 'text/plain',
+              },
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.messages![0].content).toBe('read\nplain words');
+    expect(result.messages![0]).not.toHaveProperty('images');
+  });
+});
