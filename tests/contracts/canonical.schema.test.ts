@@ -736,3 +736,169 @@ describe('v1.4 canonical extensions (v1.4 spec §3.2)', () => {
     ).toBe(true);
   });
 });
+
+describe('v1.5 canonical media (v1.5 spec §3.2.1)', () => {
+  const request = (over: Record<string, unknown>) => ({
+    model: 'm',
+    messages: [{ role: 'user', content: 'hi' }],
+    ...over,
+  });
+
+  it('url image valid', () => {
+    const bare = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'image', image: { url: 'https://x.example/i.png' } },
+            ],
+          },
+        ],
+      })
+    );
+    expect(bare.success).toBe(true);
+
+    const typed = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                image: { url: 'https://x.example/i.png', mimeType: 'image/png' },
+              },
+            ],
+          },
+        ],
+      })
+    );
+    expect(typed.success).toBe(true);
+  });
+
+  it('image with both data and url invalid', () => {
+    const result = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image',
+                image: {
+                  data: 'abc',
+                  mimeType: 'image/png',
+                  url: 'https://x.example/i.png',
+                },
+              },
+            ],
+          },
+        ],
+      })
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it('document pdf by data valid', () => {
+    const result = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                document: {
+                  data: 'JVBERi0=',
+                  mimeType: 'application/pdf',
+                  name: 'spec.pdf',
+                },
+              },
+            ],
+          },
+        ],
+      })
+    );
+    expect(result.success).toBe(true);
+
+    const byUrl = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                document: {
+                  url: 'https://x.example/spec.pdf',
+                  mimeType: 'application/pdf',
+                },
+              },
+            ],
+          },
+        ],
+      })
+    );
+    expect(byUrl.success).toBe(true);
+  });
+
+  it('document with neither data nor url invalid', () => {
+    const result = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                document: { mimeType: 'application/pdf' },
+              },
+            ],
+          },
+        ],
+      })
+    );
+    expect(result.success).toBe(false);
+  });
+
+  it('tool message with image part valid', () => {
+    const result = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'tool',
+            toolCallId: 'call_1',
+            content: [
+              { type: 'text', text: 'screenshot attached' },
+              {
+                type: 'image',
+                image: { data: 'abc', mimeType: 'image/png' },
+              },
+            ],
+          },
+        ],
+      })
+    );
+    expect(result.success).toBe(true);
+  });
+
+  it('document part on assistant message invalid', () => {
+    const result = canonicalRequestSchema.safeParse(
+      request({
+        messages: [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'document',
+                document: { data: 'JVBERi0=', mimeType: 'application/pdf' },
+              },
+            ],
+          },
+        ],
+      })
+    );
+    expect(result.success).toBe(false);
+  });
+});

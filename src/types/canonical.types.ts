@@ -60,12 +60,15 @@ export interface CanonicalMessage {
 }
 
 export interface CanonicalContentPart {
-  /** Content type; "reasoning" appears on assistant messages only */
-  type: "text" | "image" | "reasoning";
+  /** Content type; "reasoning" appears on assistant messages only,
+   *  "document" on user messages only (v1.5 spec §3.2.1) */
+  type: "text" | "image" | "reasoning" | "document";
   /** Text content (when type is 'text') */
   text?: string;
   /** Image content (when type is 'image') */
   image?: CanonicalImage;
+  /** Document content (when type is 'document', v1.5 spec §3.2.1) */
+  document?: CanonicalDocument;
   /** Reasoning payload (when type is 'reasoning'); origin always set */
   reasoning?: {
     text?: string;
@@ -100,11 +103,40 @@ export interface CanonicalCacheHint {
   ttl?: "5m" | "1h";
 }
 
-export interface CanonicalImage {
-  /** Base64-encoded image data */
-  data: string;
-  /** MIME type (e.g., 'image/png', 'image/jpeg') */
-  mimeType: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+export type CanonicalImageMimeType =
+  | "image/jpeg"
+  | "image/png"
+  | "image/gif"
+  | "image/webp";
+
+/** Exactly one of `data`/`url` (v1.5 spec §3.2.1): inline base64
+ *  bytes, or a remote URL the services resolve to bytes before
+ *  encoding (§3.2.2 fetch guard). */
+export type CanonicalImage =
+  | {
+      /** Base64-encoded image data */
+      data: string;
+      /** MIME type (e.g., 'image/png', 'image/jpeg') */
+      mimeType: CanonicalImageMimeType;
+      url?: never;
+    }
+  | {
+      /** Remote image URL (http/https only, §3.2.2) */
+      url: string;
+      mimeType?: CanonicalImageMimeType;
+      data?: never;
+    };
+
+/** A document part (v1.5 spec §3.2.1). Exactly one of `data`/`url`
+ *  (schema-enforced). */
+export interface CanonicalDocument {
+  /** Base64-encoded document bytes */
+  data?: string;
+  /** Remote document URL (http/https only, §3.2.2) */
+  url?: string;
+  mimeType: "application/pdf" | "text/plain";
+  /** Original filename when the source carries one */
+  name?: string;
 }
 
 export interface CanonicalConfig {

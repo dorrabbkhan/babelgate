@@ -369,7 +369,16 @@ function convertToOllamaMessage(
 
     const images = msg.content
       .filter((p) => p.type === "image" && p.image)
-      .map((p) => p.image!.data);
+      .map((p) => {
+        const image = p.image!;
+        if (image.data === undefined) {
+          // URL images resolve to bytes in the services (v1.5 Task 6).
+          throw new ValidationError(
+            'Unsupported "image" content: "url" without "data"',
+          );
+        }
+        return image.data;
+      });
 
     result.content = textParts;
     if (images.length > 0) {

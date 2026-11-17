@@ -4,7 +4,7 @@ import type {
   CanonicalResponse,
   CanonicalMessage,
   CanonicalContentPart,
-  CanonicalImage,
+  CanonicalImageMimeType,
   CanonicalToolCall,
   CanonicalError,
   CanonicalErrorKind,
@@ -747,6 +747,12 @@ function convertToParts(content: string | CanonicalContentPart[]): Part[] {
       continue;
     }
     if (part.type === "image" && part.image) {
+      if (part.image.data === undefined) {
+        // URL images resolve to bytes in the services (v1.5 Task 6).
+        throw new ValidationError(
+          'Unsupported "image" content: "url" without "data"',
+        );
+      }
       parts.push({
         inlineData: {
           mimeType: part.image.mimeType,
@@ -845,7 +851,7 @@ export function toCanonicalResponse(
         type: "image",
         image: {
           data: part.inlineData.data,
-          mimeType: part.inlineData.mimeType as CanonicalImage["mimeType"],
+          mimeType: part.inlineData.mimeType as CanonicalImageMimeType,
         },
       });
       continue;

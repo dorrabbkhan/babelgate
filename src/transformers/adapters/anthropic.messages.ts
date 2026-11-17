@@ -3,7 +3,7 @@ import type {
   CanonicalFunction,
   CanonicalMessage,
   CanonicalContentPart,
-  CanonicalImage,
+  CanonicalImageMimeType,
   CanonicalTool,
   CanonicalToolCall,
   CanonicalToolChoice,
@@ -247,7 +247,7 @@ function extractContent(
           image: {
             data: source.data,
             mimeType: (source.media_type ||
-              "image/png") as CanonicalImage["mimeType"],
+              "image/png") as CanonicalImageMimeType,
           },
           ...(block.cache_control && {
             cache: toCacheHint(block.cache_control),
@@ -438,6 +438,14 @@ function convertToAnthropicContent(
       continue;
     }
     if (part.type === "image" && part.image) {
+      if (part.image.data === undefined) {
+        // URL images resolve to bytes in the services (v1.5 Task 6);
+        // until then a url variant cannot be encoded — never emit
+        // `data:undefined` silently.
+        throw new ValidationError(
+          'Unsupported "image" content: "url" without "data"',
+        );
+      }
       blocks.push({
         type: "image",
         source: {

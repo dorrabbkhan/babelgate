@@ -7,7 +7,7 @@ import type {
   CanonicalContentPart,
   CanonicalError,
   CanonicalErrorKind,
-  CanonicalImage,
+  CanonicalImageMimeType,
   CanonicalModelList,
   CanonicalResponseFormat,
   CanonicalToolChoice,
@@ -286,7 +286,7 @@ function convertToCanonicalPart(part: {
     if (url.startsWith("data:")) {
       const [meta, data] = url.split(",");
       const mimeType = (meta.split(":")[1]?.split(";")[0] ||
-        "image/png") as CanonicalImage["mimeType"];
+        "image/png") as CanonicalImageMimeType;
       return {
         type: "image",
         image: { data, mimeType },
@@ -662,6 +662,12 @@ function convertFromCanonicalContent(
       };
     }
     if (part.type === "image" && part.image) {
+      if (part.image.data === undefined) {
+        // URL images resolve to bytes in the services (v1.5 Task 6).
+        throw new ValidationError(
+          'Unsupported "image" content: "url" without "data"',
+        );
+      }
       return {
         type: "image_url" as const,
         image_url: {
