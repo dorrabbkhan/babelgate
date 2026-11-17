@@ -42,7 +42,8 @@ export type MediaSupport = {
   /** URL-bearing documents (Anthropic source.url, Responses
    *  input_file.file_url, Gemini fileData.fileUri) */
   documentUrl: boolean;
-  /** Images inside tool-result content (Task 7 wires the encoders). */
+  /** Images inside tool-result content (v1.5 spec §3.2.1 — Anthropic
+   *  tool_result blocks, Responses tool-output arrays). */
   toolMessageImages: boolean;
 };
 

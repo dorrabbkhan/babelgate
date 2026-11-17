@@ -6232,3 +6232,103 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   the upstream as Ollama `images[]` base64; a `file` PDF to the same
   target returned a 400 `invalid_request_error` naming
   `messages[0].content[0]` and the target (request/response in the PR).
+
+## v1.5 Task 7 — images in tool messages (spec §3.2.1, §3.2.2; E14)
+
+- **Canonical home, no schema change.** Tool messages already carry
+  `content: string | CanonicalContentPart[]` (Task 2). Decoders now
+  return the parts array instead of flattening to text when the wire
+  carries media; text-only results keep decoding to the plain string
+  they always did (byte-identical round-trips for the common path).
+- **Anthropic** (`src/transformers/adapters/anthropic.messages.ts`).
+  `tool_result.content` arrays decode block by block: text blocks
+  become text parts, image blocks become image parts via
+  `imageSourceToPart` (shared with user-message decode; base64 and
+  `url` sources both). Content with no image blocks still joins to a
+  string; any other block type (document, tool_reference, …) stays a
+  400 naming the type — tool messages carry text and image parts
+  only, per §3.2.1 and the Task 6 owner note. Encode was already
+  generic (`toToolResultBlock` routes through
+  `convertToAnthropicContent`, which emits image blocks). Nested
+  `cache_control` hints keep the existing convention — promoted to
+  the tool message's `cache` when on text blocks (`toolResultHint`),
+  noted `cache_control_dropped` otherwise.
+- **Responses** (`src/transformers/adapters/responses.items.ts`).
+  `function_call_output.output`/`custom_tool_call_output.output`
+  arrays decode `input_text`/`output_text` → text parts and
+  `input_image` → image parts (`toCanonicalImage` — data URLs decode
+  to bytes, remote URLs stay URLs). `input_file` is a loud 400 naming
+  the part and path — documents have no canonical slot on a tool
+  message (previously it dropped with a note; refusing is the §3.2.2
+  direction for real content). Unknown part types keep the noted
+  drop. Encode (`toToolOutput`): text-only output keeps the plain
+  string form; an image part switches `output` to the documented
+  array of `input_text`/`input_image` items
+  (`image_url` data URL or remote URL, `detail: "auto"`), matching
+  `ResponseFunctionCallOutputItemList`
+  (https://platform.openai.com/docs/api-reference/responses/create).
+  A `document` part reaching the encoder is a 400.
+  `MEDIA_SUPPORT.responses.toolMessageImages: true`.
+- **Gemini** (`src/transformers/adapters/gemini.tools.ts`,
+  `src/types/gemini.types.ts`). `functionResponse.parts` (new
+  `GeminiFunctionResponseMediaPart` type — `inlineData`/`fileData`
+  with `displayName`, `mediaProcessing` tolerated) decodes image
+  media to image parts appended after the response text; non-image
+  mimes are a 400 naming the mime and call. `{"$ref": displayName}`
+  subobjects inside `functionResponse.response` are stripped before
+  textification — they point at the media parts, so leaving them
+  would duplicate the media as pointer text; the `{content}` unwrap
+  and JSON-stringify text semantics are otherwise unchanged.
+  `toolResultResponse` (encode) now throws on media parts instead of
+  filtering them out. `MEDIA_SUPPORT.gemini.toolMessageImages` stays
+  **false**: multimodal function responses are documented for the
+  Gemini 3 series only
+  (https://ai.google.dev/gemini-api/docs/function-calling#multimodal);
+  decoding is honest (a Gemini source can send them), but re-encoding
+  to a Gemini target is not a documented standard-endpoint
+  capability — media-inline refuses with path + target instead of
+  forwarding blindly. A Gemini 3 target can flip the flag later.
+- **OpenAI** (`src/transformers/adapters/openai.adapter.ts`).
+  `image_url` parts in tool messages already decoded through the
+  shared content-part path; the encoder previously flattened any
+  tool-message parts array to text (or `""`) — now a media part
+  reaching the encoder is a `ValidationError`. `toolMessageImages`
+  stays false: `ChatCompletionToolMessageParam` content is text
+  parts only
+  (https://platform.openai.com/docs/api-reference/chat/create).
+- **Ollama** (`src/transformers/adapters/ollama.adapter.ts`).
+  `toolMessageImages` stays false — `images` is a message-level
+  base64-only slot with no documented placement on tool messages
+  (https://docs.ollama.com/api/chat); the encoder would otherwise
+  have emitted `images[]` on a `tool` message. Now a media part
+  reaching encode is a `ValidationError`.
+- **`src/services/media-inline.ts`.** The Task-6 refusal check is
+  the enforcement point — `role === "tool"` image parts hit
+  `Unsupported media at messages[i].content[j] for target "<name>"`
+  when `toolMessageImages` is false; encoder refusals above are
+  defence-in-depth for direct adapter use.
+- **Ambiguities resolved.** (a) Responses `input_file` in tool
+  output: refused (400) rather than note-dropped — real content,
+  no canonical slot; text-only array outputs still decode to a
+  string. (b) Gemini `$ref` pointers: stripped from the text rather
+  than surfaced as pointer strings — the referenced media decode to
+  image parts in order. (c) Gemini target support: refused per the
+  Gemini-3-only doc status, decode implemented so Gemini→other
+  translations carry the media. (d) Anthropic non-text/non-image
+  tool_result blocks (e.g. `tool_reference`, seen in Claude Code's
+  media recording) keep their 400 — no canonical equivalent yet.
+- **Files outside the Files block:**
+  `src/transformers/adapters/gemini.tools.ts` (functionResponse
+  decode/encode lives here, not in gemini.adapter.ts),
+  `src/types/gemini.types.ts` (`GeminiFunctionResponse.parts` wire
+  type — Task 7 needs the field to decode it),
+  `src/transformers/adapters/responses.adapter.ts` (`MEDIA_SUPPORT`
+  value flip),
+  `src/transformers/adapters/anthropic.adapter.test.ts`,
+  `src/transformers/adapters/openai.adapter.test.ts`,
+  `src/transformers/adapters/gemini.adapter.test.ts`,
+  `src/transformers/adapters/responses.adapter.test.ts`,
+  `src/services/media-inline.test.ts` (Step 1's tests; the Files
+  block names no test files but the task requires them).
+- **Live check.** Real request/response against `npm run dev` with a
+  local stub upstream — in the PR body.

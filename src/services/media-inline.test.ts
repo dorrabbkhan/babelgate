@@ -186,6 +186,35 @@ describe("inlineMediaForTarget (v1.5 spec §3.2.2)", () => {
     ]);
   });
 
+  it("tool image to chat target refused naming the path", async () => {
+    // v1.5 spec §3.2.2 (Task 7): a tool-result image a target can't
+    // carry is a 400 naming the field path and the target.
+    const req: CanonicalRequest = {
+      model: "m",
+      messages: [
+        {
+          role: "tool",
+          toolCallId: "call_1",
+          content: [
+            { type: "text", text: "see" },
+            {
+              type: "image",
+              image: { data: PNG.toString("base64"), mimeType: "image/png" },
+            },
+          ],
+        },
+      ],
+    };
+
+    const promise = runWithAttempt(
+      { providerName: "chat-upstream", upstreamModel: "m" },
+      () => inlineMediaForTarget(req, MEDIA_SUPPORT.openai, MEDIA),
+    );
+    await expect(promise).rejects.toThrow(ValidationError);
+    await expect(promise).rejects.toThrow(/messages\[0\]\.content\[1\]/);
+    await expect(promise).rejects.toThrow(/chat-upstream/);
+  });
+
   it("text/plain document becomes a text part for every target", async () => {
     const req = requestWithParts([
       {

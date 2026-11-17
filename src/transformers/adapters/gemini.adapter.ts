@@ -111,7 +111,11 @@ import type { MediaSupport } from "../../services/media-inline";
  * Gemini media support (v1.5 spec §3.2.2): `inlineData` carries image
  * and PDF bytes, `fileData.fileUri` carries URL media —
  * https://ai.google.dev/api/generate-content#Part
- * tool messages (functionResponse parts) carry no image slot.
+ * Multimodal function responses (`functionResponse.parts`) are
+ * documented for Gemini 3 series models only
+ * (https://ai.google.dev/gemini-api/docs/function-calling#multimodal)
+ * — not a documented standard-endpoint capability, so tool-result
+ * images are refused rather than forwarded blindly.
  */
 export const MEDIA_SUPPORT: MediaSupport = {
   imageUrl: true,

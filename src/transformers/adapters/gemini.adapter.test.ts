@@ -2225,4 +2225,57 @@ describe('media (v1.5 spec §3.2.2)', () => {
       },
     ]);
   });
+
+  it('functionResponse parts decode to tool image parts', () => {
+    // v1.5 spec §3.2.2 (Task 7): a functionResponse's multimodal
+    // `parts` carry media —
+    // https://ai.google.dev/api/generate-content#FunctionResponse.
+    // `{"$ref": displayName}` subobjects in `response` point at them;
+    // they decode to image parts, not pointer text.
+    const result = toCanonicalRequest({
+      contents: [
+        {
+          role: 'model',
+          parts: [
+            {
+              functionCall: { name: 'snap', args: {}, id: 'call_1' },
+            },
+          ],
+        },
+        {
+          role: 'user',
+          parts: [
+            {
+              functionResponse: {
+                name: 'snap',
+                id: 'call_1',
+                response: { result: 'ok', shot: { $ref: 'shot-1' } },
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: 'image/png',
+                      data: 'YWJj',
+                      displayName: 'shot-1',
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as GenerateContentRequest);
+
+    expect(result.messages[1]).toEqual({
+      role: 'tool',
+      toolCallId: 'call_1',
+      content: [
+        { type: 'text', text: '{"result":"ok"}' },
+        {
+          type: 'image',
+          image: { data: 'YWJj', mimeType: 'image/png' },
+        },
+      ],
+    });
+  });
 });

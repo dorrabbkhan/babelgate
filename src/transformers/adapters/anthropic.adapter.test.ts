@@ -656,7 +656,7 @@ describe('Anthropic Adapter', () => {
       expect(result.messages[0].content).toBe('line one\nline two');
     });
 
-    it('image block in tool_result throws ValidationError naming the type', () => {
+    it('image block in tool_result decodes to a tool image part', () => {
       const input: MessageCreateParams = {
         model: 'claude-3-opus-20240229',
         messages: [
@@ -684,8 +684,15 @@ describe('Anthropic Adapter', () => {
         max_tokens: 1024,
       };
 
-      expect(() => toCanonicalRequest(input)).toThrow(ValidationError);
-      expect(() => toCanonicalRequest(input)).toThrow(/"image"/);
+      const canonical = toCanonicalRequest(input);
+      expect(canonical.messages[0]).toEqual({
+        role: 'tool',
+        toolCallId: 'toolu_1',
+        content: [
+          { type: 'text', text: 'see this' },
+          { type: 'image', image: { data: 'abc', mimeType: 'image/png' } },
+        ],
+      });
     });
 
     it('assistant tool_use blocks decode to toolCalls', () => {
@@ -1101,6 +1108,49 @@ describe('Anthropic Adapter', () => {
               data: 'JVBERi0=',
             },
             title: 'spec.pdf',
+          },
+        ]);
+      });
+
+      it('tool image reaches anthropic target', () => {
+        const result = fromCanonicalRequest({
+          model: 'claude-3-opus-20240229',
+          max_tokens: 1024,
+          messages: [
+            {
+              role: 'tool',
+              toolCallId: 'toolu_1',
+              content: [
+                { type: 'text', text: 'see this' },
+                {
+                  type: 'image',
+                  image: { data: 'YWJj', mimeType: 'image/png' },
+                },
+              ],
+            },
+          ],
+        } as unknown as Parameters<typeof fromCanonicalRequest>[0]);
+
+        // Consecutive tool results merge into one user message of
+        // tool_result blocks; the image rides as an image block.
+        const user = result.messages.find(
+          (m) => m.role === 'user' && Array.isArray(m.content),
+        );
+        expect(user?.content).toEqual([
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_1',
+            content: [
+              { type: 'text', text: 'see this' },
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: 'YWJj',
+                },
+              },
+            ],
           },
         ]);
       });

@@ -11,6 +11,8 @@
  * present.
  */
 import type {
+  CanonicalContentPart,
+  CanonicalImageMimeType,
   CanonicalMessage,
   CanonicalTool,
   CanonicalToolCall,
@@ -26,6 +28,7 @@ import type {
   GeminiFunctionCall,
   GeminiFunctionCallPart,
   GeminiFunctionResponse,
+  GeminiFunctionResponseMediaPart,
   GeminiToolConfig,
   Part,
   ToolConfig,
@@ -220,27 +223,114 @@ export function toCanonicalToolChoice(
   }
 }
 
-/** Gemini functionResponse → canonical tool-message content string. */
+/**
+ * Gemini functionResponse → canonical tool-message content (v1.5
+ * spec §3.2.1). `response` decodes to the text it always did —
+ * `{"$ref": displayName}` subobjects point at media in `parts[]`,
+ * so the pointers are stripped rather than left as text.
+ * `functionResponse.parts[]` — multimodal function-response media
+ * per https://ai.google.dev/api/generate-content#FunctionResponse
+ * (documented for Gemini 3 series models,
+ * https://ai.google.dev/gemini-api/docs/function-calling#multimodal)
+ * — decode to image parts appended after the text; whether a Gemini
+ * target can take them is MEDIA_SUPPORT's call, not the decoder's.
+ */
 export function functionResponseContent(
   res: GeminiFunctionResponse,
-): string {
-  const response = res.response;
+): string | CanonicalContentPart[] {
+  const media = (res.parts ?? []).map((part, i) =>
+    functionResponseMediaPart(part, res.name, i),
+  );
+  const text = functionResponseText(res.response);
+  if (media.length === 0) return text;
+  return [
+    ...(text !== "" ? [{ type: "text" as const, text }] : []),
+    ...media,
+  ];
+}
+
+/** `functionResponse.response` → text, with `{"$ref": name}` media
+ *  pointers stripped. */
+function functionResponseText(response: unknown): string {
   if (
-    response !== null &&
-    typeof response === "object" &&
-    !Array.isArray(response)
+    response === null ||
+    typeof response !== "object" ||
+    Array.isArray(response)
   ) {
-    const keys = Object.keys(response);
-    // Unwrap the { "content": "<string>" } wrapper this adapter emits
-    if (
-      keys.length === 1 &&
-      typeof response.content === "string"
-    ) {
-      return response.content;
-    }
-    return JSON.stringify(response);
+    return JSON.stringify(response ?? {});
   }
-  return JSON.stringify(response ?? {});
+  const stripped = JSON.stringify(response, (_key, value) => {
+    if (
+      value !== null &&
+      typeof value === "object" &&
+      !Array.isArray(value) &&
+      Object.keys(value).length === 1 &&
+      typeof (value as { $ref?: unknown }).$ref === "string"
+    ) {
+      return undefined;
+    }
+    return value;
+  });
+  const parsed = JSON.parse(stripped ?? "{}") as Record<
+    string,
+    unknown
+  >;
+  const keys = Object.keys(parsed);
+  // Unwrap the { "content": "<string>" } wrapper this adapter emits
+  if (keys.length === 1 && typeof parsed.content === "string") {
+    return parsed.content;
+  }
+  return keys.length === 0 ? "" : JSON.stringify(parsed);
+}
+
+/**
+ * One `functionResponse.parts[]` entry → a canonical image part.
+ * `inlineData` carries bytes, `fileData.fileUri` a URL — anything
+ * that isn't an image has no canonical slot on a tool message: a
+ * loud 400 naming the mime, never a silent drop.
+ */
+function functionResponseMediaPart(
+  part: GeminiFunctionResponseMediaPart,
+  name: string,
+  index: number,
+): CanonicalContentPart {
+  const inline = part.inlineData;
+  if (inline?.data !== undefined) {
+    const mimeType = inline.mimeType ?? "";
+    if (!mimeType.startsWith("image/")) {
+      throw new ValidationError(
+        `Unsupported functionResponse.parts[${index}] mime type "${mimeType}" on "${name}"`,
+      );
+    }
+    return {
+      type: "image",
+      image: {
+        data: inline.data,
+        mimeType: mimeType as CanonicalImageMimeType,
+      },
+    };
+  }
+  const file = part.fileData;
+  if (file?.fileUri !== undefined) {
+    const mimeType = file.mimeType ?? "";
+    if (!mimeType.startsWith("image/")) {
+      throw new ValidationError(
+        `Unsupported functionResponse.parts[${index}] mime type "${mimeType}" on "${name}"`,
+      );
+    }
+    return {
+      type: "image",
+      image: {
+        url: file.fileUri,
+        ...(file.mimeType !== undefined && {
+          mimeType: file.mimeType as CanonicalImageMimeType,
+        }),
+      },
+    };
+  }
+  throw new ValidationError(
+    `Unsupported functionResponse.parts[${index}] on "${name}" (no inlineData or fileData)`,
+  );
 }
 
 // ============ ENCODE: Canonical → Gemini ============
@@ -313,6 +403,20 @@ export function appendFunctionResponsePart(
 export function toolResultResponse(
   content: CanonicalMessage["content"],
 ): Record<string, unknown> {
+  const media =
+    typeof content === "string"
+      ? undefined
+      : content.find(
+          (p) => p.type === "image" || p.type === "document",
+        );
+  if (media !== undefined) {
+    // Media in a tool result has no encoding into standard
+    // functionResponse — media-inline refuses it for this target
+    // first; an encode reaching here is a loud 400, never a drop.
+    throw new ValidationError(
+      `Unsupported "${media.type}" content part in a tool message`,
+    );
+  }
   const text =
     typeof content === "string"
       ? content

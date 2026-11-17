@@ -52,9 +52,10 @@ import type { MediaSupport } from "../../services/media-inline";
 /**
  * Ollama media support (v1.5 spec §3.2.2): `images[]` carries base64
  * only — no URL slot, no document slot
- * (https://docs.ollama.com/api/chat). URL media is fetched and
- * inlined by the services; documents are refused there (and here,
- * defensively).
+ * (https://docs.ollama.com/api/chat); `images` sits on the message,
+ * not inside tool-result content — no tool-result image slot. URL
+ * media is fetched and inlined by the services; documents and
+ * tool-result images are refused there (and here, defensively).
  */
 export const MEDIA_SUPPORT: MediaSupport = {
   imageUrl: false,
@@ -473,6 +474,24 @@ function convertToOllamaMessage(
             .map((p) => ollamaText(p))
             .filter((t): t is string => t !== undefined)
             .join("\n");
+
+    // v1.5 spec §3.2.1: `images` sits on user/assistant messages —
+    // a tool message has no image slot. media-inline refuses
+    // tool-result media for this target first; one reaching encode
+    // is a loud 400, never images[] attached to a tool message.
+    if (
+      msg.role === "tool" &&
+      msg.content.some(
+        (p) => p.type === "image" || p.type === "document",
+      )
+    ) {
+      const part = msg.content.find(
+        (p) => p.type === "image" || p.type === "document",
+      );
+      throw new ValidationError(
+        `Unsupported "${part?.type}" content part in a tool message`,
+      );
+    }
 
     const images = msg.content
       .filter((p) => p.type === "image" && p.image)

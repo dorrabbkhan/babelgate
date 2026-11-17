@@ -298,7 +298,7 @@ export function decodeInputItem(
     messages.push({
       role: "tool",
       toolCallId: output.call_id ?? "",
-      content: toolOutputText(output.output, path),
+      content: toolOutputContent(output.output, path),
     });
     return;
   }
@@ -308,7 +308,7 @@ export function decodeInputItem(
     messages.push({
       role: "tool",
       toolCallId: output.call_id ?? "",
-      content: toolOutputText(output.output, path),
+      content: toolOutputContent(output.output, path),
     });
     return;
   }
@@ -503,23 +503,52 @@ function toCanonicalDocument(
   );
 }
 
-function toolOutputText(output: unknown, path: string): string {
+/**
+ * `function_call_output.output` / `custom_tool_call_output.output` is
+ * a string or an array of `input_text` / `input_image` /
+ * `input_file` items (ResponseFunctionCallOutputItemList —
+ * https://platform.openai.com/docs/api-reference/responses/create).
+ * v1.5 spec §3.2.1: images decode to tool image parts; an
+ * `input_file` has no canonical slot on a tool message (documents
+ * live on user messages only) — a loud 400, never a drop of real
+ * content; genuinely unknown part types keep the noted drop.
+ */
+function toolOutputContent(
+  output: unknown,
+  path: string,
+): string | CanonicalContentPart[] {
   if (typeof output === "string") return output;
   if (!Array.isArray(output)) return "";
-  return output
-    .map((part, i) => {
-      const p = part as { type?: string; text?: string };
-      if (p.type === "output_text" || p.type === "input_text") {
-        return p.text ?? "";
-      }
-      note(
-        "field_dropped",
-        `${path}.output[${i}]`,
-        `Dropping tool output part of type "${p.type ?? "unknown"}"`,
+  const parts: CanonicalContentPart[] = [];
+  for (const [i, part] of output.entries()) {
+    const p = part as { type?: string; text?: string; image_url?: string };
+    if (p.type === "output_text" || p.type === "input_text") {
+      parts.push({ type: "text", text: p.text ?? "" });
+      continue;
+    }
+    if (p.type === "input_image") {
+      parts.push({
+        type: "image",
+        image: toCanonicalImage(p, `${path}.output`, i),
+      });
+      continue;
+    }
+    if (p.type === "input_file") {
+      throw new ValidationError(
+        `"input_file" in tool output at ${path}.output[${i}] — documents are not supported on tool messages`,
       );
-      return "";
-    })
-    .join("");
+    }
+    note(
+      "field_dropped",
+      `${path}.output[${i}]`,
+      `Dropping tool output part of type "${p.type ?? "unknown"}"`,
+    );
+  }
+  // All-text output keeps the string form it always decoded to.
+  if (parts.every((p) => p.type === "text")) {
+    return parts.map((p) => p.text ?? "").join("");
+  }
+  return parts;
 }
 
 
@@ -593,14 +622,14 @@ export function encodeMessage(
             {
               type: "custom_tool_call_output",
               call_id: message.toolCallId ?? "",
-              output: toToolOutputText(message.content),
+              output: toToolOutput(message.content),
             },
           ]
         : [
             {
               type: "function_call_output",
               call_id: message.toolCallId ?? "",
-              output: toToolOutputText(message.content),
+              output: toToolOutput(message.content),
             },
           ];
     default:
@@ -799,8 +828,42 @@ function dropNote(path: string): void {
   );
 }
 
-function toToolOutputText(content: string | CanonicalContentPart[]): string {
+/**
+ * Canonical tool content → `function_call_output.output` /
+ * `custom_tool_call_output.output` (v1.5 spec §3.2.1). Text results
+ * keep the plain string form — byte-identical to before; an image
+ * part switches output to the documented array of
+ * `input_text`/`input_image` items
+ * (ResponseFunctionCallOutputItemList —
+ * https://platform.openai.com/docs/api-reference/responses/create).
+ */
+function toToolOutput(
+  content: string | CanonicalContentPart[],
+): string | Array<Record<string, unknown>> {
   if (typeof content === "string") return content;
-  return content.map((p) => p.text ?? "").join("");
+  const parts = content.filter((p) => p.type !== "reasoning");
+  if (!parts.some((p) => p.type === "image")) {
+    return parts.map((p) => p.text ?? "").join("");
+  }
+  return parts.map((part) => {
+    if (part.type === "text") {
+      return { type: "input_text", text: part.text ?? "" };
+    }
+    if (part.type === "image" && part.image) {
+      return {
+        type: "input_image",
+        image_url:
+          part.image.data === undefined
+            ? part.image.url!
+            : `data:${part.image.mimeType};base64,${part.image.data}`,
+        detail: "auto",
+      };
+    }
+    // A document can't sit on a canonical tool message (§3.2.1);
+    // one reaching the encoder is a loud 400, never a silent drop.
+    throw new ValidationError(
+      `Unsupported "${part.type}" content part in a tool message`,
+    );
+  });
 }
 

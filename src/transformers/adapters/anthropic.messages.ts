@@ -83,7 +83,7 @@ export function toCanonicalMessage(
       return {
         role: "tool",
         toolCallId: r.tool_use_id,
-        content: toolResultContentToString(r.content),
+        content: toolResultContent(r.content),
         ...(r.is_error === true && { isError: true }),
         ...(cache && { cache }),
       };
@@ -176,29 +176,81 @@ function toolResultHint(
 }
 
 /**
- * tool_result.content is a string or an array of blocks (spec §3.4). Text
- * blocks join with "\n"; canonical tool results carry no images, so any
- * other block type is a 400 naming it — never a silent drop.
+ * tool_result.content is a string or an array of blocks (spec §3.4).
+ * Text-only content joins with "\n" as before; v1.5 spec §3.2.1 keeps
+ * image blocks as canonical tool image parts — the result is then a
+ * parts array in wire order (Claude Code's media run sends
+ * text+image mixes, E14). Any other block type is a 400 naming it —
+ * never a silent drop.
  */
-function toolResultContentToString(
+function toolResultContent(
   content: ToolResultBlockParam["content"],
-): string {
+): string | CanonicalContentPart[] {
   if (content === undefined) {
     return "";
   }
   if (typeof content === "string") {
     return content;
   }
-  return content
-    .map((block) => {
-      if (block.type === "text") {
-        return block.text;
-      }
-      throw new ValidationError(
-        `Unsupported content block type "${block.type}" in tool_result`,
-      );
-    })
-    .join("\n");
+  if (!content.some((b) => b.type === "image")) {
+    return content
+      .map((block) => {
+        if (block.type === "text") {
+          return block.text;
+        }
+        throw new ValidationError(
+          `Unsupported content block type "${block.type}" in tool_result`,
+        );
+      })
+      .join("\n");
+  }
+  const parts: CanonicalContentPart[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      parts.push({ type: "text", text: block.text });
+      continue;
+    }
+    if (block.type === "image") {
+      parts.push(imageSourceToPart(block.source));
+      continue;
+    }
+    // document/search_result/tool_reference/… blocks — no canonical
+    // slot on a tool message (tool messages carry text and image
+    // parts only, §3.2.1) — a loud 400 naming the type.
+    throw new ValidationError(
+      `Unsupported content block type "${block.type}" in tool_result`,
+    );
+  }
+  return parts;
+}
+
+/** An Anthropic `image` block's source → canonical image part. */
+function imageSourceToPart(source: {
+  type?: string;
+  media_type?: string;
+  data?: string;
+  url?: string;
+}): CanonicalContentPart {
+  if (source.type === "base64" && source.data) {
+    return {
+      type: "image",
+      image: {
+        data: source.data,
+        mimeType: (source.media_type ||
+          "image/png") as CanonicalImageMimeType,
+      },
+    };
+  }
+  if (source.type === "url" && typeof source.url === "string") {
+    // v1.5 spec §3.2.2: a URL image source keeps its URL —
+    // media-inline fetches or passes it through per target.
+    return { type: "image", image: { url: source.url } };
+  }
+  // file / unrecognised image sources — a loud 400, never an
+  // empty text part pretending to carry the image.
+  throw new ValidationError(
+    `Unsupported image source type "${source.type}"`,
+  );
 }
 
 /**
@@ -383,42 +435,20 @@ function extractContent(
       continue;
     }
     if (block.type === "image" && "source" in block) {
-      const source = block.source as {
-        type: string;
-        media_type?: string;
-        data?: string;
-        url?: string;
-      };
-      if (source.type === "base64" && source.data) {
-        parts.push({
-          type: "image",
-          image: {
-            data: source.data,
-            mimeType: (source.media_type ||
-              "image/png") as CanonicalImageMimeType,
-          },
-          ...(block.cache_control && {
-            cache: toCacheHint(block.cache_control),
-          }),
-        });
-      } else if (source.type === "url" && typeof source.url === "string") {
-        // v1.5 spec §3.2.2: a URL image source keeps its URL —
-        // media-inline fetches or passes it through per target.
-        // https://platform.claude.com/docs/en/build-with-claude/vision
-        parts.push({
-          type: "image",
-          image: { url: source.url },
-          ...(block.cache_control && {
-            cache: toCacheHint(block.cache_control),
-          }),
-        });
-      } else {
-        // file / unrecognised image sources — a loud 400, never an
-        // empty text part pretending to carry the image.
-        throw new ValidationError(
-          `Unsupported image source type "${source.type}"`,
-        );
-      }
+      // https://platform.claude.com/docs/en/build-with-claude/vision
+      const part = imageSourceToPart(
+        block.source as {
+          type?: string;
+          media_type?: string;
+          data?: string;
+          url?: string;
+        },
+      );
+      parts.push(
+        block.cache_control
+          ? { ...part, cache: toCacheHint(block.cache_control) }
+          : part,
+      );
       continue;
     }
     if (block.type === "document" && "source" in block) {

@@ -1509,5 +1509,40 @@ describe('reasoning_content (v1.4 spec §3.3)', () => {
         },
       ]);
     });
+
+    it('image_url part in a tool message decodes to an image part', () => {
+      // v1.5 §3.2.1/§3.2.2 (Task 7): tool results carry image parts
+      // canonically; whether the part can be SENT is the target's
+      // MEDIA_SUPPORT call (media-inline refuses for OpenAI).
+      const result = toCanonicalRequest({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'tool',
+            tool_call_id: 'call_1',
+            content: [
+              { type: 'text', text: 'see this' },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: 'data:image/png;base64,YWJj',
+                },
+              },
+            ],
+          },
+        ],
+      } as unknown as ChatCompletionRequest);
+      expect(result.messages[0]).toEqual({
+        role: 'tool',
+        toolCallId: 'call_1',
+        content: [
+          { type: 'text', text: 'see this' },
+          {
+            type: 'image',
+            image: { data: 'YWJj', mimeType: 'image/png' },
+          },
+        ],
+      });
+    });
   });
 });
