@@ -16,6 +16,10 @@ import {
   originMatchesCurrent,
   signatureMatchesCurrent,
 } from "../reasoning-origin";
+import {
+  unpackEnvelope,
+  type EnvelopePayload,
+} from "../reasoning-envelope";
 import { toCacheControl, toCacheHint } from "./anthropic.cache";
 import type {
   CacheControlEphemeral,
@@ -69,6 +73,9 @@ export function toCanonicalMessage(
   const rest = blocks.filter(
     (b) => b.type !== "tool_result" && b.type !== "tool_use",
   );
+  // Envelope signatures decoded off thinking blocks — resolved onto
+  // the message once its parts and toolCalls exist.
+  const envelopeSigs: EnvelopePayload["signatures"] = [];
 
   if (m.role === "user" && toolResults.length > 0) {
     const out: CanonicalMessage[] = toolResults.map((r) => {
@@ -82,22 +89,68 @@ export function toCanonicalMessage(
       };
     });
     if (rest.length > 0) {
-      out.push({
+      const msg: CanonicalMessage = {
         role: "user",
-        content: extractContent(rest, messageIndex),
-      });
+        content: extractContent(rest, messageIndex, envelopeSigs),
+      };
+      resolveEnvelopeSignatures(msg, envelopeSigs, messageIndex);
+      out.push(msg);
     }
     return out;
   }
 
   const msg: CanonicalMessage = {
     role: m.role as CanonicalMessage["role"],
-    content: extractContent(rest, messageIndex),
+    content: extractContent(rest, messageIndex, envelopeSigs),
   };
   if (toolUses.length > 0) {
     msg.toolCalls = toolUses.map(toolUseToCanonical);
   }
+  resolveEnvelopeSignatures(msg, envelopeSigs, messageIndex);
   return [msg];
+}
+
+/**
+ * v1.5 spec §3.1 (Task 4): `bg1.` envelopes decoded off thinking
+ * blocks yield signature entries keyed by `toolCallId` or `textIndex`
+ * (the nth text part of the message) — resolve them onto the decoded
+ * message; an entry with no matching part drops with a
+ * `reasoning_dropped` note.
+ */
+function resolveEnvelopeSignatures(
+  msg: CanonicalMessage,
+  signatures: EnvelopePayload["signatures"],
+  messageIndex: number,
+): void {
+  if (signatures.length === 0) return;
+  const content = Array.isArray(msg.content) ? msg.content : [];
+  const textParts = content.filter((p) => p.type === "text");
+  for (const [i, entry] of signatures.entries()) {
+    if (entry.toolCallId !== undefined) {
+      const call = msg.toolCalls?.find(
+        (c) => c.id === entry.toolCallId,
+      );
+      if (call !== undefined) {
+        call.signature = entry.signature;
+        continue;
+      }
+    } else if (entry.textIndex !== undefined) {
+      const target = textParts[entry.textIndex];
+      if (target !== undefined) {
+        target.signature = entry.signature;
+        continue;
+      }
+    }
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "reasoning_dropped",
+        path: `messages[${messageIndex}].signatures[${i}]`,
+      },
+      "Dropping an envelope signature (no matching part in the message)",
+    );
+  }
 }
 
 /**
@@ -212,14 +265,24 @@ export function toCanonicalToolChoice(choice: ToolChoice): CanonicalToolChoice {
 }
 
 /**
- * §3.5: `thinking`/`redacted_thinking` blocks are dropped safely (the
- * note names the path only); any other unrecognised block type is a 400
- * naming it — Claude Code blocks we can't honour must fail loudly, not
- * silently turn into empty text.
+ * §3.5 + v1.5 §3.1 (Task 4): a `thinking`/`redacted_thinking` block's
+ * `signature`/`data` field carries a `bg1.` envelope that unpacks to
+ * canonical reasoning parts and signatures in place (the parts keep
+ * the block's position; the signatures collect into `envelopeSigs`
+ * for `resolveEnvelopeSignatures`). Anything else on those fields —
+ * a raw upstream signature, or nothing — drops the block with a
+ * `reasoning_dropped` note naming the path (conductor's call (c));
+ * any other unrecognised block type is a 400 naming it — Claude Code
+ * blocks we can't honour must fail loudly, not silently turn into
+ * empty text. Block shapes:
+ * https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+ * (`thinking.signature`, `redacted_thinking.data`;
+ * https://platform.claude.com/docs/en/build-with-claude/thinking).
  */
 function extractContent(
   content: MessageParam["content"],
   messageIndex = 0,
+  envelopeSigs: EnvelopePayload["signatures"] = [],
 ): string | CanonicalContentPart[] {
   if (typeof content === "string") {
     return content;
@@ -260,15 +323,28 @@ function extractContent(
       continue;
     }
     if (block.type === "thinking" || block.type === "redacted_thinking") {
-      recordNote(
-        {
-          stage: "decode",
-          adapter: "anthropic",
-          code: "thinking_dropped",
-          path: `messages[${messageIndex}].content[${blockIndex}]`,
-        },
-        `Dropping content block "${block.type}" (no canonical equivalent)`,
-      );
+      const carrier =
+        block.type === "thinking"
+          ? (block as { signature?: unknown }).signature
+          : (block as { data?: unknown }).data;
+      const payload =
+        typeof carrier === "string"
+          ? unpackEnvelope(carrier)
+          : undefined;
+      if (payload !== undefined) {
+        parts.push(...payload.reasoning);
+        envelopeSigs.push(...payload.signatures);
+      } else {
+        recordNote(
+          {
+            stage: "decode",
+            adapter: "anthropic",
+            code: "reasoning_dropped",
+            path: `messages[${messageIndex}].content[${blockIndex}]`,
+          },
+          `Dropping content block "${block.type}" (its ${block.type === "thinking" ? "signature" : "data"} is not a bg1. envelope)`,
+        );
+      }
       continue;
     }
     throw new ValidationError(
@@ -298,7 +374,10 @@ export function toMessageParam(m: CanonicalMessage): MessageParam {
       : content;
   return {
     role: "assistant",
-    content: [...blocks, ...m.toolCalls.map(toToolUseBlock)],
+    content: [
+      ...blocks,
+      ...m.toolCalls.map((tc) => toToolUseBlock(tc)),
+    ],
   };
 }
 
@@ -342,14 +421,17 @@ export function toToolResultBlock(m: CanonicalMessage): ToolResultBlockParam {
   };
 }
 
-export function toToolUseBlock(tc: CanonicalToolCall): ToolUseBlockParam {
+export function toToolUseBlock(
+  tc: CanonicalToolCall,
+  opts: { noteSignature?: boolean } = {},
+): ToolUseBlockParam {
   const parsed = parseToolArguments(tc.function.arguments);
   if (!parsed.valid) {
     logger.warn(
       "Tool call arguments are not valid JSON; sending _invalid_arguments wrapper",
     );
   }
-  if (tc.signature !== undefined) {
+  if (tc.signature !== undefined && opts.noteSignature !== false) {
     noteOrphanedSignature(`toolCalls[${tc.id}].signature`);
   }
   return {

@@ -21,8 +21,12 @@ import {
   resetCaptured,
   resetOverrides,
   resetStreamCase,
+  resetReplyOptins,
+  reasoningReply,
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
+import { registerSink, type TraceSink } from "../../src/observe/emit";
+import type { RequestTrace } from "../../src/observe/trace";
 import anthropicFixtures from "../fixtures/anthropic.json";
 
 /**
@@ -32,6 +36,13 @@ import anthropicFixtures from "../fixtures/anthropic.json";
  * estimate.
  */
 const server = setupServer(...upstreamHandlers);
+
+const traces: RequestTrace[] = [];
+const recorder: TraceSink = {
+  name: "recorder",
+  accept: (t) => traces.push(t),
+};
+registerSink(recorder);
 
 const providers = ["openai", "gemini", "ollama", "anthropic"] as const;
 
@@ -63,8 +74,16 @@ afterEach(() => {
   delete process.env.MODEL_MAP;
   delete process.env.TARGET_CONTEXT_WINDOW;
   delete process.env.BABELGATE_CONFIG;
+  resetReplyOptins();
   resetConfig();
 });
+
+async function waitForTraces(n: number, ms = 3000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (traces.length < n && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
 
 afterAll(() => {
   server.close();
@@ -477,5 +496,87 @@ routes:
       content: '{"name":"babelgate"}',
     });
     expect(body2.tools).toEqual(body1.tools);
+  });
+});
+
+describe("Claude Code reasoning loop (v1.5 spec §3.1, Task 4)", () => {
+  it("three-turn loop on a mocked Gemini thinking upstream carries reasoning every turn", async () => {
+    setPair("anthropic", "gemini");
+    reasoningReply.gemini = true;
+
+    // Claude Code's turn structure (Task 1 recording): thinking on,
+    // the reply's blocks echoed back next turn, tool results in a
+    // user message.
+    let messages: unknown[] = [{ role: "user", content: "hi" }];
+    const traceStarts: number[] = [];
+    for (let turn = 1; turn <= 3; turn++) {
+      traceStarts.push(traces.length);
+      const res = await request(app)
+        .post("/v1/messages")
+        .send({
+          model: "claude-3-opus-20240229",
+          max_tokens: 4096,
+          thinking: { type: "enabled", budget_tokens: 1024 },
+          messages,
+        });
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      await waitForTraces(traceStarts.at(-1)! + 1);
+
+      const content = res.body.content as {
+        type: string;
+        thinking?: string;
+        signature?: string;
+      }[];
+      // Every turn's reply opens with a thinking block whose
+      // signature is the bg1. envelope.
+      const thinking = content.find((b) => b.type === "thinking");
+      expect(thinking).toBeDefined();
+      expect(thinking!.signature).toMatch(/^bg1\./);
+      const call = content.find((b) => b.type === "tool_use") as
+        | { id: string }
+        | undefined;
+      expect(call).toBeDefined();
+
+      // Echo the turn back exactly as Claude Code does.
+      messages = [
+        ...messages,
+        { role: "assistant", content },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: call!.id,
+              content: "ok",
+            },
+          ],
+        },
+      ];
+    }
+
+    // Same-provider turns: turn 2's upstream body carries turn 1's
+    // signatures; turn 3's carries both prior turns' (spec §4.2
+    // twin). `sig-gem-N-think`/`sig-gem-N-call` are the mock's
+    // 1-based ordinal signatures.
+    const upstream = capturedRequests.gemini.map((b) =>
+      JSON.stringify(b),
+    );
+    expect(upstream).toHaveLength(3);
+    for (const s of ["sig-gem-1-think", "sig-gem-1-call"]) {
+      expect(upstream[1]).toContain(s);
+    }
+    for (const s of [
+      "sig-gem-1-think",
+      "sig-gem-1-call",
+      "sig-gem-2-think",
+      "sig-gem-2-call",
+    ]) {
+      expect(upstream[2]).toContain(s);
+    }
+
+    const notes = traces
+      .slice(traceStarts[0])
+      .flatMap((t) => t.notes.map((n) => n.code));
+    expect(notes).not.toContain("reasoning_dropped");
   });
 });

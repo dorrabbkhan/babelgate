@@ -28,6 +28,11 @@ import {
   signatureMatchesCurrent,
 } from "../reasoning-origin";
 import {
+  packEnvelope,
+  unpackEnvelope,
+  type EnvelopePayload,
+} from "../reasoning-envelope";
+import {
   EFFORT_LADDER,
   budgetFor,
   effortForBudget,
@@ -211,7 +216,7 @@ export function toCanonicalRequest(
   }
 
   // Convert contents to messages
-  for (const content of request.contents) {
+  for (const [contentIndex, content] of request.contents.entries()) {
     const parts = content.parts ?? [];
     const otherParts = parts.filter((p) => !isFunctionResponsePart(p));
 
@@ -220,24 +225,87 @@ export function toCanonicalRequest(
       for (const call of toolCalls) {
         recordCallId(pendingCalls, call.function.name, call.id);
       }
-      messages.push({
+      const envelopeSigs: EnvelopePayload["signatures"] = [];
+      // v1.5 §3.1 (Task 4): an envelope on a functionCall part
+      // splices its reasoning parts at the position the call
+      // occupies among the turn's non-call parts (a raw signature
+      // drops with a note, conductor's call (c)). thoughtSignature
+      // is a part-level field:
+      // https://ai.google.dev/gemini-api/docs/thought-signatures.
+      const fcEnvelopes: { pos: number; payload: EnvelopePayload }[] =
+        [];
+      {
+        let pos = 0;
+        for (const [j, p] of parts.entries()) {
+          if (isFunctionResponsePart(p)) continue;
+          if (!isFunctionCallPart(p)) {
+            pos++;
+            continue;
+          }
+          const carrier = (
+            p as { thoughtSignature?: unknown }
+          ).thoughtSignature;
+          if (typeof carrier === "string" && carrier !== "") {
+            const payload = unpackEnvelope(carrier);
+            if (payload === undefined) {
+              recordNote(
+                {
+                  stage: "decode",
+                  adapter: "gemini",
+                  code: "reasoning_dropped",
+                  path: `contents[${contentIndex}].parts[${j}].thoughtSignature`,
+                },
+                "Dropping a thoughtSignature (not a bg1. envelope)",
+              );
+            } else {
+              fcEnvelopes.push({ pos, payload });
+            }
+          }
+        }
+      }
+      let msgContent = extractContentParts(
+        { role: content.role, parts },
+        contentIndex,
+        envelopeSigs,
+      );
+      if (fcEnvelopes.length > 0) {
+        const contentParts: CanonicalContentPart[] =
+          typeof msgContent === "string"
+            ? msgContent === ""
+              ? []
+              : [{ type: "text", text: msgContent }]
+            : [...msgContent];
+        for (const { pos, payload } of fcEnvelopes) {
+          contentParts.splice(
+            Math.min(pos, contentParts.length),
+            0,
+            ...payload.reasoning,
+          );
+          envelopeSigs.push(...payload.signatures);
+        }
+        msgContent = contentParts.length > 0 ? contentParts : "";
+      }
+      const msg: CanonicalMessage = {
         role: "assistant",
-        content: extractContentParts({
-          role: content.role,
-          parts: otherParts.filter((p) => !isFunctionCallPart(p)),
-        }),
+        content: msgContent,
         ...(toolCalls.length > 0 && { toolCalls }),
-      });
+      };
+      resolveEnvelopeSignatures(msg, envelopeSigs, contentIndex);
+      messages.push(msg);
     } else {
       messages.push(...toCanonicalToolMessages(parts, pendingCalls));
       if (otherParts.length > 0) {
-        messages.push({
+        const envelopeSigs: EnvelopePayload["signatures"] = [];
+        const msg: CanonicalMessage = {
           role: "user",
-          content: extractContentParts({
-            role: content.role,
-            parts: otherParts,
-          }),
-        });
+          content: extractContentParts(
+            { role: content.role, parts },
+            contentIndex,
+            envelopeSigs,
+          ),
+        };
+        resolveEnvelopeSignatures(msg, envelopeSigs, contentIndex);
+        messages.push(msg);
       }
     }
   }
@@ -379,43 +447,153 @@ function extractTextFromInstruction(
   return "";
 }
 
+/**
+ * v1.5 spec §3.1 (Task 4): a part-level `thoughtSignature` carries a
+ * `bg1.` envelope that unpacks to canonical reasoning parts and
+ * signatures in place — collected into `envelopeSigs` for resolution
+ * against the decoded message. A `thought: true` part without an
+ * envelope (or with a raw signature) drops with `reasoning_dropped`,
+ * as does a raw `thoughtSignature` on any other part (conductor's
+ * call (c)). Wire fields:
+ * https://ai.google.dev/gemini-api/docs/thinking,
+ * https://ai.google.dev/gemini-api/docs/thought-signatures
+ * (`thought`/`thoughtSignature` on Part per
+ * https://ai.google.dev/api/generate-content#Part).
+ */
 function extractContentParts(
   content: Content,
+  contentIndex: number,
+  envelopeSigs: EnvelopePayload["signatures"],
 ): string | CanonicalContentPart[] {
-  if (!content.parts || content.parts.length === 0) {
+  const parts = content.parts ?? [];
+  if (parts.length === 0) {
     return "";
   }
 
-  // If all parts are text, join them
-  const allText = content.parts.every((p) => "text" in p);
-  if (allText) {
-    return content.parts
-      .filter((p): p is { text: string } => "text" in p)
-      .map((p) => p.text)
-      .join("");
-  }
-
-  // Mixed content
-  return content.parts.map((part): CanonicalContentPart => {
-    if ("text" in part) {
-      return { type: "text", text: part.text };
+  const out: CanonicalContentPart[] = [];
+  let enveloped = false;
+  for (const [j, part] of parts.entries()) {
+    if (isFunctionCallPart(part) || isFunctionResponsePart(part)) {
+      continue;
     }
-    if ("inlineData" in part && part.inlineData) {
-      return {
+    const p = part as {
+      text?: string;
+      thought?: boolean;
+      thoughtSignature?: unknown;
+      inlineData?: { data: string; mimeType: string };
+    };
+    const carrier =
+      typeof p.thoughtSignature === "string" &&
+      p.thoughtSignature !== ""
+        ? p.thoughtSignature
+        : undefined;
+    const payload =
+      carrier !== undefined ? unpackEnvelope(carrier) : undefined;
+    const sigPath = `contents[${contentIndex}].parts[${j}].thoughtSignature`;
+    if (p.thought === true) {
+      if (payload !== undefined) {
+        enveloped = true;
+        out.push(...payload.reasoning);
+        envelopeSigs.push(...payload.signatures);
+      } else {
+        recordNote(
+          {
+            stage: "decode",
+            adapter: "gemini",
+            code: "reasoning_dropped",
+            path: sigPath,
+          },
+          "Dropping a thought part (thoughtSignature is not a bg1. envelope)",
+        );
+      }
+      continue;
+    }
+    if (carrier !== undefined) {
+      if (payload !== undefined) {
+        enveloped = true;
+        out.push(...payload.reasoning);
+        envelopeSigs.push(...payload.signatures);
+      } else {
+        recordNote(
+          {
+            stage: "decode",
+            adapter: "gemini",
+            code: "reasoning_dropped",
+            path: sigPath,
+          },
+          "Dropping a thoughtSignature (not a bg1. envelope)",
+        );
+      }
+    }
+    if ("text" in part) {
+      out.push({ type: "text", text: p.text ?? "" });
+      continue;
+    }
+    if (p.inlineData != null) {
+      out.push({
         type: "image",
         image: {
-          data: part.inlineData.data,
-          mimeType: part.inlineData
+          data: p.inlineData.data,
+          mimeType: p.inlineData
             .mimeType as CanonicalContentPart["image"] extends {
             mimeType: infer T;
           }
             ? T
             : never,
         },
-      };
+      });
+      continue;
     }
-    return { type: "text", text: "" };
-  });
+    out.push({ type: "text", text: "" });
+  }
+
+  if (out.length === 0) return "";
+  if (!enveloped && out.every((p) => p.type === "text")) {
+    return out.map((p) => (p.type === "text" ? p.text : "")).join("");
+  }
+  return out;
+}
+
+/**
+ * Resolve `bg1.` envelope signature entries onto the decoded message:
+ * `toolCallId` targets its toolCalls, `textIndex` the nth text part
+ * of its content. An entry with no matching part drops with a
+ * `reasoning_dropped` note.
+ */
+function resolveEnvelopeSignatures(
+  msg: CanonicalMessage,
+  signatures: EnvelopePayload["signatures"],
+  contentIndex: number,
+): void {
+  if (signatures.length === 0) return;
+  const content = Array.isArray(msg.content) ? msg.content : [];
+  const textParts = content.filter((p) => p.type === "text");
+  for (const [i, entry] of signatures.entries()) {
+    if (entry.toolCallId !== undefined) {
+      const call = msg.toolCalls?.find(
+        (c) => c.id === entry.toolCallId,
+      );
+      if (call !== undefined) {
+        call.signature = entry.signature;
+        continue;
+      }
+    } else if (entry.textIndex !== undefined) {
+      const target = textParts[entry.textIndex];
+      if (target !== undefined) {
+        target.signature = entry.signature;
+        continue;
+      }
+    }
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "gemini",
+        code: "reasoning_dropped",
+        path: `contents[${contentIndex}].signatures[${i}]`,
+      },
+      "Dropping an envelope signature (no matching part in the message)",
+    );
+  }
 }
 
 // ============ REQUEST: Canonical → Gemini ============
@@ -1055,22 +1233,131 @@ export function mapFinishReason(
 export function fromCanonicalResponse(
   response: CanonicalResponse,
 ): GeminiGenerateContentResponse {
-  // Task 7: a parts array may carry reasoning — a Gemini client never
-  // receives thought parts, so only text parts are rendered.
-  const content =
-    typeof response.message.content === "string"
-      ? response.message.content
-      : (response.message.content ?? [])
-          .filter((p) => p.type === "text")
-          .map((p) => p.text ?? "")
-          .join("");
-  const toolCalls = response.message.toolCalls ?? [];
-  const callPart = (call: CanonicalToolCall): Part =>
-    functionCallPart(call, { includeId: true });
-  const parts: Part[] =
-    toolCalls.length > 0 && content === ""
-      ? toolCalls.map(callPart)
-      : [{ text: content }, ...toolCalls.map(callPart)];
+  const message = response.message;
+  const toolCalls = message.toolCalls ?? [];
+
+  // v1.5 spec §3.1 (Task 4) + conductor's call (a): reasoning reaches
+  // the Gemini client inside the `bg1.` envelope — reasoning parts
+  // become `{text, thought: true}` parts and the turn's envelope
+  // (all reasoning parts and signatures) rides the first thought
+  // part's `thoughtSignature`, or the first functionCall part's when
+  // there is no thought part. `thought: true`/`thoughtSignature`:
+  // https://ai.google.dev/gemini-api/docs/thinking and
+  // https://ai.google.dev/gemini-api/docs/thought-signatures
+  // (part fields per https://ai.google.dev/api/generate-content#Part).
+  const parts_: CanonicalContentPart[] =
+    typeof message.content === "string"
+      ? message.content === ""
+        ? []
+        : [{ type: "text", text: message.content }]
+      : (message.content ?? []);
+  const envelopeSigs: EnvelopePayload["signatures"] = [];
+  let textIndex = 0;
+  const hasReasoning = parts_.some((p) => p.type === "reasoning");
+  for (const part of parts_) {
+    if (part.type === "text") {
+      if (part.signature !== undefined) {
+        envelopeSigs.push({ textIndex, signature: part.signature });
+      }
+      textIndex++;
+    } else if (
+      part.type !== "reasoning" &&
+      part.signature !== undefined
+    ) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "gemini",
+          code: "reasoning_dropped",
+          path: "signature",
+        },
+        "Dropping a signature on a non-text part (no Gemini field carries it)",
+      );
+    }
+  }
+  for (const call of toolCalls) {
+    if (call.signature !== undefined) {
+      envelopeSigs.push({
+        toolCallId: call.id,
+        signature: call.signature,
+      });
+    }
+  }
+
+  let parts: Part[];
+  if (!hasReasoning && envelopeSigs.length === 0) {
+    const content = parts_
+      .filter((p) => p.type === "text")
+      .map((p) => (p.type === "text" ? p.text : ""))
+      .join("");
+    const callPart = (call: CanonicalToolCall): Part =>
+      functionCallPart(call, { includeId: true });
+    parts =
+      toolCalls.length > 0 && content === ""
+        ? toolCalls.map(callPart)
+        : [{ text: content }, ...toolCalls.map(callPart)];
+  } else {
+    const reasoningParts = parts_.filter(
+      (p) => p.type === "reasoning",
+    );
+    const envelope = packEnvelope({
+      v: 1,
+      reasoning: reasoningParts,
+      signatures: envelopeSigs,
+    });
+    if (envelope === undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "gemini",
+          code: "reasoning_dropped",
+          path: "reasoning",
+        },
+        "Dropping a thoughtSignature envelope (over the 1 MiB cap)",
+      );
+    }
+    parts = [];
+    let attached = false;
+    for (const part of parts_) {
+      if (part.type === "reasoning" && part.reasoning) {
+        const thoughtPart: Part = {
+          text: part.reasoning.text ?? "",
+          thought: true,
+          ...(!attached && envelope !== undefined
+            ? { thoughtSignature: envelope }
+            : {}),
+        } as Part;
+        if (!attached && envelope !== undefined) attached = true;
+        parts.push(thoughtPart);
+        continue;
+      }
+      if (part.type === "text") {
+        parts.push({ text: part.text ?? "" } as Part);
+        continue;
+      }
+    }
+    for (const [i, call] of toolCalls.entries()) {
+      const onFirst =
+        !attached && envelope !== undefined && i === 0
+          ? { thoughtSignature: envelope }
+          : {};
+      if (Object.keys(onFirst).length > 0) attached = true;
+      parts.push(
+        functionCallPart(call, { includeId: true, ...onFirst }),
+      );
+    }
+    if (!attached && envelope !== undefined) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "gemini",
+          code: "reasoning_dropped",
+          path: "reasoning",
+        },
+        "Dropping a thoughtSignature envelope (no thought or functionCall part to carry it)",
+      );
+    }
+  }
 
   return {
     candidates: [

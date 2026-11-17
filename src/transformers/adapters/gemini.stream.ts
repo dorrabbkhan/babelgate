@@ -1,4 +1,7 @@
 import type {
+  CanonicalContentPart,
+  CanonicalReasoningOrigin,
+  CanonicalReasoningSignature,
   CanonicalStreamEvent,
   CanonicalUsage,
   IdGenerator,
@@ -14,6 +17,10 @@ import { createSseParser, createUtf8Decoder } from "../../utils/sse";
 import { logger } from "../../utils/logger";
 import { recordNote } from "../../observe/context";
 import { decodeOrigin } from "../reasoning-origin";
+import {
+  packEnvelope,
+  type EnvelopePayload,
+} from "../reasoning-envelope";
 import {
   fromCanonicalError,
   geminiUsageFromCanonical,
@@ -295,7 +302,114 @@ export function createStreamEncoder(
   let arrayClosed = false;
   let responseId: string | undefined;
   let usage: CanonicalUsage | undefined;
-  const calls = new Map<number, { id: string; name: string; args: string }>();
+  const calls = new Map<
+    number,
+    {
+      id: string;
+      name: string;
+      args: string;
+      signature?: CanonicalReasoningSignature;
+    }
+  >();
+
+  // v1.5 §3.1 (Task 4): a reasoning block emits as one `{text,
+  // thought: true}` part when it closes — its `thoughtSignature` is
+  // the `bg1.` envelope (the part, its real signature inside, and
+  // the signatures collected since the last envelope). Signatures
+  // that meet no thought or functionCall part are dropped with
+  // `reasoning_dropped`.
+  interface ReasoningBlock {
+    index: number;
+    origin: CanonicalReasoningOrigin;
+    redacted: boolean;
+    text: string;
+    signature?: CanonicalReasoningSignature;
+  }
+  let openReasoning: ReasoningBlock | undefined;
+  const pendingSigs: EnvelopePayload["signatures"] = [];
+  // Mirrors reassembleStream's text_parts: text_signature signs the
+  // current part — the last one opened by a text_delta, or a fresh
+  // empty part — and a signed part closes to the next delta.
+  let textPartIndex = -1;
+  let textPartSigned = false;
+
+  function noteReasoningDropped(path: string, why: string): void {
+    recordNote(
+      {
+        stage: "encode",
+        adapter: "gemini",
+        code: "reasoning_dropped",
+        path,
+      },
+      why,
+    );
+  }
+
+  /**
+   * Emit the open reasoning block (if any) as one thought part; its
+   * `thoughtSignature` is the `bg1.` envelope — the reasoning part
+   * with its real signature plus every text/tool-call signature
+   * buffered since the last envelope. When no block is open, a
+   * buffered signature still rides the next functionCall part.
+   * `thought: true`/`thoughtSignature` part fields:
+   * https://ai.google.dev/gemini-api/docs/thinking and
+   * https://ai.google.dev/gemini-api/docs/thought-signatures.
+   */
+  function flushReasoning(): string {
+    const block = openReasoning;
+    if (block === undefined) return "";
+    openReasoning = undefined;
+    const part: CanonicalContentPart = {
+      type: "reasoning",
+      reasoning: {
+        ...(block.redacted
+          ? { redacted: true }
+          : { text: block.text }),
+        origin: block.origin,
+      },
+      ...(block.signature !== undefined && {
+        signature: block.signature,
+      }),
+    };
+    const envelope = packEnvelope({
+      v: 1,
+      reasoning: [part],
+      signatures: pendingSigs.splice(0),
+    });
+    if (envelope === undefined) {
+      noteReasoningDropped(
+        "reasoning",
+        "Dropping a thoughtSignature envelope (over the 1 MiB cap)",
+      );
+    }
+    return chunk({
+      content: {
+        role: "model",
+        parts: [
+          {
+            text: block.redacted ? "" : block.text,
+            thought: true,
+            ...(envelope !== undefined && {
+              thoughtSignature: envelope,
+            }),
+          },
+        ],
+      },
+    });
+  }
+
+  /**
+   * Signatures left over at the end of the stream: nothing follows to
+   * carry them — dropped and noted.
+   */
+  function dropPendingSigs(): void {
+    if (pendingSigs.length === 0) return;
+    pendingSigs.length = 0;
+    noteReasoningDropped(
+      "signature",
+      "Dropping signature(s) with no thought or functionCall part to carry them",
+    );
+  }
 
   /** One wire element: SSE `data:` frame, or the next JSON-array element. */
   function element(obj: Obj): string {
@@ -319,6 +433,7 @@ export function createStreamEncoder(
     id: string;
     name: string;
     args: string;
+    signature?: CanonicalReasoningSignature;
   }): string => {
     const parsed = parseToolArguments(call.args);
     if (!parsed.valid) {
@@ -326,6 +441,20 @@ export function createStreamEncoder(
         "Tool call arguments are not valid JSON; sending _invalid_arguments wrapper",
       );
     }
+    // Signatures buffered since the last carrier plus this call's
+    // own ride the functionCall part as a `bg1.` envelope
+    // (thoughtSignature on any part:
+    // https://ai.google.dev/gemini-api/docs/thought-signatures).
+    const sigs: EnvelopePayload["signatures"] = [
+      ...pendingSigs.splice(0),
+      ...(call.signature !== undefined
+        ? [{ toolCallId: call.id, signature: call.signature }]
+        : []),
+    ];
+    const envelope =
+      sigs.length > 0
+        ? packEnvelope({ v: 1, reasoning: [], signatures: sigs })
+        : undefined;
     return chunk({
       content: {
         role: "model",
@@ -336,6 +465,9 @@ export function createStreamEncoder(
               name: call.name,
               args: parsed.args,
             },
+            ...(envelope !== undefined && {
+              thoughtSignature: envelope,
+            }),
           },
         ],
       },
@@ -356,32 +488,103 @@ export function createStreamEncoder(
           responseId = event.id;
           return "";
         case "text_delta":
-          return chunk({
-            content: {
-              role: "model",
-              parts: [{ text: event.text }],
-            },
-          });
-        case "reasoning_start":
-        case "reasoning_delta":
-        case "reasoning_signature":
-        case "text_signature":
-          // v1.4 §3.3: reasoning replay to this target lands in a
-          // later task; reasoning a target can't take is dropped.
+          if (textPartIndex < 0 || textPartSigned) {
+            textPartIndex++;
+            textPartSigned = false;
+          }
+          return (
+            flushReasoning() +
+            chunk({
+              content: {
+                role: "model",
+                parts: [{ text: event.text }],
+              },
+            })
+          );
+        case "reasoning_start": {
+          // One open block at a time (blocks arrive in index order);
+          // a new block flushes the previous one first.
+          const flushed = flushReasoning();
+          openReasoning = {
+            index: event.index,
+            origin: event.origin,
+            redacted: event.redacted === true,
+            text: "",
+          };
+          return flushed;
+        }
+        case "reasoning_delta": {
+          if (openReasoning === undefined) {
+            openReasoning = {
+              index: event.index,
+              origin: decodeOrigin(ctx.requestedModel),
+              redacted: false,
+              text: "",
+            };
+          }
+          openReasoning.text += event.text;
           return "";
-        case "tool_call_start":
+        }
+        case "reasoning_signature": {
+          if (openReasoning !== undefined) {
+            openReasoning.signature = event.signature;
+          } else {
+            noteReasoningDropped(
+              "signature",
+              "Dropping a reasoning signature with no open block",
+            );
+          }
+          return "";
+        }
+        case "text_signature":
+          // Signs the current text part — alone it opens an empty
+          // one — and rides the next envelope's signatures list.
+          // The envelope's textIndex counts the parts the client
+          // echoes back, so a fresh signed part with no wire
+          // emission yet gets an empty `{text: ""}` part — real,
+          // per the recorded max_tokens.sse which signs an empty
+          // final part — so the index exists on the echo.
+          if (textPartIndex < 0 || textPartSigned) {
+            textPartIndex++;
+            textPartSigned = true;
+            pendingSigs.push({
+              textIndex: textPartIndex,
+              signature: event.signature,
+            });
+            return (
+              flushReasoning() +
+              chunk({
+                content: {
+                  role: "model",
+                  parts: [{ text: "" }],
+                },
+              })
+            );
+          }
+          textPartSigned = true;
+          pendingSigs.push({
+            textIndex: textPartIndex,
+            signature: event.signature,
+          });
+          return "";
+        case "tool_call_start": {
+          const flushed = flushReasoning();
           if (calls.has(event.index)) {
             logger.warn(
               `Gemini stream encoder: ${event.type} for already-open tool-call index ${event.index}; keeping the first call`,
             );
-            return "";
+            return flushed;
           }
           calls.set(event.index, {
             id: event.id,
             name: event.name,
             args: "",
+            ...(event.signature !== undefined && {
+              signature: event.signature,
+            }),
           });
-          return "";
+          return flushed;
+        }
         case "tool_call_delta": {
           const call = calls.get(event.index);
           if (call) {
@@ -405,7 +608,11 @@ export function createStreamEncoder(
           return "";
         case "message_end": {
           finished = true;
-          let out = "";
+          let out = flushReasoning();
+          // Still-open calls flush BEFORE the pending-signature
+          // drop — their functionCall parts carry those signatures,
+          // like non-stream's "signatures with no reasoning part
+          // land on the first functionCall" (non-stream parity fix).
           if (calls.size > 0) {
             logger.warn(
               `Gemini stream ended with ${calls.size} tool call(s) still open; flushing before finishReason`,
@@ -414,6 +621,7 @@ export function createStreamEncoder(
             calls.clear();
             for (const [, call] of pending) out += toolCallChunk(call);
           }
+          dropPendingSigs();
           return (
             out +
             element({
@@ -432,15 +640,18 @@ export function createStreamEncoder(
             })
           );
         }
-        case "error":
+        case "error": {
           finished = true;
+          const flushed = flushReasoning();
+          dropPendingSigs();
           if (calls.size > 0) {
             logger.warn(
               `Gemini stream ended with ${calls.size} tool call(s) still open; dropping`,
             );
             calls.clear();
           }
-          return element(fromCanonicalError(event.error) as Obj);
+          return flushed + element(fromCanonicalError(event.error) as Obj);
+        }
       }
     },
     end() {
