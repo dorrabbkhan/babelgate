@@ -44,7 +44,9 @@ import type { MediaSupport } from "../../services/media-inline";
  *    https://platform.openai.com/docs/guides/images-vision
  *  - `file` carries base64 `file_data` only — no file_url field —
  *    https://platform.openai.com/docs/guides/pdf-files
- *  - tool messages accept text content parts only.
+ *  - tool messages take text content parts only
+ *    (ChatCompletionToolMessageParam —
+ *    https://platform.openai.com/docs/api-reference/chat/create).
  */
 export const MEDIA_SUPPORT: MediaSupport = {
   imageUrl: true,
@@ -663,6 +665,19 @@ function convertFromCanonicalMessage(
   }
 
   if (msg.role === "tool") {
+    // v1.5 spec §3.2.1: media has no slot on a Chat tool message —
+    // media-inline refuses it for this target first; an encode
+    // reaching one is a loud 400, never a silent drop.
+    const media = Array.isArray(msg.content)
+      ? msg.content.find(
+          (p) => p.type === "image" || p.type === "document",
+        )
+      : undefined;
+    if (media !== undefined) {
+      throw new ValidationError(
+        `Unsupported "${media.type}" content part in a tool message`,
+      );
+    }
     const cacheControl = toCacheControl(msg.cache);
     // Task 17a: a hint reaching the encoder (cache_hints targets
     // only) becomes a one-part content array — OpenAI tool messages

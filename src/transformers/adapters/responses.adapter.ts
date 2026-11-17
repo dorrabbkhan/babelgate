@@ -81,13 +81,15 @@ import type { MediaSupport } from "../../services/media-inline";
  *    https://platform.openai.com/docs/guides/images-vision
  *  - `input_file` carries base64 `file_data` or a remote `file_url` —
  *    https://platform.openai.com/docs/guides/pdf-files
- *  - tool outputs (function_call_output) carry text parts only.
+ *  - tool outputs take an array of `input_text`/`input_image`/
+ *    `input_file` items (ResponseFunctionCallOutputItemList —
+ *    https://platform.openai.com/docs/api-reference/responses/create).
  */
 export const MEDIA_SUPPORT: MediaSupport = {
   imageUrl: true,
   documentData: true,
   documentUrl: true,
-  toolMessageImages: false,
+  toolMessageImages: true,
 };
 
 export const responsesAdapter: ProviderAdapter<

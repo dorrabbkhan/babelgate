@@ -135,6 +135,75 @@ describe("Responses adapter", () => {
       ]);
     });
 
+    it("function_call_output output array decodes to tool parts", () => {
+      const canonical = toCanonicalRequest({
+        model: "m",
+        input: [
+          {
+            type: "function_call_output",
+            call_id: "call_1",
+            output: [
+              { type: "input_text", text: "see this" },
+              {
+                type: "input_image",
+                image_url: "data:image/png;base64,YWJj",
+              },
+            ],
+          },
+        ],
+      } as ResponsesRequest);
+
+      expect(canonical.messages).toEqual([
+        {
+          role: "tool",
+          toolCallId: "call_1",
+          content: [
+            { type: "text", text: "see this" },
+            {
+              type: "image",
+              image: { data: "YWJj", mimeType: "image/png" },
+            },
+          ],
+        },
+      ]);
+    });
+
+    it("tool image reaches responses target", () => {
+      const wire = fromCanonicalRequest({
+        model: "m",
+        messages: [
+          {
+            role: "tool",
+            toolCallId: "call_1",
+            content: [
+              { type: "text", text: "see this" },
+              {
+                type: "image",
+                image: { data: "YWJj", mimeType: "image/png" },
+              },
+            ],
+          },
+        ],
+      } as Parameters<typeof fromCanonicalRequest>[0]) as unknown as {
+        input: Array<Record<string, unknown>>;
+      };
+
+      expect(wire.input).toEqual([
+        {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: [
+            { type: "input_text", text: "see this" },
+            {
+              type: "input_image",
+              image_url: "data:image/png;base64,YWJj",
+              detail: "auto",
+            },
+          ],
+        },
+      ]);
+    });
+
     it("tool_choice forms", () => {
       const withChoice = (tool_choice: unknown) =>
         toCanonicalRequest({

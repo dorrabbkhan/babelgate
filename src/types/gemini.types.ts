@@ -75,6 +75,30 @@ export interface GeminiFunctionResponse {
   id?: string;
   name: string;
   response: Record<string, unknown>;
+  /**
+   * Multimodal function-response media — `inlineData`/`fileData`
+   * entries with optional `displayName` (the name `response`'s
+   * `{"$ref": name}` subobjects point at). Documented for Gemini 3
+   * series models:
+   * https://ai.google.dev/api/generate-content#FunctionResponse,
+   * https://ai.google.dev/gemini-api/docs/function-calling#multimodal
+   */
+  parts?: GeminiFunctionResponseMediaPart[];
+}
+
+/** A `functionResponse.parts[]` entry — media bytes or a file URI. */
+export interface GeminiFunctionResponseMediaPart {
+  inlineData?: {
+    mimeType?: string;
+    data?: string;
+    displayName?: string;
+  };
+  fileData?: {
+    fileUri?: string;
+    mimeType?: string;
+    displayName?: string;
+  };
+  mediaProcessing?: unknown;
 }
 
 /**
