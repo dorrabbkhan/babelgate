@@ -6,6 +6,7 @@ import {
   toCanonicalResponse,
   fromCanonicalResponse,
 } from './gemini.adapter';
+import { createStreamEncoder } from './gemini.stream';
 import type { CanonicalContentPart, CanonicalRequest, CanonicalResponse } from '../../types/canonical.types';
 import type { GenerateContentRequest, GenerateContentResponse, Content, FunctionResponsePart } from '../../types/gemini.types';
 import { unpackEnvelope } from '../reasoning-envelope';
@@ -1843,6 +1844,279 @@ describe('cache hints on tool results (Task 17a)', () => {
         code: 'reasoning_dropped',
         path: 'contents[0].parts[0].thoughtSignature',
       });
+    });
+
+    /**
+     * Reassemble the wire stream into the model-content parts a client
+     * sends back on the next turn
+     * (ai.google.dev/gemini-api/docs/thought-signatures: parts echoed
+     * unchanged).
+     */
+    function streamToModelParts(body: string): Record<string, any>[] {
+      const parts: Record<string, any>[] = [];
+      for (const m of body.matchAll(/data: (\{.*\})/g)) {
+        const frame = JSON.parse(m[1]);
+        parts.push(
+          ...(frame.candidates?.[0]?.content?.parts ?? []),
+        );
+      }
+      return parts;
+    }
+
+    function encodeStream(
+      events: Parameters<
+        ReturnType<typeof createStreamEncoder>['encode']
+      >[0][],
+    ): string {
+      const encoder = createStreamEncoder({
+        sourceRequest: {
+          contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        },
+        query: { alt: 'sse' },
+        requestedModel: 'm',
+      });
+      let out = '';
+      for (const e of events) out += encoder.encode(e);
+      return out + encoder.end();
+    }
+
+    /** Decode the client echo of a streamed reply. */
+    function echoDecode(parts: Record<string, any>[]) {
+      return toCanonicalRequest({
+        contents: [{ role: 'model', parts }],
+      } as unknown as GenerateContentRequest);
+    }
+
+    it('streamed signatures after the last reasoning block ride the flushed functionCall', () => {
+      // Stream ≠ non-stream parity (fix round): a stream ending with a
+      // tool call still open flushes the call first — its functionCall
+      // part's envelope carries the pending text signature plus the
+      // call's own — before any leftover drop is considered.
+      const origin = { provider: 'p', model: 'm' };
+      const sigR = { origin, data: 'sig_r' };
+      const sigT = { origin, data: 'sig_t' };
+      const sigC = { origin, data: 'sig_c' };
+      const events = [
+        { type: 'message_start', id: 'r1', model: 'm' },
+        { type: 'reasoning_start', index: 0, origin },
+        { type: 'reasoning_delta', index: 0, text: 'think' },
+        {
+          type: 'reasoning_signature',
+          index: 0,
+          signature: sigR,
+        },
+        { type: 'text_delta', text: 'a' },
+        { type: 'text_signature', signature: sigT },
+        {
+          type: 'tool_call_start',
+          index: 0,
+          id: 'call_1',
+          name: 'exec',
+          signature: sigC,
+        },
+        {
+          type: 'tool_call_delta',
+          index: 0,
+          argumentsDelta: '{"cmd":"ls"}',
+        },
+        { type: 'message_end', finishReason: 'tool_call' },
+      ];
+
+      let out = '';
+      const trace = traced(() => {
+        out = encodeStream(
+          events as unknown as Parameters<typeof encodeStream>[0],
+        );
+      });
+
+      const parts = streamToModelParts(out);
+      expect(parts).toHaveLength(3);
+      expect(parts[0].text).toBe('think');
+      expect(parts[0].thought).toBe(true);
+      expect(unpackEnvelope(parts[0].thoughtSignature)).toEqual({
+        v: 1,
+        reasoning: [
+          {
+            type: 'reasoning',
+            reasoning: { text: 'think', origin },
+            signature: sigR,
+          },
+        ],
+        signatures: [],
+      });
+      expect(parts[1]).toEqual({ text: 'a' });
+      expect(parts[2].functionCall).toEqual({
+        id: 'call_1',
+        name: 'exec',
+        args: { cmd: 'ls' },
+      });
+      expect(unpackEnvelope(parts[2].thoughtSignature)).toEqual({
+        v: 1,
+        reasoning: [],
+        signatures: [
+          { textIndex: 0, signature: sigT },
+          { toolCallId: 'call_1', signature: sigC },
+        ],
+      });
+      expect(
+        trace.notes.some((n) => n.code === 'reasoning_dropped'),
+      ).toBe(false);
+
+      const decoded = echoDecode(parts);
+      expect(decoded.messages[0].content).toEqual([
+        {
+          type: 'reasoning',
+          reasoning: { text: 'think', origin },
+          signature: sigR,
+        },
+        { type: 'text', text: 'a', signature: sigT },
+      ]);
+      expect(decoded.messages[0].toolCalls).toEqual([
+        {
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'exec', arguments: '{"cmd":"ls"}' },
+          signature: sigC,
+        },
+      ]);
+    });
+
+    it('streamed signed text parts emit one wire part each', () => {
+      // Envelope `textIndex` counts the text parts the client echoes —
+      // each signed canonical part is its own wire part.
+      const origin = { provider: 'p', model: 'm' };
+      const sig1 = { origin, data: 'sig_1' };
+      const sig2 = { origin, data: 'sig_2' };
+      const sigR = { origin, data: 'sig_r' };
+      const events = [
+        { type: 'message_start', id: 'r1', model: 'm' },
+        { type: 'text_delta', text: 'a' },
+        { type: 'text_signature', signature: sig1 },
+        { type: 'text_delta', text: 'b' },
+        { type: 'text_signature', signature: sig2 },
+        { type: 'reasoning_start', index: 0, origin },
+        { type: 'reasoning_delta', index: 0, text: 'think' },
+        {
+          type: 'reasoning_signature',
+          index: 0,
+          signature: sigR,
+        },
+        { type: 'message_end', finishReason: 'stop' },
+      ];
+      const canonical: CanonicalResponse = {
+        id: 'r1',
+        model: 'm',
+        finishReason: 'stop',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'a', signature: sig1 },
+            { type: 'text', text: 'b', signature: sig2 },
+            {
+              type: 'reasoning',
+              reasoning: { text: 'think', origin },
+              signature: sigR,
+            },
+          ],
+        },
+      };
+
+      const out = encodeStream(
+        events as unknown as Parameters<typeof encodeStream>[0],
+      );
+
+      const parts = streamToModelParts(out);
+      expect(parts.map((p) => p.text)).toEqual(['a', 'b', 'think']);
+      expect(parts[2].thought).toBe(true);
+      expect(unpackEnvelope(parts[2].thoughtSignature)).toEqual({
+        v: 1,
+        reasoning: [
+          {
+            type: 'reasoning',
+            reasoning: { text: 'think', origin },
+            signature: sigR,
+          },
+        ],
+        signatures: [
+          { textIndex: 0, signature: sig1 },
+          { textIndex: 1, signature: sig2 },
+        ],
+      });
+
+      const decoded = echoDecode(parts);
+      expect(decoded.messages[0].content).toEqual(
+        canonical.message.content,
+      );
+
+      // The streamed round trip equals the non-stream twin's.
+      const twin = fromCanonicalResponse(canonical);
+      const twinDecoded = echoDecode(
+        (twin.candidates?.[0]?.content?.parts ?? []) as Record<
+          string,
+          any
+        >[],
+      );
+      expect(decoded.messages[0]).toEqual(twinDecoded.messages[0]);
+    });
+
+    it('streamed text_signature with no text part emits an empty text part', () => {
+      // A signature on a fresh empty text part — the recorded
+      // max_tokens.sse stream signs an empty final part — emits a
+      // {text: ""} wire part so the index exists on the client's echo.
+      const origin = { provider: 'p', model: 'm' };
+      const sigR = { origin, data: 'sig_r' };
+      const sig1 = { origin, data: 'sig_1' };
+      const events = [
+        { type: 'message_start', id: 'r1', model: 'm' },
+        { type: 'reasoning_start', index: 0, origin },
+        { type: 'reasoning_delta', index: 0, text: 'think' },
+        {
+          type: 'reasoning_signature',
+          index: 0,
+          signature: sigR,
+        },
+        { type: 'text_signature', signature: sig1 },
+        { type: 'message_end', finishReason: 'stop' },
+      ];
+      const canonical: CanonicalResponse = {
+        id: 'r1',
+        model: 'm',
+        finishReason: 'stop',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'reasoning',
+              reasoning: { text: 'think', origin },
+              signature: sigR,
+            },
+            { type: 'text', text: '', signature: sig1 },
+          ],
+        },
+      };
+
+      const out = encodeStream(
+        events as unknown as Parameters<typeof encodeStream>[0],
+      );
+
+      const parts = streamToModelParts(out);
+      expect(parts).toHaveLength(2);
+      expect(parts[0].thought).toBe(true);
+      expect(parts[1]).toEqual({ text: '' });
+
+      const decoded = echoDecode(parts);
+      expect(decoded.messages[0].content).toEqual(
+        canonical.message.content,
+      );
+
+      const twin = fromCanonicalResponse(canonical);
+      const twinDecoded = echoDecode(
+        (twin.candidates?.[0]?.content?.parts ?? []) as Record<
+          string,
+          any
+        >[],
+      );
+      expect(decoded.messages[0]).toEqual(twinDecoded.messages[0]);
     });
   });
 });

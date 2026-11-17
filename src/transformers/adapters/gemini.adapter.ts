@@ -229,7 +229,9 @@ export function toCanonicalRequest(
       // v1.5 §3.1 (Task 4): an envelope on a functionCall part
       // splices its reasoning parts at the position the call
       // occupies among the turn's non-call parts (a raw signature
-      // drops with a note, conductor's call (c)).
+      // drops with a note, conductor's call (c)). thoughtSignature
+      // is a part-level field:
+      // https://ai.google.dev/gemini-api/docs/thought-signatures.
       const fcEnvelopes: { pos: number; payload: EnvelopePayload }[] =
         [];
       {
@@ -452,7 +454,11 @@ function extractTextFromInstruction(
  * against the decoded message. A `thought: true` part without an
  * envelope (or with a raw signature) drops with `reasoning_dropped`,
  * as does a raw `thoughtSignature` on any other part (conductor's
- * call (c)).
+ * call (c)). Wire fields:
+ * https://ai.google.dev/gemini-api/docs/thinking,
+ * https://ai.google.dev/gemini-api/docs/thought-signatures
+ * (`thought`/`thoughtSignature` on Part per
+ * https://ai.google.dev/api/generate-content#Part).
  */
 function extractContentParts(
   content: Content,
@@ -1235,7 +1241,10 @@ export function fromCanonicalResponse(
   // become `{text, thought: true}` parts and the turn's envelope
   // (all reasoning parts and signatures) rides the first thought
   // part's `thoughtSignature`, or the first functionCall part's when
-  // there is no thought part.
+  // there is no thought part. `thought: true`/`thoughtSignature`:
+  // https://ai.google.dev/gemini-api/docs/thinking and
+  // https://ai.google.dev/gemini-api/docs/thought-signatures
+  // (part fields per https://ai.google.dev/api/generate-content#Part).
   const parts_: CanonicalContentPart[] =
     typeof message.content === "string"
       ? message.content === ""

@@ -794,6 +794,11 @@ export function fromCanonicalResponse(response: CanonicalResponse): Message {
   // included, inside the envelope) plus the tool-call and text
   // signatures up to the next reasoning part. A turn with signatures
   // but no reasoning part gets one `thinking{""}` block first.
+  // `thinking`/`redacted_thinking` blocks, `signature` and
+  // `redacted_thinking.data`:
+  // https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+  // (block shapes and signatures per
+  // https://platform.claude.com/docs/en/build-with-claude/thinking).
   const message = response.message;
   const parts: CanonicalContentPart[] =
     typeof message.content === "string"

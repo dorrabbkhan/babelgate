@@ -13,9 +13,11 @@ import { unpackEnvelope } from "../../src/transformers/reasoning-envelope";
  * Anthropic and Gemini encoders now emit reasoning — as a thinking
  * block / signature_delta and a `{text, thought: true}` part
  * respectively — so they leave the mid-stream case below for exact
- * byte-asserting twins in this file. The text_signature case is
- * unchanged: a signature with no carrier produces no wire bytes
- * anywhere.
+ * byte-asserting twins in this file. Fix round: the text_signature
+ * case now also excludes Anthropic — a signature closes the signed
+ * text block and rides a trailing envelope, asserted exactly in its
+ * own case below; for the rest a signature with no carrier still
+ * produces no wire bytes.
  */
 
 const PROVIDERS: Provider[] = [
@@ -27,6 +29,19 @@ const PROVIDERS: Provider[] = [
 
 /** Providers whose encoders still emit no reasoning bytes. */
 const TEXT_ONLY_PROVIDERS: Provider[] = ["openai", "ollama"];
+
+/**
+ * Providers where a `text_signature` produces no wire bytes. Fix round
+ * (v1.5 Task 4): the Anthropic encoder now closes the signed text
+ * block and carries the signature in a trailing envelope — exact
+ * bytes asserted in its own case below. Gemini's signature still
+ * rides a later part's envelope (none here → dropped, no bytes).
+ */
+const SIG_NO_WIRE_PROVIDERS: Provider[] = [
+  "openai",
+  "gemini",
+  "ollama",
+];
 
 const SOURCE_REQUESTS: Record<
   Provider,
@@ -126,7 +141,7 @@ describe("stream encoders drop reasoning events", () => {
     },
   );
 
-  it.each(PROVIDERS)(
+  it.each(SIG_NO_WIRE_PROVIDERS)(
     "%s: client encoders ignore text_signature",
     (provider) => {
       // Task 7a (#99): a text_signature mid-stream changes nothing on
@@ -289,5 +304,82 @@ describe("stream encoders drop reasoning events", () => {
       { text: "Hello " },
     ]);
     expect(frames[2].candidates[0].finishReason).toBe("STOP");
+  });
+
+  it("anthropic: text_signature closes the text block and rides a trailing envelope", () => {
+    // Fix round: envelope textIndex counts the text parts the client
+    // echoes — the signed block closes on its text_signature so the
+    // next text part is a new wire block, and a signature with no
+    // following reasoning block rides a trailing `thinking` block
+    // (thinking: "", one signature_delta with a `bg1.` envelope whose
+    // reasoning is []).
+    const signature = {
+      origin: { provider: "p", model: "m" },
+      data: "OPAQUE",
+    };
+    const out = encode("anthropic", [
+      { type: "message_start", id: "msg_1", model: "m" },
+      { type: "text_delta", text: "Hello " },
+      { type: "text_signature", signature },
+      { type: "text_delta", text: "world" },
+      {
+        type: "usage",
+        usage: { inputTokens: 3, outputTokens: 4, totalTokens: 7 },
+      },
+      { type: "message_end", finishReason: "stop" },
+    ]);
+
+    const eventOrder = [...out.matchAll(/event: (\w+)/g)].map(
+      (m) => m[1],
+    );
+    expect(eventOrder).toEqual([
+      "message_start",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "content_block_start",
+      "content_block_delta",
+      "content_block_stop",
+      "message_delta",
+      "message_stop",
+    ]);
+
+    const frames = [...out.matchAll(/data: (\{.*\})/g)].map((m) =>
+      JSON.parse(m[1]),
+    );
+    expect(frames[1]).toEqual({
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    });
+    expect(frames[2].delta).toEqual({
+      type: "text_delta",
+      text: "Hello ",
+    });
+    // Second canonical text part → a second wire text block.
+    expect(frames[4]).toEqual({
+      type: "content_block_start",
+      index: 1,
+      content_block: { type: "text", text: "" },
+    });
+    expect(frames[5].delta).toEqual({
+      type: "text_delta",
+      text: "world",
+    });
+    // Trailing thinking block carries the signature's envelope.
+    expect(frames[7]).toEqual({
+      type: "content_block_start",
+      index: 2,
+      content_block: { type: "thinking", thinking: "" },
+    });
+    expect(frames[8].delta.type).toBe("signature_delta");
+    expect(unpackEnvelope(frames[8].delta.signature)).toEqual({
+      v: 1,
+      reasoning: [],
+      signatures: [{ textIndex: 0, signature }],
+    });
   });
 });

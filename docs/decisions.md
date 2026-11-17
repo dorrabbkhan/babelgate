@@ -5947,3 +5947,87 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   parts/signatures through a Gemini-thinking upstream across turns
   with no `reasoning_dropped` in the trace. A live request/response
   pair for the PR body needs provider keys — run by the conductor.
+- **Task 1 recording evidence (conductor's calls (a) and (c), spec
+  §3.1 Step 3).**
+  `tests/fixtures/recordings/claude-code-thinking.jsonl` shows later
+  Claude Code requests echoing the prior turn's `thinking.signature`
+  back unchanged (`sig-in-request`), and
+  `tests/fixtures/recordings/gemini-sdk-thinking.jsonl` shows the same
+  for `thoughtSignature` — the client returns the field verbatim, so a
+  `bg1.` envelope carried in it round-trips losslessly on the next
+  turn.
+- **Wire-format doc citations (opened 2026-11-17, all reachable).**
+  Anthropic `thinking`/`redacted_thinking` blocks, `signature` and
+  `redacted_thinking.data`:
+  `https://platform.claude.com/docs/en/build-with-claude/extended-thinking`
+  (which defers block shapes and signatures to
+  `https://platform.claude.com/docs/en/build-with-claude/thinking`,
+  also opened — its response example shows a `thinking` block's
+  `signature` passed back unchanged in multi-turn conversations).
+  Anthropic `thinking_delta`/`signature_delta`:
+  `https://docs.anthropic.com/en/api/messages-streaming` (redirects to
+  `https://platform.claude.com/docs/en/build-with-claude/streaming` —
+  documents `thinking_delta`, one `signature_delta` before
+  `content_block_stop`, and `redacted_thinking` arriving whole with no
+  deltas). Gemini part `thought: true` and `thoughtSignature`:
+  `https://ai.google.dev/gemini-api/docs/thinking` (generateContent has
+  no dedicated thought blocks; signatures are part metadata) and
+  `https://ai.google.dev/gemini-api/docs/thought-signatures`; the part
+  fields themselves are defined at
+  `https://ai.google.dev/api/generate-content#Part` (`thought`:
+  "Indicates if the part is thought from the model";
+  `thoughtSignature`: "An opaque signature for the thought so it can
+  be reused in subsequent requests"). The URLs now sit in code
+  comments at each emit/decode site:
+  `src/transformers/adapters/anthropic.adapter.ts`
+  (`fromCanonicalResponse`),
+  `src/transformers/adapters/anthropic.messages.ts` (`extractContent`),
+  `src/transformers/adapters/anthropic.stream.ts` (encoder header,
+  `content_block_start`/`content_block_delta` decode),
+  `src/transformers/adapters/gemini.adapter.ts`
+  (`fromCanonicalResponse`, `extractContentParts`, functionCall-part
+  envelope decode), `src/transformers/adapters/gemini.stream.ts`
+  (`flushReasoning`, `toolCallChunk`).
+- **Fix round 1 (PR #120, 2026-11-17) — stream parity with the
+  non-streaming encoders.**
+  - `src/transformers/adapters/anthropic.stream.ts`: signatures still
+    pending at `message_end` now emit one trailing `thinking` block
+    (`thinking: ""`, one `signature_delta` with a `bg1.` envelope
+    whose `reasoning` is `[]`) before `message_delta` — the mirror of
+    the leading-block rule; `reasoning_dropped` remains only for the
+    `error` path and the 1 MiB cap. A `text_signature` now closes the
+    open wire text block (the next canonical text part starts a new
+    wire block, as non-stream emits one block per part), and one with
+    no open text part emits an empty `{type:"text", text:""}` block so
+    the envelope `textIndex` counts the text parts the client echoes
+    back.
+  - `src/transformers/adapters/gemini.stream.ts`: `message_end` now
+    flushes still-open tool calls before `dropPendingSigs()` so their
+    `functionCall` parts carry the pending signatures, and a
+    `text_signature` opening a fresh empty part emits `{text: ""}` —
+    real per the recorded `max_tokens.sse`, which signs an empty
+    final part.
+  - Changed tests (name · full path):
+    - `"%s: client encoders ignore text_signature"` —
+      `tests/contracts/stream-reasoning-drop.test.ts` — now iterates
+      `SIG_NO_WIRE_PROVIDERS` (`openai`/`gemini`/`ollama`); Anthropic
+      moved to an exact case because a `text_signature` now emits
+      bytes (closes the signed block, signs a fresh empty one, and
+      rides a trailing envelope). Replaced by
+      `"anthropic: text_signature closes the text block and rides a
+      trailing envelope"`, which asserts the exact event order, the
+      two wire text blocks, and the unpacked trailing envelope.
+    - Added: `"streamed signatures after the last reasoning block
+      ride a trailing thinking block"`, `"streamed signed text parts
+      emit one wire text block each"`, `"streamed text_signature with
+      no open text part emits an empty text block"` —
+      `src/transformers/adapters/anthropic.adapter.test.ts`;
+      `"streamed signatures after the last reasoning block ride the
+      flushed functionCall"`, `"streamed signed text parts emit one
+      wire part each"`, `"streamed text_signature with no text part
+      emits an empty text part"` —
+      `src/transformers/adapters/gemini.adapter.test.ts`. Each
+      streamed round trip (wire output reassembled into the client's
+      echoed assistant turn, decoded by `toCanonicalRequest`) is
+      asserted `toEqual` against the non-stream `fromCanonicalResponse`
+      twin.

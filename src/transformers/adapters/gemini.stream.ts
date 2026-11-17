@@ -351,6 +351,9 @@ export function createStreamEncoder(
    * with its real signature plus every text/tool-call signature
    * buffered since the last envelope. When no block is open, a
    * buffered signature still rides the next functionCall part.
+   * `thought: true`/`thoughtSignature` part fields:
+   * https://ai.google.dev/gemini-api/docs/thinking and
+   * https://ai.google.dev/gemini-api/docs/thought-signatures.
    */
   function flushReasoning(): string {
     const block = openReasoning;
@@ -439,7 +442,9 @@ export function createStreamEncoder(
       );
     }
     // Signatures buffered since the last carrier plus this call's
-    // own ride the functionCall part as a `bg1.` envelope.
+    // own ride the functionCall part as a `bg1.` envelope
+    // (thoughtSignature on any part:
+    // https://ai.google.dev/gemini-api/docs/thought-signatures).
     const sigs: EnvelopePayload["signatures"] = [
       ...pendingSigs.splice(0),
       ...(call.signature !== undefined
@@ -533,9 +538,28 @@ export function createStreamEncoder(
         }
         case "text_signature":
           // Signs the current text part — alone it opens an empty
-          // one. Rides the next envelope's signatures list.
+          // one — and rides the next envelope's signatures list.
+          // The envelope's textIndex counts the parts the client
+          // echoes back, so a fresh signed part with no wire
+          // emission yet gets an empty `{text: ""}` part — real,
+          // per the recorded max_tokens.sse which signs an empty
+          // final part — so the index exists on the echo.
           if (textPartIndex < 0 || textPartSigned) {
             textPartIndex++;
+            textPartSigned = true;
+            pendingSigs.push({
+              textIndex: textPartIndex,
+              signature: event.signature,
+            });
+            return (
+              flushReasoning() +
+              chunk({
+                content: {
+                  role: "model",
+                  parts: [{ text: "" }],
+                },
+              })
+            );
           }
           textPartSigned = true;
           pendingSigs.push({
@@ -585,7 +609,10 @@ export function createStreamEncoder(
         case "message_end": {
           finished = true;
           let out = flushReasoning();
-          dropPendingSigs();
+          // Still-open calls flush BEFORE the pending-signature
+          // drop — their functionCall parts carry those signatures,
+          // like non-stream's "signatures with no reasoning part
+          // land on the first functionCall" (non-stream parity fix).
           if (calls.size > 0) {
             logger.warn(
               `Gemini stream ended with ${calls.size} tool call(s) still open; flushing before finishReason`,
@@ -594,6 +621,7 @@ export function createStreamEncoder(
             calls.clear();
             for (const [, call] of pending) out += toolCallChunk(call);
           }
+          dropPendingSigs();
           return (
             out +
             element({

@@ -176,6 +176,8 @@ export function createStreamDecoder(
           // signature normally streams later as signature_delta; a
           // redacted block's `data` is the signature data and arrives
           // complete in the start event.
+          // https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+          // (thinking/redacted_thinking blocks, signature, data).
           const rIndex = nextReasoningIndex++;
           reasoningIndexByWire.set(index, rIndex);
           const origin = decodeOrigin(model);
@@ -212,6 +214,8 @@ export function createStreamDecoder(
         if (delta.type === "text_delta" && typeof delta.text === "string") {
           out.push({ type: "text_delta", text: delta.text });
         } else if (delta.type === "thinking_delta") {
+          // thinking_delta / signature_delta:
+          // https://docs.anthropic.com/en/api/messages-streaming
           const rIndex = reasoningIndexByWire.get(index);
           if (rIndex !== undefined && typeof delta.thinking === "string") {
             out.push({
@@ -385,7 +389,12 @@ export function createStreamEncoder(
   // reasoning block) before content_block_stop. A redacted part has
   // no deltas: its envelope is the block's `data`, emitted whole at
   // close. Signatures that never meet a reasoning block are dropped
-  // with `reasoning_dropped`.
+  // with `reasoning_dropped`. Wire shapes:
+  // `thinking`/`redacted_thinking` blocks, `signature`, `data` —
+  // https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+  // (https://platform.claude.com/docs/en/build-with-claude/thinking);
+  // `thinking_delta`, `signature_delta` —
+  // https://docs.anthropic.com/en/api/messages-streaming.
   interface ReasoningBlock {
     index: number;
     wireIndex?: number;
@@ -498,6 +507,50 @@ export function createStreamEncoder(
     );
   }
 
+  /**
+   * Signatures still pending at `message_end` — they arrived after
+   * the last reasoning block closed — ride one trailing `thinking`
+   * block (`thinking: ""`, one `signature_delta` with a `bg1.`
+   * envelope whose `reasoning` is []), the mirror of
+   * fromCanonicalResponse's leading-block rule (its
+   * `segmentSigs(i, ∞)` carries them in the stream's twin). Over the
+   * 1 MiB cap the block emits without the signature_delta and the
+   * signatures drop with `reasoning_dropped`, as the leading block's.
+   */
+  function flushTrailingSigs(): string {
+    if (pendingSigs.length === 0) return "";
+    const env = packEnvelope({
+      v: 1,
+      reasoning: [],
+      signatures: pendingSigs.splice(0),
+    });
+    if (env === undefined) {
+      noteReasoningDropped(
+        "reasoning",
+        "Dropping a thinking block's signature (envelope over the 1 MiB cap)",
+      );
+    }
+    const index = nextBlockIndex++;
+    return (
+      sse("content_block_start", {
+        type: "content_block_start",
+        index,
+        content_block: { type: "thinking", thinking: "" },
+      }) +
+      (env !== undefined
+        ? sse("content_block_delta", {
+            type: "content_block_delta",
+            index,
+            delta: { type: "signature_delta", signature: env },
+          })
+        : "") +
+      sse("content_block_stop", {
+        type: "content_block_stop",
+        index,
+      })
+    );
+  }
+
   return {
     contentType: "text/event-stream",
     encode(event) {
@@ -597,20 +650,46 @@ export function createStreamEncoder(
           // Canonically the signed text part follows the open
           // reasoning block, so the signature joins its envelope
           // ("signatures up to the next reasoning part") — buffered,
-          // not a wire event; the block closes on the next delta.
+          // not a wire event. The envelope's textIndex counts the
+          // text parts the client echoes back, so the signed part
+          // needs wire presence: sign the open text block and close
+          // it — the next canonical text part is a new wire block,
+          // as non-stream emits one block per part — or, when no
+          // text block is open, the signature signs a fresh empty
+          // part (Gemini's max_tokens.sse signs an empty final part)
+          // which emits an empty wire text block.
           const last = textParts[textParts.length - 1];
-          let index = textParts.length - 1;
+          let index: number;
+          let out: string;
           if (last === undefined || last.signed) {
+            index = textParts.length;
             textParts.push({ signed: true });
-            index = textParts.length - 1;
+            pendingSigs.push({
+              textIndex: index,
+              signature: event.signature,
+            });
+            const wireIndex = nextBlockIndex++;
+            out =
+              closeReasoning() +
+              sse("content_block_start", {
+                type: "content_block_start",
+                index: wireIndex,
+                content_block: { type: "text", text: "" },
+              }) +
+              sse("content_block_stop", {
+                type: "content_block_stop",
+                index: wireIndex,
+              });
           } else {
             last.signed = true;
+            index = textParts.length - 1;
+            pendingSigs.push({
+              textIndex: index,
+              signature: event.signature,
+            });
+            out = closeText();
           }
-          pendingSigs.push({
-            textIndex: index,
-            signature: event.signature,
-          });
-          return "";
+          return out;
         }
         case "tool_call_start": {
           // The call's signature canonically follows the open
@@ -678,11 +757,10 @@ export function createStreamEncoder(
           return "";
         case "message_end": {
           finished = true;
-          const out = closeReasoning();
-          dropPendingSigs();
+          const out =
+            closeReasoning() + closeText() + flushTrailingSigs();
           return (
             out +
-            closeText() +
             sse("message_delta", {
               type: "message_delta",
               delta: {

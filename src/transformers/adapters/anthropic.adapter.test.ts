@@ -2348,6 +2348,285 @@ describe('Anthropic Adapter', () => {
       ]);
     });
 
+    /**
+     * Reassemble the wire stream into the assistant content blocks a
+     * client sends back on the next turn (docs.claude.com
+     * "Preserving thinking blocks": blocks echoed unchanged).
+     */
+    function streamToContentBlocks(body: string): Record<string, any>[] {
+      const blocks: Record<string, any>[] = [];
+      for (const m of body.matchAll(
+        /event: \w+\ndata: (\{.*\})/g,
+      )) {
+        const data = JSON.parse(m[1]);
+        if (data.type === 'content_block_start') {
+          blocks.push({ ...data.content_block });
+        } else if (data.type === 'content_block_delta') {
+          const block = blocks[data.index];
+          const delta = data.delta;
+          if (delta.type === 'text_delta') {
+            block.text = (block.text ?? '') + delta.text;
+          } else if (delta.type === 'thinking_delta') {
+            block.thinking = (block.thinking ?? '') + delta.thinking;
+          } else if (delta.type === 'signature_delta') {
+            block.signature = delta.signature;
+          } else if (delta.type === 'input_json_delta') {
+            block.input = JSON.parse(delta.partial_json);
+          }
+        }
+      }
+      return blocks;
+    }
+
+    function encodeStream(
+      events: Parameters<
+        ReturnType<typeof createStreamEncoder>['encode']
+      >[0][],
+    ): string {
+      const encoder = createStreamEncoder({
+        sourceRequest: {
+          model: 'm',
+          max_tokens: 1024,
+          messages: [{ role: 'user', content: 'hi' }],
+          stream: true,
+        },
+        query: {},
+        requestedModel: 'm',
+      });
+      let out = '';
+      for (const e of events) out += encoder.encode(e);
+      return out + encoder.end();
+    }
+
+    /** Decode the client echo of a streamed reply. */
+    function echoDecode(blocks: Record<string, any>[]) {
+      return toCanonicalRequest({
+        model: 'claude-opus-5-5',
+        messages: [{ role: 'assistant', content: blocks }],
+        max_tokens: 1024,
+      } as unknown as MessageCreateParams);
+    }
+
+    it('streamed signatures after the last reasoning block ride a trailing thinking block', () => {
+      // Stream ≠ non-stream parity (fix round): text and tool-call
+      // signatures that arrive after the last reasoning block has
+      // closed still reach the client — one trailing `thinking` block
+      // (`thinking: ""`, one `signature_delta` carrying a `bg1.`
+      // envelope with `reasoning: []`) before `message_delta`, mirroring
+      // the leading-block rule of fromCanonicalResponse.
+      const origin = { provider: 'p', model: 'm' };
+      const sigR = { origin, data: 'sig_r' };
+      const sigT = { origin, data: 'sig_t' };
+      const sigC = { origin, data: 'sig_c' };
+      const events = [
+        { type: 'message_start', id: 'msg_1', model: 'm' },
+        { type: 'reasoning_start', index: 0, origin },
+        { type: 'reasoning_delta', index: 0, text: 'think' },
+        {
+          type: 'reasoning_signature',
+          index: 0,
+          signature: sigR,
+        },
+        { type: 'text_delta', text: 'a' },
+        { type: 'text_signature', signature: sigT },
+        {
+          type: 'tool_call_start',
+          index: 0,
+          id: 'call_1',
+          name: 'exec',
+          signature: sigC,
+        },
+        { type: 'tool_call_delta', index: 0, argumentsDelta: '{"cmd":"ls"}' },
+        { type: 'tool_call_end', index: 0 },
+        { type: 'message_end', finishReason: 'tool_call' },
+      ];
+
+      let out = '';
+      const trace = traced(() => {
+        out = encodeStream(
+          events as unknown as Parameters<typeof encodeStream>[0],
+        );
+      });
+
+      // Exact block order: thinking, text, tool_use, trailing thinking "".
+      const blocks = streamToContentBlocks(out);
+      expect(blocks.map((b) => b.type)).toEqual([
+        'thinking',
+        'text',
+        'tool_use',
+        'thinking',
+      ]);
+      expect(blocks[0].thinking).toBe('think');
+      expect(unpackEnvelope(blocks[0].signature)).toEqual({
+        v: 1,
+        reasoning: [
+          {
+            type: 'reasoning',
+            reasoning: { text: 'think', origin },
+            signature: sigR,
+          },
+        ],
+        signatures: [],
+      });
+      expect(blocks[1]).toEqual({ type: 'text', text: 'a' });
+      expect(blocks[3].thinking).toBe('');
+      expect(unpackEnvelope(blocks[3].signature)).toEqual({
+        v: 1,
+        reasoning: [],
+        signatures: [
+          { textIndex: 0, signature: sigT },
+          { toolCallId: 'call_1', signature: sigC },
+        ],
+      });
+      expect(
+        trace.notes.some((n) => n.code === 'reasoning_dropped'),
+      ).toBe(false);
+
+      // The client echoes the turn back; decode restores every part
+      // and signature.
+      const decoded = echoDecode(blocks);
+      expect(decoded.messages[0].content).toEqual([
+        {
+          type: 'reasoning',
+          reasoning: { text: 'think', origin },
+          signature: sigR,
+        },
+        { type: 'text', text: 'a', signature: sigT },
+      ]);
+      expect(decoded.messages[0].toolCalls).toEqual([
+        {
+          id: 'call_1',
+          type: 'function',
+          function: { name: 'exec', arguments: '{"cmd":"ls"}' },
+          signature: sigC,
+        },
+      ]);
+    });
+
+    it('streamed signed text parts emit one wire text block each', () => {
+      // Envelope `textIndex` counts the text parts the client echoes:
+      // a signed text block closes on its `text_signature`, so the
+      // next canonical text part is a new wire block — matching
+      // non-stream's one block per part.
+      const origin = { provider: 'p', model: 'm' };
+      const sig1 = { origin, data: 'sig_1' };
+      const sig2 = { origin, data: 'sig_2' };
+      const sigR = { origin, data: 'sig_r' };
+      const events = [
+        { type: 'message_start', id: 'msg_1', model: 'm' },
+        { type: 'text_delta', text: 'a' },
+        { type: 'text_signature', signature: sig1 },
+        { type: 'text_delta', text: 'b' },
+        { type: 'text_signature', signature: sig2 },
+        { type: 'reasoning_start', index: 0, origin },
+        { type: 'reasoning_delta', index: 0, text: 'think' },
+        {
+          type: 'reasoning_signature',
+          index: 0,
+          signature: sigR,
+        },
+        { type: 'message_end', finishReason: 'stop' },
+      ];
+      const canonical: CanonicalResponse = {
+        id: 'msg_1',
+        model: 'm',
+        finishReason: 'stop',
+        message: {
+          role: 'assistant',
+          content: [
+            { type: 'text', text: 'a', signature: sig1 },
+            { type: 'text', text: 'b', signature: sig2 },
+            {
+              type: 'reasoning',
+              reasoning: { text: 'think', origin },
+              signature: sigR,
+            },
+          ],
+        },
+      };
+
+      const out = encodeStream(
+        events as unknown as Parameters<typeof encodeStream>[0],
+      );
+
+      const blocks = streamToContentBlocks(out);
+      expect(blocks.map((b) => b.type)).toEqual([
+        'text',
+        'text',
+        'thinking',
+      ]);
+      expect(blocks[0].text).toBe('a');
+      expect(blocks[1].text).toBe('b');
+
+      const decoded = echoDecode(blocks);
+      expect(decoded.messages[0].content).toEqual(
+        canonical.message.content,
+      );
+
+      // The streamed round trip equals the non-stream twin's.
+      const twin = fromCanonicalResponse(canonical);
+      const twinDecoded = echoDecode(
+        twin.content as Record<string, any>[],
+      );
+      expect(decoded.messages[0]).toEqual(twinDecoded.messages[0]);
+    });
+
+    it('streamed text_signature with no open text part emits an empty text block', () => {
+      // A signature on a fresh empty text part — Gemini's
+      // max_tokens.sse signs an empty final part — still gets a wire
+      // part so the index exists on the client's echo.
+      const origin = { provider: 'p', model: 'm' };
+      const sigR = { origin, data: 'sig_r' };
+      const sig1 = { origin, data: 'sig_1' };
+      const events = [
+        { type: 'message_start', id: 'msg_1', model: 'm' },
+        { type: 'reasoning_start', index: 0, origin },
+        { type: 'reasoning_delta', index: 0, text: 'think' },
+        {
+          type: 'reasoning_signature',
+          index: 0,
+          signature: sigR,
+        },
+        { type: 'text_signature', signature: sig1 },
+        { type: 'message_end', finishReason: 'stop' },
+      ];
+      const canonical: CanonicalResponse = {
+        id: 'msg_1',
+        model: 'm',
+        finishReason: 'stop',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'reasoning',
+              reasoning: { text: 'think', origin },
+              signature: sigR,
+            },
+            { type: 'text', text: '', signature: sig1 },
+          ],
+        },
+      };
+
+      const out = encodeStream(
+        events as unknown as Parameters<typeof encodeStream>[0],
+      );
+
+      const blocks = streamToContentBlocks(out);
+      expect(blocks.map((b) => b.type)).toEqual(['thinking', 'text']);
+      expect(blocks[1]).toEqual({ type: 'text', text: '' });
+
+      const decoded = echoDecode(blocks);
+      expect(decoded.messages[0].content).toEqual(
+        canonical.message.content,
+      );
+
+      const twin = fromCanonicalResponse(canonical);
+      const twinDecoded = echoDecode(
+        twin.content as Record<string, any>[],
+      );
+      expect(decoded.messages[0]).toEqual(twinDecoded.messages[0]);
+    });
+
     it('fallback mid-session drops foreign envelope', () => {
       // Review Focus 2: Claude Code returns a turn signed by provider
       // X (Gemini) after routing moved to provider Y (Anthropic) —

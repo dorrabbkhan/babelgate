@@ -274,7 +274,10 @@ export function toCanonicalToolChoice(choice: ToolChoice): CanonicalToolChoice {
  * `reasoning_dropped` note naming the path (conductor's call (c));
  * any other unrecognised block type is a 400 naming it — Claude Code
  * blocks we can't honour must fail loudly, not silently turn into
- * empty text.
+ * empty text. Block shapes:
+ * https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+ * (`thinking.signature`, `redacted_thinking.data`;
+ * https://platform.claude.com/docs/en/build-with-claude/thinking).
  */
 function extractContent(
   content: MessageParam["content"],
