@@ -20,6 +20,7 @@
       "Bash(notify-send:*)", "Bash(mkdir:*)", "Bash(cat:*)", "Bash(grep:*)", "Bash(wc:*)", "Bash(sleep:*)"
     ],
     "deny": [
+      "Artifact", "Workflow", "ScheduleWakeup", "ReportFindings", "ShareOnboardingGuide", "ListAgents",
       "Bash(gh pr merge:*)", "Bash(gh pr review:*)", "Bash(gh release:*)", "Bash(gh api -X PUT*)",
       "Bash(git reset:*)", "Bash(git tag:*)",
       "Bash(npm publish:*)", "Bash(npm run test:live:*)", "Bash(docker push:*)",
