@@ -1929,6 +1929,78 @@ routes:
     });
   });
 
+  // The Chat twin of claude-code's "anthropic pass-through forwards
+  // bytes unchanged": `x_custom_marker` survives a byte-for-byte
+  // relay but not a canonical round trip — it is the path
+  // discriminator.
+  it("chat pass-through forwards bytes unchanged", async () => {
+    usePassthroughConfig();
+    const client = {
+      model: "chat-anything",
+      messages: [{ role: "user", content: "hi" }],
+      x_custom_marker: "passthrough-probe",
+    };
+
+    // Unary: the upstream body is the client's bytes with only
+    // `model` rewritten — byte-identical after that one substitution;
+    // the reply is the upstream body with `model` restored.
+    const json = await request(app).post("/v1/chat/completions").send(client);
+    expect(json.status, JSON.stringify(json.body)).toBe(200);
+    expect(capturedRequests.openai).toHaveLength(1);
+    expect(JSON.stringify(capturedRequests.openai[0])).toBe(
+      JSON.stringify({ ...client, model: "gpt-shim" }),
+    );
+    expect(json.body).toEqual({
+      ...(openaiFixtures.responses.basic as Record<string, unknown>),
+      model: "chat-anything",
+    });
+
+    // Stream: every chunk's `model` restored to the client's name —
+    // the SSE comment line and `data: [DONE]` relayed verbatim, bytes
+    // the canonical pipeline would never emit.
+    const res = await postStream("/v1/chat/completions", {
+      ...client,
+      stream: true,
+    });
+    expect(res.status, res.body as string).toBe(200);
+    const text = res.body as string;
+    expect(text).toContain("data: [DONE]");
+    expect(text).toContain(
+      ": Intermediate chat completion chunks omitted.",
+    );
+    expect(text).not.toContain("gpt-6-astra");
+    expect(text).not.toContain("gpt-shim");
+    const chunks = text
+      .split("\n")
+      .filter((l) => l.startsWith("data: {"))
+      .map(
+        (l) =>
+          JSON.parse(l.slice("data: ".length)) as { model?: string },
+      );
+    expect(chunks.length).toBeGreaterThan(0);
+    for (const chunk of chunks) {
+      expect(chunk.model).toBe("chat-anything");
+    }
+    expect(capturedRequests.openai).toHaveLength(2);
+    expect(JSON.stringify(capturedRequests.openai[1])).toBe(
+      JSON.stringify({ ...client, model: "gpt-shim", stream: true }),
+    );
+
+    // No canonical round trip: both traces are passthrough-marked and
+    // carry no bridge notes (reasoning_dropped & co.).
+    await waitForTraces(2);
+    expect(traces).toHaveLength(2);
+    for (const t of traces) {
+      expect(t).toMatchObject({
+        sourceApi: "openai",
+        winner: "chatshim",
+        status: "ok",
+        passthrough: true,
+      });
+      expect(t.notes).toEqual([]);
+    }
+  });
+
   // Review Focus 3: Ctrl-C mid-relay on the anthropic dialect —
   // exactly one trace, aborted, the upstream fetch really aborts.
   it("aborted anthropic pass-through emits one trace", async () => {
