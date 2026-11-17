@@ -6173,7 +6173,10 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   the checked address so connect never re-resolves. Private =
   loopback, RFC-1918, link-local+metadata, CG-NAT, ULA/site-local,
   reserved/doc ranges and the v6 mapped/compatible/NAT64 forms, unless
-  `allowPrivate`. 20 MB cap enforced on `content-length` AND mid-stream
+  `allowPrivate`. The other v6 transition prefixes that embed a v4 —
+  6to4 `2002::/16` (RFC 3056) and Teredo `2001:0000::/32` (RFC 4380) —
+  are refused wholesale rather than decoded. 20 MB cap enforced on
+  `content-length` AND mid-stream
   (the body streams; the byte after the cap aborts — never buffered
   unbounded); 15 s total deadline across hops. Aborting destroys the
   response stream once headers arrived (the request itself only

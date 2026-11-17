@@ -110,6 +110,28 @@ describe("fetchMedia (v1.5 spec §3.2.2)", () => {
     );
   });
 
+  it("6to4 address embedding a private v4 is refused", async () => {
+    await expectRejection(
+      fetchMedia("http://app.example/pic.png", {
+        allowPrivate: false,
+        resolve: async () => ["2002:0a00:0001::1"],
+      }),
+      "private",
+      "app.example",
+    );
+  });
+
+  it("teredo address is refused", async () => {
+    await expectRejection(
+      fetchMedia("http://app.example/pic.png", {
+        allowPrivate: false,
+        resolve: async () => ["2001:0:4136:e378:8000:63bf:3fff:fdd2"],
+      }),
+      "private",
+      "app.example",
+    );
+  });
+
   it("redirect to private address is refused", async () => {
     let internalRequested = false;
     server.use(

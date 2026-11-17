@@ -165,6 +165,8 @@ function isPrivateAddress(ip: string): boolean {
     (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) || // fec0::/10 site-local
     (b[0] & 0xfe) === 0xfc || // fc00::/7 ULA (covers fd00:ec2::/16 metadata)
     b[0] === 0xff || // multicast
+    (b[0] === 0x20 && b[1] === 0x02) || // 2002::/16 6to4 (RFC 3056)
+    (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) || // 2001:0000::/32 Teredo (RFC 4380)
     (b[0] === 0x20 && b[1] === 0x01 && b[2] === 0x0d && b[3] === 0xb8) // 2001:db8::/32 doc
   );
 }
