@@ -6098,7 +6098,7 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
 - **Files outside the Files block:**
   `tests/contracts/stream-reasoning-drop.test.ts` (the task's wire
   change makes its mid-stream byte-identical case unsatisfiable;
-  exact twins live in the Files-block file),
+  exact byte-asserting twins live in the same file),
   `tests/integration/codex.test.ts` (a Chat-client integration test
   pinning the old "no reasoning in the reply" behaviour).
 - **Live check.** `npx ts-node src/index.ts` against a local Ollama
