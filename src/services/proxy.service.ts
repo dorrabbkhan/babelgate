@@ -283,8 +283,8 @@ export async function proxyRequest(
   // chars/4 estimate with the estimate header — UNLESS the routed
   // target is a same-format pass-through entry with a count_tokens
   // endpoint (Anthropic), which gets the request verbatim for the
-  // upstream's real count. Task 9's `gaps` declaration may suppress
-  // the forward.
+  // upstream's real count. An entry declaring the `count_tokens` gap
+  // keeps the local answer too (Task 9).
   if (route.kind === "count_tokens") {
     getMetricsSink()?.incAux(sourceApi, "count_tokens");
     return passthroughCountTokens({

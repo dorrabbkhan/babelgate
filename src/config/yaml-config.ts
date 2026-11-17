@@ -15,6 +15,7 @@ import {
   type GatewayConfig,
 } from "./env-config";
 import { gatewayFileSchema } from "./gateway.schema";
+import { PROVIDER_PRESETS } from "./provider-presets";
 
 /**
  * Discovery order (spec §3.5): explicit --config path, then
@@ -143,22 +144,37 @@ export function loadYamlConfig(
 
   const entries: ProviderEntry[] = Object.entries(file.providers).map(
     ([name, provider]) => {
+      // §3.3: a shim preset fills the keys it declares; every
+      // explicit key on the entry overrides the preset's value. The
+      // schema guarantees type/base_url exist after the merge.
+      const preset =
+        provider.preset === undefined
+          ? undefined
+          : PROVIDER_PRESETS[provider.preset];
+      const type = provider.type ?? preset?.type;
+      const baseUrl = provider.base_url ?? preset?.base_url;
+      const apiKeyEnv = provider.api_key_env ?? preset?.api_key_env;
+      if (type === undefined || baseUrl === undefined) {
+        throw new ConfigurationError(
+          `${path}: providers.${name} needs "type" and "base_url" or a "preset"`,
+        );
+      }
       let apiKey: string | undefined;
-      if (provider.api_key_env !== undefined) {
-        const value = env[provider.api_key_env];
+      if (apiKeyEnv !== undefined) {
+        const value = env[apiKeyEnv];
         if (value === undefined || value === "") {
           throw new ConfigurationError(
-            `${path}: providers.${name}.api_key_env names ${provider.api_key_env}, which is unset or empty`,
+            `${path}: providers.${name}.api_key_env names ${apiKeyEnv}, which is unset or empty`,
           );
         }
         apiKey = value;
       }
       return {
         name,
-        type: provider.type,
-        baseUrl: provider.base_url.replace(/\/$/, ""),
+        type,
+        baseUrl: baseUrl.replace(/\/$/, ""),
         apiKey,
-        apiKeyEnv: provider.api_key_env,
+        apiKeyEnv,
         contextWindow: provider.context_window,
         ...(provider.max_output_tokens === undefined
           ? {}
@@ -181,11 +197,20 @@ export function loadYamlConfig(
         ...(provider.reasoning === undefined
           ? {}
           : { reasoning: provider.reasoning }),
-        // §3.3 (D6): explicit `passthrough:` opt-in; Task 9's `preset`
-        // implies it when the key is absent.
+        // §3.3 (D6): explicit `passthrough:` opt-in; a preset implies
+        // it when the key is absent.
         ...(provider.passthrough === undefined
-          ? {}
+          ? preset === undefined
+            ? {}
+            : { passthrough: true }
           : { passthrough: provider.passthrough }),
+        ...(preset === undefined ? {} : { preset: provider.preset }),
+        // `gaps:` on the entry replaces the preset's whole list.
+        ...(provider.gaps === undefined
+          ? preset === undefined
+            ? {}
+            : { gaps: [...preset.gaps] }
+          : { gaps: provider.gaps }),
         timeoutMs: provider.timeout_ms,
         streamIdleMs: provider.stream_idle_ms,
       };

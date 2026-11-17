@@ -8,8 +8,11 @@ import { MEDIA_SUPPORT as geminiMedia } from "./gemini.adapter";
 import { MEDIA_SUPPORT as ollamaMedia } from "./ollama.adapter";
 import { MEDIA_SUPPORT as anthropicMedia } from "./anthropic.adapter";
 import { MEDIA_SUPPORT as responsesMedia } from "./responses.adapter";
+import { patchGaps as anthropicPatchGaps } from "./anthropic.adapter";
+import { patchGaps as openaiPatchGaps } from "./openai.adapter";
 import type { ProviderAdapter } from "../../types/canonical.types";
 import type { MediaSupport } from "../../services/media-inline";
+import type { PatchGaps } from "../../services/gap-fixes";
 
 export type Provider =
   | "openai"
@@ -30,6 +33,16 @@ export const MEDIA_SUPPORT: Record<Provider, MediaSupport> = {
   ollama: ollamaMedia,
   anthropic: anthropicMedia,
   responses: responsesMedia,
+};
+
+/**
+ * Each pass-through-capable adapter's per-format gap fixes (v1.5 spec
+ * §3.3): keyed by gap name, selected only by the provider entry's
+ * `gaps` list. Formats without a same-format shim have no entry.
+ */
+export const PATCH_GAPS: Partial<Record<Provider, PatchGaps>> = {
+  anthropic: anthropicPatchGaps,
+  openai: openaiPatchGaps,
 };
 
 export const adapters: Record<Provider, ProviderAdapter<unknown, unknown>> = {
