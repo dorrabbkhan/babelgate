@@ -16,6 +16,7 @@ export interface GatewayFileProvider {
   local?: boolean;
   repair_tool_calls?: boolean;
   reasoning_passback?: boolean;
+  reasoning?: boolean;
   timeout_ms?: number;
   stream_idle_ms?: number;
 }
@@ -73,6 +74,7 @@ const providerEntrySchema = z
     local: z.boolean().optional(),
     repair_tool_calls: z.boolean().optional(),
     reasoning_passback: z.boolean().optional(),
+    reasoning: z.boolean().optional(),
     timeout_ms: z.number().int().positive().optional(),
     stream_idle_ms: z.number().int().positive().optional(),
   })

@@ -69,6 +69,7 @@ export async function proxyChatStream(
       config,
       requestId,
       opts?.signal,
+      { source, sourceBody },
     );
     result = await attemptTargets(
       plan,

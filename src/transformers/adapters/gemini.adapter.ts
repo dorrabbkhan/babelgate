@@ -28,7 +28,9 @@ import {
   signatureMatchesCurrent,
 } from "../reasoning-origin";
 import {
+  EFFORT_LADDER,
   budgetFor,
+  effortForBudget,
   nearestSupported,
   type Effort,
 } from "../reasoning-effort";
@@ -116,6 +118,84 @@ export const geminiAdapter: ProviderAdapter<
 
 // ============ REQUEST: Gemini → Canonical ============
 
+type CanonicalReasoning = NonNullable<
+  NonNullable<CanonicalRequest["config"]>["reasoning"]
+>;
+
+/**
+ * `generationConfig.thinkingConfig` → `config.reasoning` (v1.5 spec
+ * §3.1). Field names per
+ * https://ai.google.dev/api/generate-content#ThinkingConfig:
+ * `thinkingLevel` is a level name (the canonical ladder — anything
+ * else keeps a `field_dropped` note), `thinkingBudget` a token
+ * budget (effort = the level whose starting budget fits, the budget
+ * kept; a level wins when both are sent), `includeThoughts` →
+ * `summary`. A non-object `thinkingConfig` keeps `field_dropped`.
+ */
+function toCanonicalReasoning(
+  gc: GeminiGenerationConfig | undefined,
+): CanonicalReasoning | undefined {
+  const note = (path: string, message: string): void =>
+    recordNote(
+      { stage: "decode", adapter: "gemini", code: "field_dropped", path },
+      message,
+    );
+  const tc = (gc as { thinkingConfig?: unknown } | undefined)
+    ?.thinkingConfig;
+  if (tc === undefined || tc === null) return undefined;
+  if (typeof tc !== "object" || Array.isArray(tc)) {
+    note(
+      "generationConfig.thinkingConfig",
+      'Dropping "thinkingConfig" (not an object)',
+    );
+    return undefined;
+  }
+  const fields = tc as {
+    thinkingLevel?: unknown;
+    thinkingBudget?: unknown;
+    includeThoughts?: unknown;
+  };
+  const reasoning: CanonicalReasoning = {};
+  if (fields.thinkingLevel !== undefined) {
+    if (
+      typeof fields.thinkingLevel === "string" &&
+      (EFFORT_LADDER as readonly string[]).includes(fields.thinkingLevel)
+    ) {
+      reasoning.effort = fields.thinkingLevel as Effort;
+    } else {
+      note(
+        "generationConfig.thinkingConfig.thinkingLevel",
+        'Dropping "thinkingLevel" (not a level string)',
+      );
+    }
+  }
+  if (fields.thinkingBudget !== undefined) {
+    if (
+      typeof fields.thinkingBudget === "number" &&
+      Number.isFinite(fields.thinkingBudget)
+    ) {
+      reasoning.effort ??= effortForBudget(fields.thinkingBudget);
+      reasoning.budgetTokens = fields.thinkingBudget;
+    } else {
+      note(
+        "generationConfig.thinkingConfig.thinkingBudget",
+        'Dropping "thinkingBudget" (not a number)',
+      );
+    }
+  }
+  if (fields.includeThoughts !== undefined) {
+    if (typeof fields.includeThoughts === "boolean") {
+      reasoning.summary = fields.includeThoughts;
+    } else {
+      note(
+        "generationConfig.thinkingConfig.includeThoughts",
+        'Dropping "includeThoughts" (not a boolean)',
+      );
+    }
+  }
+  return Object.keys(reasoning).length > 0 ? reasoning : undefined;
+}
+
 export function toCanonicalRequest(
   request: GenerateContentRequest,
 ): CanonicalRequest {
@@ -185,6 +265,7 @@ export function toCanonicalRequest(
   // Convert generation config
   if (request.generationConfig) {
     const gc = request.generationConfig;
+    const reasoning = toCanonicalReasoning(gc);
     result.config = {
       ...(gc.temperature !== undefined && { temperature: gc.temperature }),
       ...(gc.maxOutputTokens !== undefined && {
@@ -196,6 +277,7 @@ export function toCanonicalRequest(
       ...(gc.candidateCount !== undefined && {
         candidateCount: gc.candidateCount,
       }),
+      ...(reasoning !== undefined && { reasoning }),
     };
   }
 

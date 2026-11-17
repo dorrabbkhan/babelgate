@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   EFFORT_LADDER,
   budgetFor,
+  effortForBudget,
   nearestSupported,
 } from "./reasoning-effort";
 
@@ -48,5 +49,26 @@ describe("reasoning effort helpers (v1.4 spec §3.3)", () => {
     expect(budgetFor("medium")).toBe(8192);
     expect(budgetFor("high")).toBe(24576);
     expect(budgetFor("xhigh")).toBe(32000);
+  });
+
+  // v1.5 spec §3.1: budget-shaped request fields (Anthropic
+  // budget_tokens, Gemini thinkingBudget) decode to the highest
+  // ladder level whose starting budget fits.
+  it("budget 24576 → high", () => {
+    expect(effortForBudget(24576)).toBe("high");
+  });
+
+  it("budget 500 → minimal", () => {
+    expect(effortForBudget(500)).toBe("minimal");
+  });
+
+  it("effortForBudget is budgetFor's floor across the ladder", () => {
+    expect(effortForBudget(0)).toBe("minimal");
+    expect(effortForBudget(1024)).toBe("minimal");
+    expect(effortForBudget(2000)).toBe("minimal");
+    expect(effortForBudget(2048)).toBe("low");
+    expect(effortForBudget(8192)).toBe("medium");
+    expect(effortForBudget(32000)).toBe("xhigh");
+    expect(effortForBudget(99999)).toBe("xhigh");
   });
 });

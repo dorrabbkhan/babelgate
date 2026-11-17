@@ -1166,8 +1166,8 @@ describe('cache hints on tool results (Task 17a)', () => {
     });
   });
 
-  describe('reasoning fields still dropped (v1.4 spec §3.3)', () => {
-    it('gemini thinkingConfig produces no config.reasoning, body unchanged for every target', () => {
+  describe('reasoning request config (v1.5 spec §3.1)', () => {
+    it('gemini thinkingConfig maps to config.reasoning, encoded for every target', () => {
       const canonical = toCanonicalRequest({
         contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
         generationConfig: {
@@ -1175,25 +1175,33 @@ describe('cache hints on tool results (Task 17a)', () => {
         },
       } as GenerateContentRequest);
 
-      expect(canonical.config?.reasoning).toBeUndefined();
+      expect(canonical.config?.reasoning).toEqual({
+        effort: 'minimal',
+        budgetTokens: 1024,
+      });
 
       expect(fromCanonicalRequest(canonical)).toEqual({
         contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-        generationConfig: {},
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 1024 },
+        },
       });
       expect(anthropicFromCanonical(canonical)).toEqual({
         model: 'gemini-pro',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 4096,
+        thinking: { type: 'enabled', budget_tokens: 1024 },
       });
       expect(openaiFromCanonical(canonical)).toEqual({
         model: 'gemini-pro',
+        reasoning_effort: 'minimal',
         messages: [{ role: 'user', content: 'hi' }],
       });
       expect(ollamaFromCanonical(canonical)).toEqual({
         model: 'gemini-pro',
         messages: [{ role: 'user', content: 'hi' }],
         stream: false,
+        think: false,
       });
       expect(responsesFromCanonical(canonical)).toEqual({
         model: 'gemini-pro',
@@ -1204,7 +1212,37 @@ describe('cache hints on tool results (Task 17a)', () => {
             content: [{ type: 'input_text', text: 'hi' }],
           },
         ],
+        reasoning: { effort: 'minimal' },
+        include: ['reasoning.encrypted_content'],
         store: false,
+      });
+    });
+
+    it('thinkingConfig.thinkingLevel maps to config.reasoning.effort', () => {
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          thinkingConfig: { thinkingLevel: 'high' },
+        },
+      } as GenerateContentRequest);
+
+      expect(canonical.config?.reasoning).toEqual({ effort: 'high' });
+    });
+
+    it('thinkingConfig.includeThoughts maps to config.reasoning.summary', () => {
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          thinkingConfig: {
+            thinkingLevel: 'low',
+            includeThoughts: true,
+          },
+        },
+      } as GenerateContentRequest);
+
+      expect(canonical.config?.reasoning).toEqual({
+        effort: 'low',
+        summary: true,
       });
     });
   });

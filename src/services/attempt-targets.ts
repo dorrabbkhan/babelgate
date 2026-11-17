@@ -14,6 +14,10 @@ import { recordNote } from "../observe/context";
 import { lowerCustomTools } from "../transformers/custom-tools";
 import type { TraceFinish } from "../observe/emit";
 import { toClientError } from "./upstream-errors";
+import {
+  applyReasoningPolicy,
+  type ReasoningPolicySource,
+} from "./reasoning-policy";
 
 export type { Hop } from "../routing/route-log";
 
@@ -54,6 +58,7 @@ export function canonicalForTarget(
   canonical: CanonicalRequest,
   entry: ProviderEntry,
   target: RouteTarget,
+  policySource?: ReasoningPolicySource,
 ): CanonicalRequest {
   const out: CanonicalRequest = { ...canonical, model: target.model };
   if (entry.contextWindow !== undefined) {
@@ -79,10 +84,20 @@ export function canonicalForTarget(
   const reasoned = stripReasoningForTarget(lowered, entry);
   // §3.2: Anthropic and providers with cache_hints honour hints;
   // everywhere else they are removed from the copy before encode.
-  if (entry.type !== "anthropic" && entry.cacheHints !== true) {
-    return stripCacheHints(reasoned, entry.type);
-  }
-  return reasoned;
+  const shaped =
+    entry.type !== "anthropic" && entry.cacheHints !== true
+      ? stripCacheHints(reasoned, entry.type)
+      : reasoned;
+  // v1.5 §3.1: `reasoning: false` on the entry strips the reasoning
+  // config the source decoder mapped, with the source's v1.4 note.
+  return policySource === undefined
+    ? shaped
+    : applyReasoningPolicy(
+        shaped,
+        entry,
+        policySource.source,
+        policySource.sourceBody,
+      );
 }
 
 /**

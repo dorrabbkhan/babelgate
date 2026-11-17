@@ -1481,12 +1481,63 @@ describe('Anthropic Adapter', () => {
   // on the ambient trace (code + JSON path, never content). One case
   // per site.
   describe('translation notes (spec §3.5)', () => {
-    it('thinking request field records thinking_dropped', () => {
+    it('thinking request field maps to config.reasoning', () => {
       const input = {
         model: 'claude-3-opus-20240229',
         messages: [{ role: 'user', content: 'Hello' }],
         max_tokens: 1024,
-        thinking: { type: 'enabled', budget_tokens: 2000 },
+        thinking: { type: 'enabled', budget_tokens: 8192 },
+      } as unknown as MessageCreateParams;
+
+      let canonical: ReturnType<typeof toCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        canonical = toCanonicalRequest(input);
+      });
+
+      // v1.5 spec §3.1: the budget decodes to the ladder level whose
+      // starting budget fits, and the budget itself is kept.
+      expect(canonical?.config?.reasoning).toEqual({
+        effort: 'medium',
+        budgetTokens: 8192,
+      });
+      expect(trace.notes).toEqual([]);
+    });
+
+    it('adaptive thinking with output_config effort maps to config.reasoning', () => {
+      const input = {
+        model: 'claude-sonnet-5',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'high' },
+      } as unknown as MessageCreateParams;
+
+      const canonical = toCanonicalRequest(input);
+
+      expect(canonical.config?.reasoning).toEqual({ effort: 'high' });
+    });
+
+    it('disabled thinking maps to effort none', () => {
+      const input = {
+        model: 'claude-3-opus-20240229',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        thinking: { type: 'disabled' },
+      } as unknown as MessageCreateParams;
+
+      const canonical = toCanonicalRequest(input);
+
+      expect(canonical.config?.reasoning).toEqual({ effort: 'none' });
+    });
+
+    it('unmapped thinking shapes still record thinking_dropped', () => {
+      // `adaptive` without `output_config.effort` carries no level —
+      // §3.1 maps it to nothing, so the v1.4 drop note stays.
+      const input = {
+        model: 'claude-sonnet-5',
+        messages: [{ role: 'user', content: 'Hello' }],
+        max_tokens: 1024,
+        thinking: { type: 'adaptive' },
       } as unknown as MessageCreateParams;
 
       const trace = traced(() => toCanonicalRequest(input));
@@ -2180,8 +2231,8 @@ describe('Anthropic Adapter', () => {
     });
   });
 
-  describe('reasoning fields still dropped (v1.4 spec §3.3)', () => {
-    it('anthropic thinking produces no config.reasoning, body unchanged for every target', () => {
+  describe('reasoning request config (v1.5 spec §3.1)', () => {
+    it('anthropic thinking maps to config.reasoning, encoded for every target', () => {
       const canonical = toCanonicalRequest({
         model: 'm',
         max_tokens: 100,
@@ -2189,27 +2240,36 @@ describe('Anthropic Adapter', () => {
         messages: [{ role: 'user', content: 'hi' }],
       } as MessageCreateParams);
 
-      expect(canonical.config?.reasoning).toBeUndefined();
+      expect(canonical.config?.reasoning).toEqual({
+        effort: 'low',
+        budgetTokens: 2048,
+      });
 
       expect(fromCanonicalRequest(canonical)).toEqual({
         model: 'm',
         messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 100,
+        max_tokens: 3072,
+        thinking: { type: 'enabled', budget_tokens: 2048 },
       });
       expect(openaiFromCanonical(canonical)).toEqual({
         model: 'm',
+        reasoning_effort: 'low',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 100,
       });
       expect(geminiFromCanonical(canonical)).toEqual({
         contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
-        generationConfig: { maxOutputTokens: 100 },
+        generationConfig: {
+          maxOutputTokens: 100,
+          thinkingConfig: { thinkingBudget: 2048 },
+        },
       });
       expect(ollamaFromCanonical(canonical)).toEqual({
         model: 'm',
         messages: [{ role: 'user', content: 'hi' }],
         options: { num_predict: 100 },
         stream: false,
+        think: 'low',
       });
       expect(responsesFromCanonical(canonical)).toEqual({
         model: 'm',
@@ -2220,6 +2280,8 @@ describe('Anthropic Adapter', () => {
             content: [{ type: 'input_text', text: 'hi' }],
           },
         ],
+        reasoning: { effort: 'low' },
+        include: ['reasoning.encrypted_content'],
         store: false,
         max_output_tokens: 100,
       });

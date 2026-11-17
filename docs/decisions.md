@@ -5773,3 +5773,61 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   `document part on assistant message invalid`. `existing requests
   still valid` (fixture sweep) is unchanged and still passes; no
   fixture or snapshot was touched.
+
+## v1.5 Task 3 — reasoning request config for every source; `reasoning: false` (spec §3.1, D5/D6)
+
+- **Decoder mappings (§3.1 request table).** Anthropic
+  `thinking:{type:"enabled",budget_tokens}` → `{effort:
+  effortForBudget(b), budgetTokens: b}`; `{type:"adaptive"}` +
+  `output_config.effort` → `{effort}`; `{type:"disabled"}` →
+  `{effort:"none"}`. Chat `reasoning_effort` → `{effort}`. Gemini
+  `thinkingConfig.thinkingLevel`/`thinkingBudget`/`includeThoughts` →
+  `effort`/`budgetTokens`/`summary` (level wins when both level and
+  budget arrive). Ollama `think: true|string|false` → `medium`/`effort`/
+  `none`. New `effortForBudget` in `reasoning-effort.ts` is `budgetFor`'s
+  floor; `< 1024` → `"minimal"` per the plan, never `"none"` (off has
+  its own wire shape).
+- **Ambiguities resolved.** (a) `adaptive` without `output_config.effort`
+  and every other unmapped `thinking` shape (`enabled` without a numeric
+  budget, `between_tools`, non-objects) keep the v1.4 `thinking_dropped`
+  note — §3.1's table maps only the named shapes. (b) `"max"` effort
+  (present in both SDK vocabularies: `OutputConfig.effort` and
+  `Shared.ReasoningEffort`) lowers to `xhigh` with the Responses
+  decoder's `reasoning_effort_lowered` convention; other unknown levels
+  keep `field_dropped` on the field path. (c) `reasoning:false` records
+  exactly v1.4's notes: only Anthropic's `thinking` carried one
+  (`thinking_dropped`, `stage:"decode"`); Chat `reasoning_effort`,
+  Gemini `thinkingConfig` and Ollama `think` were silently ignored in
+  v1.4, so none is recorded for them. (d) The `/ui` playground path
+  (`canonical-stream.service.ts`) passes no policy source — a canonical
+  request's own `config.reasoning` stays honoured, matching v1.4.
+- **`reasoning: false` (D6 opt-out).** New optional `reasoning` key on
+  provider entries (`gateway.schema.ts` `z.boolean().optional()`, absent
+  = true) → `ProviderEntry.reasoning` →
+  `applyReasoningPolicy` (new `src/services/reasoning-policy.ts`) inside
+  `canonicalForTarget`, per attempt before encode: strips
+  `config.reasoning` on a copy, records the source's v1.4 note. The
+  Responses source is exempt (it mapped reasoning in v1.4 too).
+- **Files outside the Files block:**
+  `src/routing/registry.ts` (`ProviderEntry.reasoning` field — the plan's
+  interface names `entry.reasoning`, whose type lives here),
+  `src/services/stream-attempt.ts` (`attemptStreamTarget` gains an
+  optional `policySource` param forwarded to `canonicalForTarget` — the
+  stream path encodes upstream bodies there; the playground caller
+  passes none), `src/config/yaml-config.test.ts` (covers the new
+  `reasoning` provider key parse).
+- **Tests.** Per decoder: one case per §3.1 row plus the D5 rewrites
+  (`"thinking request field maps to config.reasoning"` and the three
+  "produces no config.reasoning, body unchanged" tests → "maps to
+  config.reasoning, encoded for every target", same per-target literal
+  bodies). `reasoning-effort.test.ts` gains `budget 24576 → high`,
+  `budget 500 → minimal`. New `reasoning-policy.test.ts`:
+  `reasoning:false reproduces v1.4 note and body` (4 sources × 5
+  targets, notes and byte-identical bodies vs the v1.4 canonical),
+  `responses source unaffected`, `reasoning unset or true keeps the
+  mapped config`. No fixture or snapshot touched.
+- **Live check.** `npm run dev` + a local Ollama stub: Anthropic
+  `thinking:{enabled,budget_tokens:2048}` reached the upstream as
+  `"think":"low"`; with `reasoning: false` the upstream body had no
+  `think` and the trace logged `thinking_dropped` (request/response in
+  the PR).

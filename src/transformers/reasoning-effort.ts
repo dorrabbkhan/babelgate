@@ -56,3 +56,18 @@ export function budgetFor(effort: Effort): number {
       return 32000;
   }
 }
+
+/**
+ * The inverse of `budgetFor` (v1.5 spec §3.1): the highest ladder
+ * level whose starting budget is at or below `budgetTokens`;
+ * `"minimal"` below the 1024 floor — a budget-shaped request field
+ * never decodes to `"none"` (off has its own wire shape).
+ */
+export function effortForBudget(budgetTokens: number): Effort {
+  let level: Effort = "minimal";
+  for (const candidate of EFFORT_LADDER) {
+    if (candidate === "none") continue;
+    if (budgetFor(candidate) <= budgetTokens) level = candidate;
+  }
+  return level;
+}

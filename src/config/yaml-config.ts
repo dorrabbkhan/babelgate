@@ -174,6 +174,9 @@ export function loadYamlConfig(
         ...(provider.reasoning_passback === undefined
           ? {}
           : { reasoningPassback: provider.reasoning_passback }),
+        ...(provider.reasoning === undefined
+          ? {}
+          : { reasoning: provider.reasoning }),
         timeoutMs: provider.timeout_ms,
         streamIdleMs: provider.stream_idle_ms,
       };
