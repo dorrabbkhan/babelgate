@@ -23,6 +23,19 @@ export const MOCK_BASE_URLS: Record<Provider, string> = {
 /** A second OpenAI-type host for multi-provider (fallback) tests. */
 export const OPENAI2_BASE_URL = "http://openai2.mock";
 
+/**
+ * The media host the URL-image pair cells fetch (v1.5 spec §3.2.2,
+ * Task 11). A public-IP literal skips name resolution entirely —
+ * media-fetch's SSRF guard still runs (a public range, allowed) but
+ * no resolver is consulted — and msw intercepts the HTTP hop, so
+ * `npm test` stays offline.
+ */
+export const MEDIA_URL = "http://93.184.216.34/pic.png";
+
+/** The 1×1 PNG the media host serves (base64). */
+export const MEDIA_PNG_B64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
 /** Nothing listens on this port — a guaranteed transport failure. */
 export const DEAD_BASE_URL = "http://127.0.0.1:9";
 
@@ -1025,5 +1038,17 @@ export const upstreamHandlers = [
       });
     }
     return HttpResponse.json(openaiFixtures.models);
+  }),
+
+  // ===== Media host (URL-image inlining, v1.5 spec §3.2.2) =====
+  //
+  // Serves the 1×1 MEDIA_PNG_B64 to media-fetch's http.request hop;
+  // the URL is an IP literal so no DNS lookup ever leaves the box.
+  http.get(MEDIA_URL, () => {
+    const buf = Buffer.from(MEDIA_PNG_B64, "base64");
+    return HttpResponse.arrayBuffer(
+      buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length),
+      { headers: { "content-type": "image/png" } },
+    );
   }),
 ];

@@ -32,6 +32,7 @@ import {
   nonStreamSource,
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
+import { recordMatrixCell } from "../matrix/matrix-report";
 import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import ollamaFixtures from "../fixtures/ollama.json";
@@ -998,6 +999,20 @@ describe("every pair: plain, stream, tools, stream × tools (25 pairs; spec §4.
           ).toBe(reply.calls.length);
         }
       }
+
+      // The compatibility matrix (v1.5 spec §3.4): this cell passed.
+      recordMatrixCell(
+        source,
+        target,
+        caseName === "text"
+          ? streaming
+            ? "stream"
+            : "plain"
+          : streaming
+            ? "stream_tools"
+            : "tools",
+        "pass",
+      );
 
       if (caseName === "text") return;
 

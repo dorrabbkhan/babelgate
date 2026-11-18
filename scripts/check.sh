@@ -45,6 +45,9 @@ fi
 run_guard
 npm run --silent typecheck
 npm test
+# The pair tests' teardown just wrote tests/matrix/.out/matrix.json —
+# the committed docs/compatibility.md must carry the same cells (§3.4).
+npm run --silent matrix -- --check
 npm run --silent build
 scripts/ci/ui-smoke.sh
 scripts/ci/smoke-pack.sh
