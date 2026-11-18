@@ -6993,3 +6993,63 @@ the changed files are listed here by full path:
   per-request `model: "models/<m>"` and `outputDimensionality`),
   Ollama `/api/embed` (https://docs.ollama.com/api/embed —
   `dimensions`, `prompt_eval_count`).
+
+## v1.5 Task 12 — weekly client-release replay (spec §3.4, E8)
+
+- **Two runs per client, by the Files block.** The interface names
+  `claude-code-edit.sh`/`codex-edit.sh` for the gate run "and records
+  each client's requests via `record-shapes.ts`", but the Files block
+  modifies neither edit script — they have no recorder hook. So the
+  replay runs each client twice weekly: the edit-task gate verbatim
+  (`config examples/claude-code-openrouter.yaml` /
+  `examples/codex-openrouter.yaml`, the bridge), then a recorded pass
+  through `record-claude-code.sh`/`record-codex.sh` (the existing
+  record-shapes drivers) pointed at a babelgate `client-replay.sh`
+  starts itself — client → record-shapes → babelgate → OpenRouter,
+  the same bridge path as the gate. A weekly second run is cheaper
+  than an interface change to a tested gate script.
+- **Recorded-pass provenance matches each fixture's own run.** Codex
+  records with `--model qwen/qwen3-coder` and no `--catalog`/`--effort`
+  (fallback metadata) — the exact invocation that produced
+  `tests/fixtures/codex/recording.jsonl`; the catalog's apply_patch
+  shape would show as "added" against it. Claude records in `thinking`
+  mode, matching `tests/fixtures/recordings/
+  claude-code-thinking.jsonl`. Through the bridge the upstream can't
+  return thinking blocks, so `thinking`/`signature` shapes may show as
+  *removed* — removals never fail the diff.
+- **`shape-diff.ts` compares shape, not values.** Added/removed sets
+  per file: request keys (`request <METHOD> <PATH>`, `query <k>`, and
+  every `bodyShape` key path incl. array markers), tool types
+  (`type`/`name` verbatim values of `tools[]` elements, nested
+  namespace `tools[]` included), input item types (verbatim `type`
+  values of `input[]`, `content[]`, `system[]` elements) and SSE
+  event types (`sseEvents` keys). Exit 1 on any addition, never on a
+  removal. Deliberately excluded: `headerNames` (conditional headers
+  like `x-stainless-retry-count` appear only on retried requests — a
+  flaky upstream would file a false-positive `client-replay` issue
+  weekly), `userAgent`, `status` and all values — a model-slug or
+  string-length change is not a shape change.
+- **The patch** adds cron `0 6 * * 1` and a `client-replay` job gated
+  `if: github.event.schedule == '0 6 * * 1' || github.event_name ==
+  'workflow_dispatch'` (the daily `live` job must not pay the replay
+  cost; dispatch included so the owner can verify the job after
+  applying the patch rather than waiting a week). Job permissions are
+  `contents: read` + `issues: write`; the failure step force-creates
+  the `client-replay` label, then opens one issue
+  (`--body-file tmp/client-replay/summary.md`, title with
+  `versions.txt`) only when no open `client-replay` issue exists —
+  otherwise a persistent regression files a duplicate every week.
+- **Summary contract:** `client-replay.sh` always writes
+  `$REPLAY_OUT_DIR/summary.md` (default `tmp/client-replay/`) —
+  versions, gate results, full diff output — plus `versions.txt` for
+  the issue title, and appends the summary to `$GITHUB_STEP_SUMMARY`
+  when set. Exit 1 on any gate/record failure or added shape; exit 2
+  on usage errors.
+- **Offline verification** (recording/network step is the
+  conductor's): `shape-diff.test.ts` covers the four pinned cases;
+  `client-replay.sh` was exercised end-to-end in the sandbox with
+  fake `claude`/`codex` binaries (the `record-claude-code.test.ts`
+  technique) — babelgate start, recorder interposition, JSONL
+  capture, diff and summary all verified; `git apply --check` passes
+  on the patch and the patched `live.yml` parses as YAML with the
+  expected jobs/permissions.
