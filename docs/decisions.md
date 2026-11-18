@@ -6833,6 +6833,30 @@ offered and not chosen): the `tool_choice` gap fix must not delete
   `scripts/gates/tool-check-shim.sh`, `docs/decisions.md`.
   Files outside the Files block: none.
 
+## conductor tooling — judge files-block matches bare root files (2026-11-18)
+
+Conductor tooling, owner-reviewed — no plan task or Files block applies, so
+the changed files are listed here by full path:
+
+- **Files outside the Files block:**
+  - `scripts/conductor/judge-checks.ts` — `filesBlockPatterns` resolved a
+    bare file name only against "the nearest full path before it on the
+    line", so Task 11's Files line ("`scripts/check.sh`, `package.json`,
+    `.gitignore`, `README.md`") made the root `package.json` read as
+    `scripts/package.json` and falsely FLAGged `files-block`/`owner-gate`
+    on a legitimate in-block diff. A bare name now also matches the repo
+    root, and root-looking names (leading dot, or
+    .json/.md/.yaml/.yml/.toml/.sh) match in any directory.
+  - `scripts/conductor/judge.test.ts` — regression case "bare root files
+    after a full path match the Files block" built from the Task 11 Files
+    line; asserts `files-block` PASS and that `owner-gate` still FLAGs
+    `package.json` (the flag is for the conductor to read, not to
+    disappear).
+- Trade-off recorded in the code comment: over-matching is deliberate — a
+  missed FLAG on a same-named file in another directory is far less
+  harmful than a false FLAG on every task whose Files line mixes full
+  paths and bare root files.
+
 ## v1.5 Task 11 — generated compatibility matrix (spec §3.4)
 
 - **Files outside the Files block:**
