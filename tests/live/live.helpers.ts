@@ -437,9 +437,20 @@ export const ASSISTANT_TEXT: Record<
   openai: (b) =>
     (b as { choices?: { message?: { content?: string } }[] }).choices?.[0]
       ?.message?.content,
+  // Since v1.5 reasoning-out the bridge can emit a `thought: true` part
+  // before the text part, so join the text of the non-thought parts —
+  // parts[0] alone can be an empty thought part.
   gemini: (b) =>
-    (b as { candidates?: { content?: { parts?: { text?: string }[] } }[] })
-      .candidates?.[0]?.content?.parts?.[0]?.text,
+    (
+      (b as {
+        candidates?: {
+          content?: { parts?: { text?: string; thought?: boolean }[] };
+        }[];
+      }).candidates?.[0]?.content?.parts ?? []
+    )
+      .filter((p) => p.thought !== true)
+      .map((p) => p.text ?? '')
+      .join(''),
   ollama: (b) => (b as { message?: { content?: string } }).message?.content,
   anthropic: (b) =>
     (b as { content?: { type?: string; text?: string }[] }).content?.find(
