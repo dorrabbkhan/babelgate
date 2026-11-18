@@ -6648,3 +6648,104 @@ the measured one, and commit the probe script that produced it.
   `src/services/gap-fixes.test.ts`,
   `scripts/gates/probe-anthropic-shim.sh`, `docs/decisions.md`.
   Files outside the Files block: none.
+
+## v1.5 Task 9 follow-up — measured `glm-anthropic` gaps; `semantic-check-shim.sh` (2026-11-18)
+
+Off-plan follow-up to Task 9 (PR #127) and the LM Studio follow-up
+(PR #128), owner-approved in chat 2026-11-18 ("merged continue", after
+the probe results below were reviewed): replace the docs-derived
+`glm-anthropic` gap list with the measured one, and commit the
+semantic check that produced part of the evidence.
+
+- **Correction.** The preset comment called
+  `https://api.z.ai/api/anthropic` "the GLM Coding Plan endpoint";
+  z.ai's own key-management page
+  (https://docs.z.ai/devpack/notice/api-key-management.md) lists it as
+  the general Anthropic Messages endpoint for standard
+  (non-Coding-Plan) keys, and the probes ran on a standard free-tier
+  key (pricing: https://docs.z.ai/guides/overview/pricing.md).
+- **Probes.** `scripts/gates/probe-anthropic-shim.sh` (committed in
+  PR #128) plus `scripts/gates/semantic-check-shim.sh` (new; the
+  conductor's `tmp/` staging copy committed unchanged except one
+  header line — where the probe prints response shapes, the semantic
+  check asks questions only the real content can answer, to tell
+  "used" from "silently dropped"). Run by the conductor on
+  2026-11-18 as
+  `BASE=https://api.z.ai/api/anthropic MODEL=<model> API_KEY=<key> scripts/gates/probe-anthropic-shim.sh`
+  and the same env against `scripts/gates/semantic-check-shim.sh`,
+  three models: `GLM-4.5-Flash` and `GLM-4.7-Flash` (text-only),
+  `GLM-4.6V-Flash` (vision). Raw output (gitignored):
+  `tmp/probe-glm-45.txt`, `tmp/semantic-glm-47.txt`.
+- **Result table** (`529` = `overloaded_error` [1305]; the free tier
+  returned it intermittently, and `GLM-4.6V-Flash` returned it on
+  every probe except `count_tokens` even after retries, so the vision
+  column has no data):
+
+  | probe | GLM-4.5-Flash | GLM-4.7-Flash | GLM-4.6V-Flash |
+  |---|---|---|---|
+  | baseline | 200, `thinking` block | 200 (intermittent 529s) | 529 |
+  | tool_choice_any | 200, thinking+text, `stop_reason=end_turn`, no `tool_use` | 529 | 529 |
+  | count_tokens | 200 `{"input_tokens":0}` | same | same (the only probe it answered) |
+  | cache_control_system | 200 | 200 | 529 |
+  | cache_control_toplevel | 200 | 200 | 529 |
+  | url_image | 200 | 200; semantic check answered "Panda" for httpbin's pig PNG — a guess (text-only model) | 529 |
+  | pdf_base64 | 200 | 200; semantic check: "I am unable to read the contents of the link provided ... signed link with an expiration time" | 529 |
+  | stream_usage | 200; events `message_start,ping,content_block_start,content_block_delta,content_block_stop,message_delta,message_stop`; `message_start.usage=input_tokens,output_tokens`; `message_delta.usage=input_tokens,output_tokens,cache_read_input_tokens,server_tool_use,service_tier` | — | 529 |
+
+  Quoted lines from the raw output (`tmp/probe-glm-45.txt`,
+  `tmp/semantic-glm-47.txt`):
+  - `count_tokens 200 ok keys=input_tokens input_tokens=0`
+  - `tool_choice_any 200 ok content_types=thinking,text stop_reason=end_turn usage_keys=input_tokens,output_tokens,cache_read_input_tokens,server_tool_use,service_tier`
+  - `url_image 200 answer="Panda"`
+  - `pdf_text 200 answer="I am unable to read the contents of the link provided. The URL contains a signed link with an expiration time, and I cannot access the internet to retrieve the "`
+- **What each verdict changes** in the preset
+  (`src/config/provider-presets.ts` — gaps now
+  `["count_tokens","documents","tool_choice","url_images"]`,
+  `verified` now 2026-11-18):
+  - `count_tokens` stays declared: the endpoint answers HTTP 200 with
+    `{"input_tokens":0}` on all three models — answered without a
+    model call, always 0. A client would trust a wrong number, so the
+    §3.5 local-estimate fix still applies.
+  - `documents` stays declared: a base64 `document` block returned
+    200 on `GLM-4.7-Flash`, but the semantic check shows the endpoint
+    turns the PDF into a signed URL the model cannot open ("I am
+    unable to read the contents of the link provided"). Accepted but
+    unusable — refusing in the client's dialect beats a silent
+    failure. Not tested on the vision model.
+  - `prompt_cache` removed: `cache_control` on a system block and at
+    the top level returned 200 on `GLM-4.7-Flash` and `GLM-4.5-Flash`
+    — accepted, not a gap.
+  - `tool_choice` declared (probable): `{type:"any"}` with a tool
+    defined returned 200 with thinking + text,
+    `stop_reason:end_turn`, no `tool_use` block on `GLM-4.5-Flash`.
+    Fix: field dropped with a `tool_choice_dropped` note, Task 9's
+    mechanism.
+  - `url_images` stays declared: accepted (200 on both text models)
+    but unproven — `GLM-4.7-Flash` answered "Panda" for httpbin's pig
+    PNG (a guess; a text-only model cannot have used the image) and
+    the vision model never answered. Retest on `GLM-4.6V-Flash` when
+    capacity allows.
+  - `stream_usage` was never declared; confirmed: usage rides
+    `message_start` and `message_delta` on the standard message_*
+    events.
+- **Caveats.**
+  - The free tier is saturated: intermittent 529 `overloaded_error`
+    ([1305]); `GLM-4.6V-Flash` returned 529 on every probe except
+    `count_tokens`, even after retries, so it contributed no data.
+  - `tool_choice` is "probable", not proven: the probe cannot
+    distinguish "the endpoint dropped the field" from "the model
+    cannot be made to call a tool"; the `GLM-4.7-Flash` baseline was
+    overloaded, so the verdict rests on `GLM-4.5-Flash`.
+  - `prompt_cache` was removed on acceptance only: whether z.ai
+    actually caches is unproven — usage shows
+    `cache_read_input_tokens` but never `cache_creation_input_tokens`.
+  - `GLM-4.5-Flash` emits `thinking` content blocks by default
+    (reasoning on): not a gap; noted for Task 4's reasoning handling
+    only.
+  - The probe key was a throwaway free-tier key; single run on
+    2026-11-18. Paid tiers or other GLM models may behave
+    differently.
+- **Files block:** `src/config/provider-presets.ts`,
+  `src/services/gap-fixes.test.ts`,
+  `scripts/gates/semantic-check-shim.sh`, `docs/decisions.md`.
+  Files outside the Files block: none.

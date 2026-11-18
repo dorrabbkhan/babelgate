@@ -109,19 +109,33 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
     verified: "2026-11-17",
   },
   /**
-   * z.ai's GLM Coding Plan Anthropic endpoint. The docs describe the
-   * coding endpoint for Claude Code-style clients — tools (and so
-   * `tool_choice`) work — but publish no field-level compatibility
-   * table and no count_tokens endpoint, so the four unproven gaps are
-   * declared. Usage rides the stream's message_* events.
+   * z.ai's Anthropic Messages endpoint — the general endpoint for
+   * standard (non-Coding-Plan) keys per the key-management page
+   * (https://docs.z.ai/devpack/notice/api-key-management.md; pricing:
+   * https://docs.z.ai/guides/overview/pricing.md). Gaps measured by
+   * the probe (`scripts/gates/probe-anthropic-shim.sh` and
+   * `scripts/gates/semantic-check-shim.sh`, standard free-tier key,
+   * 2026-11-18, `GLM-4.5-Flash`/`GLM-4.7-Flash` text-only;
+   * `GLM-4.6V-Flash` vision was saturated): `count_tokens` → 200
+   * `{"input_tokens":0}` on all three models — answered without a
+   * model call, so a client would trust a wrong number; a base64
+   * `document` block → 200 but the endpoint turns the PDF into a
+   * signed URL the model cannot open, so `documents` stays declared
+   * and is refused in the client's dialect; `tool_choice:{type:"any"}`
+   * → 200 with `stop_reason:end_turn` and no `tool_use` — declared,
+   * probable. `cache_control` was accepted (whether z.ai actually
+   * caches is unproven) and streamed usage rides the message_*
+   * events, so neither is declared. `url_images` stays declared:
+   * accepted (200) but unproven — a text-only model guessed the image
+   * and the vision model never answered.
    */
   "glm-anthropic": {
     type: "anthropic",
     base_url: "https://api.z.ai/api/anthropic",
     api_key_env: "ZAI_API_KEY",
-    gaps: ["count_tokens", "prompt_cache", "url_images", "documents"],
+    gaps: ["count_tokens", "documents", "tool_choice", "url_images"],
     docs: "https://docs.z.ai/devpack/tool/others",
-    verified: "2026-11-17",
+    verified: "2026-11-18",
   },
   /**
    * Moonshot Kimi's Anthropic endpoint. Its Messages schema: image
