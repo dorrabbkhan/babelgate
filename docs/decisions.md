@@ -7378,6 +7378,47 @@ the changed files are listed here by full path:
     `docs/research/2026-11-18-antigravity-spike.md`,
     `docs/decisions.md`).
 
+## v1.5 fixture update — claude-code recording gains `ListAgents` `cursor` (2026-11-18)
+
+- **Owner-approved fixture change (the "task says so" exception to the
+  fixture stop rule), scoped to exactly one file.** Claude Code 2.1.327
+  (the fixture was recorded with 2.1.322) adds a `cursor` property to
+  the built-in `ListAgents` tool's `input_schema.properties`, alongside
+  the existing `channel` and `q`. The owner approved updating
+  `tests/fixtures/recordings/claude-code-thinking.jsonl` for this and
+  nothing else, and will set `ALLOW_FIXTURE_CHANGE` for the PR; CI
+  showing "FIXTURE GUARD FAILED … all other checks passed" and nothing
+  else red is the expected state.
+- **What changed.** In every request line of
+  `tests/fixtures/recordings/claude-code-thinking.jsonl` whose
+  `bodyShape.tools[]` contains `ListAgents` (7 lines), `properties`
+  gains `"cursor":{"description":"<string:96>","type":"string","maxLength":"<number>"}`
+  after `q` — the same shape as its siblings and the same order as the
+  fresh 2.1.327 recording in `tmp/cc/new.jsonl`. No other line or key
+  was touched; the fixture was not replaced by the fresh recording
+  because that recording takes a shorter path and would drop the
+  `thinking`/`signature` blocks and other keys the fixture exists to
+  pin.
+- **`git diff` verification** (each of the 7 changed lines differs only
+  by the single inserted `cursor` fragment; verified by parsing every
+  diff line and confirming `added.replace(cursor_fragment, "") == removed`
+  and valid JSON):
+  `tests/fixtures/recordings/claude-code-thinking.jsonl | 14 +++++++-------
+  1 file changed, 7 insertions(+), 7 deletions(-)`
+- **shape-diff verification.**
+  `./node_modules/.bin/ts-node scripts/gates/shape-diff.ts tmp/cc/new.jsonl
+  tests/fixtures/recordings/claude-code-thinking.jsonl` reports
+  `removed request key: body messages[].content[].input.description`
+  and `SHAPE DIFF: 0 added, 1 removed` — 0 added keys (the removed key
+  is expected: the fresh recording takes a shorter path).
+- **No test changes needed.** Nothing under `tests/` reads
+  `tests/fixtures/recordings/`; the recording is only consumed by the
+  live `scripts/gates/client-replay.sh` + `shape-diff.ts` gate (a
+  conductor-run step), so no test pins the fixture's exact bytes or
+  tool-property list.
+- **Files changed:** `tests/fixtures/recordings/claude-code-thinking.jsonl`,
+  `docs/decisions.md`. No files outside the Files block.
+
 ## v1.5 live fix — Anthropic target gets a 512-token chat budget (2026-11-18)
 
 - **Evidence (live.yml `workflow_dispatch` on main, after the Task 12
