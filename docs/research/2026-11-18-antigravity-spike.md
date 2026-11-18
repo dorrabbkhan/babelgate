@@ -213,6 +213,19 @@ with the owner-installed `agy` 1.5.11 — three findings, all fixed:
    envelope crosses the wire as standard base64 (`gemini.signature.ts`), with the
    legacy `bg1.` form still accepted inbound. The live re-run result is reported in
    the PR status comment.
+4. **agy sends tool results in a `"model"`-role content.** The Gemini-3 end-to-end
+   run first got past turn 1 after the finding-3 fix — agy parsed the stream, ran
+   its tool and sent turn 2 — and Google then answered `400 Requests ending with
+   a model turn are not supported` for the request babelgate forwarded. The
+   captured turn-2 `contents` end with `{role: "model", parts: [{functionResponse:
+   …}]}` — the function-calling docs show tool results under `"user"`
+   (https://ai.google.dev/gemini-api/docs/function-calling), but the Go
+   genai-based client sends `"model"` and Google's API accepts it. babelgate
+   dropped the functionResponse and emitted an empty assistant message instead.
+   Fixed in this PR: functionResponse parts decode to tool messages regardless of
+   the content's role (`gemini.adapter.ts` `toCanonicalRequest`; a model turn of
+   only responses emits no assistant message). The live re-run result is posted
+   in the PR status comment.
 
 Shape the live run recorded (agy's default model — babelgate's `MODEL_MAP "*=<gate
 model>"` routed it):
@@ -278,10 +291,12 @@ add them to same PR"); all three recommendations landed in PR #140:
   Task 14 entry): scope is API-key mode only, with the two unverified
   gaps noted in the Licence/terms section above.
 - **Live pass**: ran 2026-11-18 on a real Gemini key (agy 1.5.11,
-  `gemini-3.8-flash` target) — three findings (`--yolo` →
+  `gemini-3.8-flash` target) — four findings (`--yolo` →
   `--dangerously-skip-permissions`, retired default model →
-  `gemini-3.8-flash`, and the `bg1.` envelope's `thoughtSignature`
-  encoding breaking Go genai clients); the first two fixed in the
-  record script, the third fixed in this PR via
-  `src/transformers/adapters/gemini.signature.ts`. See "Live pass"
+  `gemini-3.8-flash`, the `bg1.` envelope's `thoughtSignature`
+  encoding breaking Go genai clients, and agy's `"model"`-role
+  functionResponse contents being dropped); the first two fixed in
+  the record script, the last two fixed in this PR via
+  `src/transformers/adapters/gemini.signature.ts` and
+  `src/transformers/adapters/gemini.adapter.ts`. See "Live pass"
   above; the re-run result goes in the PR status comment.

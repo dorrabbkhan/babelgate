@@ -332,7 +332,21 @@ export function toCanonicalRequest(
         ...(toolCalls.length > 0 && { toolCalls }),
       };
       resolveEnvelopeSignatures(msg, envelopeSigs, contentIndex);
-      messages.push(msg);
+      // functionResponse parts are tool results wherever they sit —
+      // decode keys on part type, not on the content's role. agy
+      // (Go genai) sends them in a "model"-role content, which
+      // Google's API accepts even though the function-calling docs
+      // show them under "user" (captured agy 1.5.11 turn 2;
+      // https://ai.google.dev/gemini-api/docs/function-calling). A
+      // model turn of only responses emits no assistant message: an
+      // empty one would leave the upstream request ending on a model
+      // turn, which Google 400s ("Requests ending with a model turn
+      // are not supported").
+      const toolMessages = toCanonicalToolMessages(parts, pendingCalls);
+      if (otherParts.length > 0 || toolMessages.length === 0) {
+        messages.push(msg);
+      }
+      messages.push(...toolMessages);
     } else {
       messages.push(...toCanonicalToolMessages(parts, pendingCalls));
       if (otherParts.length > 0) {

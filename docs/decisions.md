@@ -7330,3 +7330,50 @@ the changed files are listed here by full path:
   - `docs/decisions.md` — this entry.
 - No fixture, snapshot, timeout or retry changes; no test asserts the
   old 400, so none had to be removed.
+- **Live pass (round 4, 2026-11-18):** `origin/main` merged into the
+  branch first (the only conflict was this file — both sides had
+  appended entries; resolved keeping both in full, the Task 12
+  follow-up entry then this one). The conductor's Gemini-3
+  end-to-end re-run then got past turn 1 — the finding-3 signature
+  fix worked: agy parsed the stream, ran its tool and sent turn 2 —
+  and Google answered `400 Requests ending with a model turn are not
+  supported` for the request babelgate forwarded. Captured agy
+  1.5.11 turn-2 `contents` (against a local stub; values omitted):
+  1. `{role: "user", parts: [{text}]}`
+  2. `{role: "model", parts: [{functionCall: {id, name, args},
+     thoughtSignature}]}`
+  3. `{role: "model", parts: [{functionResponse: {id, name,
+     response: {output}}}]}` — role "model", not "user".
+
+  The function-calling docs show tool results under "user"
+  (https://ai.google.dev/gemini-api/docs/function-calling), but this
+  shipping client (agy, Go genai-based) sends them under "model" and
+  Google's API accepts it. In `toCanonicalRequest`
+  (`src/transformers/adapters/gemini.adapter.ts`) the `"model"`
+  branch filtered functionResponse parts out and skipped them, so
+  the tool result was lost and an empty assistant message ended the
+  forwarded request. **Fix (decode only, keyed by part type, not by
+  client or provider):** functionResponse parts decode to tool
+  messages (`toCanonicalToolMessages`) regardless of the content's
+  role — a model turn of only responses emits no assistant message,
+  a mixed turn emits the assistant message then the tool messages;
+  "user"-role behaviour unchanged. `canonical.*` untouched.
+  - **Tests:** `functionResponse in a model-role content becomes a
+    tool message`, `a model-role content of only functionResponse
+    parts yields no assistant message`, `a model-role content with
+    a functionCall and a functionResponse yields assistant then
+    tool messages` (`src/transformers/adapters/
+    gemini.adapter.test.ts`), and `model-role functionResponse
+    reaches Gemini, OpenAI and Ollama upstreams as a tool result`
+    (`tests/integration/gemini-cli.test.ts`) — the captured turn-2
+    shape with a `toGeminiSignature` signature; it asserts the
+    Gemini upstream `contents` ends on a user-role functionResponse
+    with the restored upstream signature, and the OpenAI and Ollama
+    upstream `messages` end on the tool result.
+  - **Files outside the Files block:** none new — every file this
+    round touched is already listed in this entry
+    (`src/transformers/adapters/gemini.adapter.ts`,
+    `src/transformers/adapters/gemini.adapter.test.ts`,
+    `tests/integration/gemini-cli.test.ts`,
+    `docs/research/2026-11-18-antigravity-spike.md`,
+    `docs/decisions.md`).

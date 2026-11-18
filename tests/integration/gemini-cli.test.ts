@@ -23,8 +23,14 @@ import {
   reasoningReply,
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
-import { unpackEnvelope } from "../../src/transformers/reasoning-envelope";
-import { fromGeminiSignature } from "../../src/transformers/adapters/gemini.signature";
+import {
+  packEnvelope,
+  unpackEnvelope,
+} from "../../src/transformers/reasoning-envelope";
+import {
+  fromGeminiSignature,
+  toGeminiSignature,
+} from "../../src/transformers/adapters/gemini.signature";
 
 /**
  * Gemini CLI essentials (spec §3.10, evidence E10–E12 from the
@@ -308,6 +314,171 @@ describe("Gemini CLI essentials (spec §3.10)", () => {
       expect(thoughtPart?.thoughtSignature).toBe("sig-gem-1-think");
       expect(callPart?.thoughtSignature).toBe("sig-gem-1-call");
     }
+  });
+
+  it("model-role functionResponse reaches Gemini, OpenAI and Ollama upstreams as a tool result", async () => {
+    // Live-pass finding 4 (round 4): the captured agy 1.5.11 turn-2
+    // request sends the tool result in a "model"-role content — the
+    // function-calling docs show it under "user"
+    // (https://ai.google.dev/gemini-api/docs/function-calling) but
+    // Google's API accepts the "model" form. Without the decode fix
+    // the forwarded request ended on a model turn and Google answered
+    // 400 "Requests ending with a model turn are not supported". The
+    // signature is the wire form toGeminiSignature emits for a
+    // turn-1 envelope; its origin names the Gemini attempt so the
+    // upstream signature is restored verbatim.
+    const upstreamSig = "sig-upstream-1";
+    const envelope = packEnvelope({
+      v: 1,
+      reasoning: [],
+      signatures: [
+        {
+          toolCallId: "call_1",
+          signature: {
+            origin: { provider: "gemini", model: "gemini-3.8-flash" },
+            data: upstreamSig,
+          },
+        },
+      ],
+    })!;
+    // The captured turn-2 shape verbatim (values shortened): user
+    // text, a model turn whose functionCall carries the
+    // thoughtSignature, then a model turn with the functionResponse.
+    const agyTurn2 = {
+      contents: [
+        { role: "user", parts: [{ text: "make the failing test pass" }] },
+        {
+          role: "model",
+          parts: [
+            {
+              functionCall: {
+                id: "call_1",
+                name: "update_topic",
+                args: { title: "t", summary: "s" },
+              },
+              thoughtSignature: toGeminiSignature(envelope),
+            },
+          ],
+        },
+        {
+          role: "model",
+          parts: [
+            {
+              functionResponse: {
+                id: "call_1",
+                name: "update_topic",
+                response: { output: "done" },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    setPair("gemini", "gemini");
+    const geminiRes = await request(app)
+      .post("/v1beta/models/gemini-3.8-flash:generateContent")
+      .send(agyTurn2);
+    expect(geminiRes.status, JSON.stringify(geminiRes.body)).toBe(200);
+    expect(capturedRequests.gemini).toHaveLength(1);
+    const geminiUp = capturedRequests.gemini[0] as {
+      contents?: unknown[];
+    };
+    // The tool result lands as a user-role functionResponse content —
+    // the documented wire shape — and the model turn's signature is
+    // the restored upstream one, not the envelope.
+    expect(geminiUp.contents).toEqual([
+      { role: "user", parts: [{ text: "make the failing test pass" }] },
+      {
+        role: "model",
+        parts: [
+          {
+            functionCall: {
+              name: "update_topic",
+              args: { title: "t", summary: "s" },
+            },
+            thoughtSignature: upstreamSig,
+          },
+        ],
+      },
+      {
+        role: "user",
+        parts: [
+          {
+            functionResponse: {
+              name: "update_topic",
+              response: { output: "done" },
+            },
+          },
+        ],
+      },
+    ]);
+
+    setPair("gemini", "openai");
+    const openaiRes = await request(app)
+      .post("/v1beta/models/gemini-3.8-flash:generateContent")
+      .send(agyTurn2);
+    expect(openaiRes.status, JSON.stringify(openaiRes.body)).toBe(200);
+    expect(capturedRequests.openai).toHaveLength(1);
+    const openaiUp = capturedRequests.openai[0] as {
+      messages?: unknown[];
+    };
+    expect(openaiUp.messages).toEqual([
+      { role: "user", content: "make the failing test pass" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: {
+              name: "update_topic",
+              arguments: '{"title":"t","summary":"s"}',
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: '{"output":"done"}',
+        tool_call_id: "call_1",
+      },
+    ]);
+
+    setPair("gemini", "ollama");
+    const ollamaRes = await request(app)
+      .post("/v1beta/models/gemini-3.8-flash:generateContent")
+      .send(agyTurn2);
+    expect(ollamaRes.status, JSON.stringify(ollamaRes.body)).toBe(200);
+    expect(capturedRequests.ollama).toHaveLength(1);
+    const ollamaUp = capturedRequests.ollama[0] as {
+      messages?: unknown[];
+    };
+    // Ollama pairs a tool result to its call by `tool_name`
+    // (docs.ollama.com api.md), resolved from the call id.
+    expect(ollamaUp.messages).toEqual([
+      { role: "user", content: "make the failing test pass" },
+      {
+        role: "assistant",
+        content: "",
+        tool_calls: [
+          {
+            id: "call_1",
+            function: {
+              index: 0,
+              name: "update_topic",
+              arguments: { title: "t", summary: "s" },
+            },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: '{"output":"done"}',
+        tool_name: "update_topic",
+      },
+    ]);
   });
 
   it("thinkingBudget -1 and 0 survive the streamGenerateContent route", async () => {

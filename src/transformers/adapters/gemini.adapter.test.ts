@@ -727,6 +727,179 @@ describe('Gemini Adapter', () => {
       expect(result.messages[2].toolCallId).toBe('call_paris');
       expect(result.messages[2].content).toBe('{"temp":72}');
     });
+
+    it('functionResponse in a model-role content becomes a tool message', () => {
+      // Captured agy 1.5.11 turn 2 (values omitted): the Go
+      // genai-based client sends the tool result in a "model"-role
+      // content — the function-calling docs show it under "user"
+      // (https://ai.google.dev/gemini-api/docs/function-calling) but
+      // Google's API accepts the "model" form. Decode keys on part
+      // type, never on the content's role.
+      const request = {
+        contents: [
+          { role: 'user', parts: [{ text: 'make the failing test pass' }] },
+          {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  id: 'call_1',
+                  name: 'update_topic',
+                  args: { title: 't', summary: 's' },
+                },
+              },
+            ],
+          },
+          {
+            role: 'model',
+            parts: [
+              {
+                functionResponse: {
+                  id: 'call_1',
+                  name: 'update_topic',
+                  response: { output: 'done' },
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = toCanonicalRequest(request as GenerateContentRequest);
+
+      expect(result.messages).toEqual([
+        { role: 'user', content: 'make the failing test pass' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: {
+                name: 'update_topic',
+                arguments: '{"title":"t","summary":"s"}',
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          toolCallId: 'call_1',
+          content: '{"output":"done"}',
+        },
+      ]);
+    });
+
+    it('a model-role content of only functionResponse parts yields no assistant message', () => {
+      // Same captured turn 2: the trailing model-role content holds
+      // only the tool result. Emitting an empty assistant message for
+      // it leaves the upstream request ending on a model turn, which
+      // Google 400s ("Requests ending with a model turn are not
+      // supported").
+      const request = {
+        contents: [
+          {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  id: 'call_1',
+                  name: 'update_topic',
+                  args: { title: 't', summary: 's' },
+                },
+              },
+            ],
+          },
+          {
+            role: 'model',
+            parts: [
+              {
+                functionResponse: {
+                  id: 'call_1',
+                  name: 'update_topic',
+                  response: { output: 'done' },
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = toCanonicalRequest(request as GenerateContentRequest);
+
+      expect(result.messages).toEqual([
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: {
+                name: 'update_topic',
+                arguments: '{"title":"t","summary":"s"}',
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          toolCallId: 'call_1',
+          content: '{"output":"done"}',
+        },
+      ]);
+    });
+
+    it('a model-role content with a functionCall and a functionResponse yields assistant then tool messages', () => {
+      const request = {
+        contents: [
+          {
+            role: 'model',
+            parts: [
+              {
+                functionCall: {
+                  id: 'call_1',
+                  name: 'update_topic',
+                  args: { title: 't', summary: 's' },
+                },
+              },
+              {
+                functionResponse: {
+                  id: 'call_1',
+                  name: 'update_topic',
+                  response: { output: 'done' },
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = toCanonicalRequest(request as GenerateContentRequest);
+
+      expect(result.messages).toEqual([
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: {
+                name: 'update_topic',
+                arguments: '{"title":"t","summary":"s"}',
+              },
+            },
+          ],
+        },
+        {
+          role: 'tool',
+          toolCallId: 'call_1',
+          content: '{"output":"done"}',
+        },
+      ]);
+    });
   });
 
   describe('cached usage (spec §3.2)', () => {
