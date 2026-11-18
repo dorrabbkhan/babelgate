@@ -1331,12 +1331,15 @@ export function patchGaps(
   if (gaps.length === 0) return { body, notes, needsMedia };
   const out = structuredClone(body) as Obj;
 
-  // tool_choice: "auto" is the API default and drops silently;
-  // required/none/named choices earn the note.
+  // tool_choice: "none" stays — some upstreams honour it and sending
+  // it is never worse than deleting it; "auto" is the API default and
+  // drops silently; required/named choices earn the note.
   if (gaps.includes("tool_choice") && out.tool_choice !== undefined) {
-    const silent = out.tool_choice === "auto";
-    delete out.tool_choice;
-    if (!silent) note("tool_choice_dropped", "tool_choice");
+    if (out.tool_choice !== "none") {
+      const silent = out.tool_choice === "auto";
+      delete out.tool_choice;
+      if (!silent) note("tool_choice_dropped", "tool_choice");
+    }
   }
 
   // prompt_cache: some OpenAI-compatible shims accept Anthropic-style

@@ -65,6 +65,14 @@ function anthropicBody(extra: Obj = {}): Obj {
   };
 }
 
+function openaiBody(extra: Obj = {}): Obj {
+  return {
+    model: "gpt-upstream",
+    messages: [{ role: "user", content: "hi there" }],
+    ...extra,
+  };
+}
+
 function entry(extra: Partial<ProviderEntry> = {}): ProviderEntry {
   return {
     name: "shim",
@@ -119,6 +127,64 @@ describe("applyGapFixes (v1.5 spec §3.3)", () => {
     );
     expect(quiet.body.tool_choice).toBeUndefined();
     expect(quiet.notes).toHaveLength(0);
+  });
+
+  it("tool_choice none survives the gap", async () => {
+    // "none" is never worse sent than deleted: some upstreams
+    // honour it (LM Studio measured; decisions.md).
+    const anthropic = anthropicBody({ tool_choice: { type: "none" } });
+    const out = await applyGapFixes(
+      "anthropic",
+      anthropic,
+      ["tool_choice"],
+      NO_FETCH,
+    );
+    expect(out.body).toEqual(anthropic);
+    expect(
+      out.notes.filter((n) => n.code === "tool_choice_dropped"),
+    ).toHaveLength(0);
+
+    const openai = openaiBody({ tool_choice: "none" });
+    const openaiOut = await applyGapFixes(
+      "openai",
+      openai,
+      ["tool_choice"],
+      NO_FETCH,
+    );
+    expect(openaiOut.body).toEqual(openai);
+    expect(
+      openaiOut.notes.filter((n) => n.code === "tool_choice_dropped"),
+    ).toHaveLength(0);
+  });
+
+  it("named tool_choice dropped with note", async () => {
+    const out = await applyGapFixes(
+      "anthropic",
+      anthropicBody({ tool_choice: { type: "tool", name: "t" } }),
+      ["tool_choice"],
+      NO_FETCH,
+    );
+    expect(out.body.tool_choice).toBeUndefined();
+    expect(
+      out.notes
+        .filter((n) => n.code === "tool_choice_dropped")
+        .map((n) => n.path),
+    ).toEqual(["tool_choice"]);
+
+    const openaiOut = await applyGapFixes(
+      "openai",
+      openaiBody({
+        tool_choice: { type: "function", function: { name: "t" } },
+      }),
+      ["tool_choice"],
+      NO_FETCH,
+    );
+    expect(openaiOut.body.tool_choice).toBeUndefined();
+    expect(
+      openaiOut.notes
+        .filter((n) => n.code === "tool_choice_dropped")
+        .map((n) => n.path),
+    ).toEqual(["tool_choice"]);
   });
 
   it("count_tokens answered locally", async () => {
