@@ -1,19 +1,16 @@
 diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
-index ecb0076..da6d7d1 100644
+index ecb0076..a1d7059 100644
 --- a/.github/workflows/release.yml
 +++ b/.github/workflows/release.yml
-@@ -6,8 +6,9 @@ on:
-     tags: ['v*']
+@@ -7,7 +7,6 @@ on:
  
  permissions:
--  contents: read
-+  id-token: write
-   packages: write
-+  contents: write
+   contents: read
+-  packages: write
  
  jobs:
    # Packed-install smoke test (1.1.1 hotfix): the tagged commit must start
-@@ -29,6 +30,10 @@ jobs:
+@@ -29,6 +28,10 @@ jobs:
    docker:
      needs: smoke-pack
      runs-on: ubuntu-latest
@@ -24,7 +21,7 @@ index ecb0076..da6d7d1 100644
      steps:
        - name: Checkout
          uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-@@ -48,6 +53,7 @@ jobs:
+@@ -48,6 +51,7 @@ jobs:
          run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
  
        - name: Build and push image
@@ -32,7 +29,7 @@ index ecb0076..da6d7d1 100644
          uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
          with:
            context: .
-@@ -55,3 +61,84 @@ jobs:
+@@ -55,3 +59,13 @@ jobs:
            tags: |
              ghcr.io/dorrabbkhan/babelgate:${{ steps.image.outputs.version }}
              ghcr.io/dorrabbkhan/babelgate:latest
@@ -46,74 +43,3 @@ index ecb0076..da6d7d1 100644
 +      # command is in SECURITY.md.
 +      - name: Sign the pushed image (keyless)
 +        run: cosign sign --yes ghcr.io/dorrabbkhan/babelgate@${{ steps.build.outputs.digest }}
-+
-+  # npm publish with provenance (spec §3.5): --provenance mints a Sigstore
-+  # bundle tying the tarball to this repository and the release tag,
-+  # verified client-side with `npm audit signatures`. prepublishOnly runs
-+  # ./scripts/check.sh — the same gate a local `npm publish` enforces.
-+  npm-publish:
-+    needs: smoke-pack
-+    runs-on: ubuntu-latest
-+    permissions:
-+      contents: read
-+      id-token: write
-+    steps:
-+      - name: Checkout
-+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-+
-+      - name: Set up Node
-+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-+        with:
-+          node-version: 22
-+          cache: npm
-+          registry-url: https://registry.npmjs.org
-+
-+      - run: npm ci
-+
-+      - name: Publish to npm with provenance
-+        run: npm publish --provenance --access public
-+        env:
-+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-+
-+  # GitHub release (spec §3.5): attaches a CycloneDX SBOM of the runtime
-+  # dependencies and leads the notes with the runtime dependency count.
-+  # Runs only after both artifacts (image and package) are published.
-+  release:
-+    needs: [docker, npm-publish]
-+    runs-on: ubuntu-latest
-+    permissions:
-+      contents: write
-+    steps:
-+      - name: Checkout
-+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-+
-+      - name: Set up Node
-+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-+        with:
-+          node-version: 22
-+          cache: npm
-+
-+      - run: npm ci
-+
-+      - name: CycloneDX SBOM (runtime dependencies only)
-+        run: npm sbom --sbom-format cyclonedx --omit dev > "babelgate-${GITHUB_REF_NAME#v}.cdx.json"
-+
-+      - name: Build release notes
-+        env:
-+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-+        run: |
-+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-+            -f tag_name="${GITHUB_REF_NAME}" --jq .body > generated-notes.md || true
-+          deps=$(npm ls --omit=dev --all --parseable | tail -n +2 | wc -l)
-+          {
-+            echo "Runtime dependencies: ${deps}"
-+            echo ""
-+            echo "SBOM (CycloneDX): \`babelgate-${GITHUB_REF_NAME#v}.cdx.json\`, attached to this release."
-+            echo ""
-+            cat generated-notes.md
-+          } > release-notes.md
-+
-+      - name: Create the GitHub release and attach the SBOM
-+        env:
-+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-+        run: gh release create "${GITHUB_REF_NAME}" --title "${GITHUB_REF_NAME}" --notes-file release-notes.md "babelgate-${GITHUB_REF_NAME#v}.cdx.json"

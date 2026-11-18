@@ -29,18 +29,10 @@ made public.
 
 ## Verifying releases
 
-Every `v*` release is published by `.github/workflows/release.yml` with
-three attestations you can check independently:
-
-- **npm provenance.** The npm tarball is published with
-  `npm publish --provenance`, which ties it to the release-tag workflow
-  run through a Sigstore bundle on the registry. In a project where
-  `babelgate` is installed, verify its signature (and every
-  dependency's) with:
-
-  ```sh
-  npm audit signatures
-  ```
+Every `v*` tag triggers `.github/workflows/release.yml`, which builds,
+pushes and signs the GHCR image automatically. Publishing to npm and
+creating the GitHub release are done by the maintainer by hand, so the
+container image is the only artifact with a CI-generated attestation:
 
 - **Signed container image.** The GHCR image is signed keyless by cosign
   in the same workflow run. Verify a tag (or a digest,
@@ -52,9 +44,30 @@ three attestations you can check independently:
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
 
-- **SBOM.** Each GitHub release attaches `babelgate-<version>.cdx.json`,
-  a CycloneDX SBOM of the runtime dependencies (devDependencies are
-  excluded). The release notes also report the runtime dependency count.
+- **npm registry signatures.** The npm tarball is published by hand, so
+  it carries no provenance bundle (provenance can only be minted by a
+  trusted CI builder). npm does add a registry signature to every
+  package it serves
+  (https://docs.npmjs.com/about-registry-signatures); check
+  `babelgate`'s — and every dependency's — with:
+
+  ```sh
+  npm audit signatures
+  ```
+
+- **SBOM (manual).** The maintainer generates a CycloneDX SBOM of the
+  runtime dependencies (devDependencies excluded) and attaches it to
+  each GitHub release as `babelgate-<version>.cdx.json`:
+
+  ```sh
+  npm ci && npm sbom --sbom-format cyclonedx --omit dev > babelgate-<version>.cdx.json
+  ```
+
+  The "Runtime dependencies: <n>" line in the release notes comes from:
+
+  ```sh
+  npm ls --omit=dev --all --parseable | tail -n +2 | wc -l
+  ```
 
 ## Security notes for self-hosters
 
