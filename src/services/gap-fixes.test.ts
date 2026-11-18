@@ -15,6 +15,7 @@ import { applyGapFixes } from "./gap-fixes";
 import { passthroughCountTokens } from "./passthrough";
 import { finishPassthroughTrace } from "./passthrough-trace";
 import { loadYamlConfig } from "../config/yaml-config";
+import { PROVIDER_PRESETS } from "../config/provider-presets";
 import { ConfigurationError, ValidationError } from "../utils/errors";
 import {
   estimateInputTokens,
@@ -376,5 +377,13 @@ providers:
     preset: not-a-preset
 `),
     ).toThrow(ConfigurationError);
+  });
+
+  it("lmstudio-anthropic preset gaps are the measured ones", () => {
+    expect(PROVIDER_PRESETS["lmstudio-anthropic"].gaps).toEqual([
+      "count_tokens",
+      "documents",
+      "tool_choice",
+    ]);
   });
 });

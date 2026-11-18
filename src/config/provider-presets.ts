@@ -69,21 +69,27 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
     verified: "2026-11-16",
   },
   /**
-   * LM Studio's Anthropic endpoint. Its docs list exactly one
-   * endpoint, `POST /v1/messages`, with text, streaming and
-   * `tool_choice` examples — no count_tokens, no `cache_control`, no
-   * URL-image or document blocks are documented, so all four are
-   * declared (a declared gap's fix is honest: local estimate, strip
-   * with note, fetch+inline, refuse). `tool_choice` appears in the
-   * docs' own example and streamed usage rides the documented
-   * message_* events, so neither is declared.
+   * LM Studio's Anthropic endpoint. Gaps measured by the follow-up
+   * probe (`scripts/gates/probe-anthropic-shim.sh`, LM Studio headless
+   * server, 2026-11-18, `ibm/granite-4-micro` and `qwen/qwen3-vl-8b`):
+   * `POST /v1/messages/count_tokens` → HTTP 200 with a body error
+   * ("Unexpected endpoint or method"), and a base64 `document` block →
+   * 400 invalid_request_error ("Expected 'text' | 'image' |
+   * 'tool_result'") on both models, so `count_tokens` and `documents`
+   * stay declared. `tool_choice:{type:"any"}` → 200 but plain text on
+   * both models — LM Studio appears to ignore it, so `tool_choice` is
+   * declared (probable, not proven: see decisions.md). `cache_control`
+   * (system block and top-level) was accepted — whether LM Studio
+   * actually caches is unproven — and a `source.type:"url"` image was
+   * fetched and answered by the vision model, so neither is declared;
+   * streamed usage rides the message_* events.
    */
   "lmstudio-anthropic": {
     type: "anthropic",
     base_url: "http://localhost:1234",
-    gaps: ["count_tokens", "prompt_cache", "url_images", "documents"],
+    gaps: ["count_tokens", "documents", "tool_choice"],
     docs: "https://lmstudio.ai/docs/developer/anthropic-compat",
-    verified: "2026-11-17",
+    verified: "2026-11-18",
   },
   /**
    * DeepSeek's Anthropic endpoint. Its published compatibility table:
