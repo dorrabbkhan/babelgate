@@ -11,8 +11,12 @@
  */
 import type { ProviderEntry } from "../routing/registry";
 import { adapters } from "../transformers";
-import { currentTrace, snapshot } from "../observe/context";
+import { currentTrace, recordNote, snapshot } from "../observe/context";
 import { finishTrace } from "../observe/emit";
+import {
+  estimateInputTokens,
+  estimateOutputTokens,
+} from "../utils/token-estimate";
 import { diagnoseToolCalls } from "../observe/tool-diagnostics";
 import type {
   CanonicalRequest,
@@ -132,7 +136,10 @@ function observeStreamEvents(
 function markPassthrough(): void {
   const trace = currentTrace();
   if (trace === undefined) return;
-  trace.notes.length = 0;
+  // The routing decode's notes describe transforms that never ran —
+  // sweep them. Gap-fix notes recorded during the attempt carry the
+  // "encode" stage and stay (v1.5 spec §3.3, Task 9).
+  trace.notes = trace.notes.filter((n) => n.stage !== "decode");
   if (trace.bodies !== undefined) delete trace.bodies.canonical;
   trace.passthrough = true;
 }
@@ -254,6 +261,19 @@ export async function finishPassthroughTrace(opts: {
       : failed
         ? ("error" as const)
         : ("ok" as const);
+  // §3.3 (Task 9): a stream_usage gap whose upstream still sent no
+  // usage chunk gets the chars/4 estimate — flagged estimated on the
+  // trace, never presented as counted.
+  const usageEstimated =
+    result.entry.gaps?.includes("stream_usage") === true &&
+    status === "ok" &&
+    usage === undefined;
+  if (usageEstimated) {
+    recordNote(
+      { stage: "encode", adapter: result.entry.type, code: "usage_estimated" },
+      `stream_usage gap on "${result.target.provider}": usage estimated`,
+    );
+  }
   await finishTrace({
     reason,
     requestedModel,
@@ -261,6 +281,7 @@ export async function finishPassthroughTrace(opts: {
     winner: result.target.provider,
     stream: true,
     status,
+    ...(usageEstimated ? { costEstimated: true } : {}),
     httpStatus: iterated
       ? 200
       : signal.aborted
@@ -270,8 +291,14 @@ export async function finishPassthroughTrace(opts: {
       !signal.aborted && failed
         ? (observation.errorKind ?? "upstream")
         : undefined,
-    inputTokens: usage?.inputTokens,
-    outputTokens: usage?.outputTokens,
+    inputTokens:
+      usage?.inputTokens ??
+      (usageEstimated ? estimateInputTokens(canonical) : undefined),
+    outputTokens:
+      usage?.outputTokens ??
+      (usageEstimated
+        ? estimateOutputTokens(observation.events ?? [])
+        : undefined),
     cacheReadTokens: usage?.cacheReadTokens,
     cacheWriteTokens: usage?.cacheWriteTokens,
     reasoningTokens: usage?.reasoningTokens,

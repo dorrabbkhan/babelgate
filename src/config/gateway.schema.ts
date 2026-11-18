@@ -1,14 +1,25 @@
 import { z } from "zod";
 import type { Provider } from "../transformers";
+import {
+  GAPS,
+  PRESET_NAMES,
+  PROVIDER_PRESETS,
+  type Gap,
+  type PresetName,
+} from "./provider-presets";
 
 /**
  * One entry in a babelgate.yaml `providers` map (spec §3.5).
  * `api_key_env` holds an environment variable name — never a key.
+ * `type`/`base_url` are required unless `preset` provides them
+ * (spec §3.3); every explicit key overrides the preset's value.
  */
 export interface GatewayFileProvider {
-  type: Provider;
-  base_url: string;
+  type?: Provider;
+  base_url?: string;
   api_key_env?: string;
+  preset?: PresetName;
+  gaps?: Gap[];
   context_window?: number;
   max_output_tokens?: number;
   cache_hints?: boolean;
@@ -75,9 +86,15 @@ const PROVIDER_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 
 const providerEntrySchema = z
   .strictObject({
-    type: z.enum(["openai", "anthropic", "gemini", "ollama", "responses"]),
-    base_url: z.string().min(1),
+    // v1.5 spec §3.3: `preset` fills type/base_url/api_key_env/gaps
+    // for a known shim endpoint; every explicit key overrides it.
+    preset: z.enum(PRESET_NAMES).optional(),
+    type: z
+      .enum(["openai", "anthropic", "gemini", "ollama", "responses"])
+      .optional(),
+    base_url: z.string().min(1).optional(),
     api_key_env: z.string().optional(),
+    gaps: z.array(z.enum(GAPS)).optional(),
     context_window: z.number().int().positive().optional(),
     max_output_tokens: z.number().int().positive().optional(),
     cache_hints: z.boolean().optional(),
@@ -94,23 +111,56 @@ const providerEntrySchema = z
     stream_idle_ms: z.number().int().positive().optional(),
   })
   .superRefine((entry, ctx) => {
-    if (entry.type !== "ollama" && entry.api_key_env === undefined) {
+    const preset =
+      entry.preset === undefined
+        ? undefined
+        : PROVIDER_PRESETS[entry.preset];
+    const type = entry.type ?? preset?.type;
+    const apiKeyEnv = entry.api_key_env ?? preset?.api_key_env;
+    if (type === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["type"],
+        message: 'required unless "preset" is set',
+      });
+    }
+    if (entry.base_url === undefined && preset === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["base_url"],
+        message: 'required unless "preset" is set',
+      });
+    }
+    // A preset with no `api_key_env` declares a keyless endpoint.
+    if (
+      type !== "ollama" &&
+      apiKeyEnv === undefined &&
+      (preset === undefined || preset.api_key_env !== undefined)
+    ) {
       ctx.addIssue({
         code: "custom",
         path: ["api_key_env"],
-        message: 'required unless type is "ollama"',
+        message:
+          'required unless type is "ollama" or the preset declares a keyless endpoint',
       });
     }
     if (
       entry.passthrough !== undefined &&
-      entry.type !== "anthropic" &&
-      entry.type !== "openai"
+      type !== "anthropic" &&
+      type !== "openai"
     ) {
       ctx.addIssue({
         code: "custom",
         path: ["passthrough"],
         message:
           'only valid on "anthropic" or "openai" providers ("responses" providers pass through automatically)',
+      });
+    }
+    if (entry.gaps !== undefined && type !== "anthropic" && type !== "openai") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["gaps"],
+        message: 'only valid on "anthropic" or "openai" providers',
       });
     }
   });

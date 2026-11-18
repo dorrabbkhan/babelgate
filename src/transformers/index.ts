@@ -9,6 +9,7 @@ import type {
 export {
   adapters,
   MEDIA_SUPPORT,
+  PATCH_GAPS,
   PROVIDER_PATHS,
   PROVIDER_ROUTES,
   type Provider,

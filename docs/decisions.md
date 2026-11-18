@@ -6446,3 +6446,126 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   rule for the new forwarding tests).
 - **Live check.** Real request/response against `npm run dev` with a
   local stub upstream — in the PR body.
+
+## v1.5 Task 9 — gaps vocabulary, `patchGaps`, provider presets (spec §3.3, E5, E7, E16)
+
+- **Vocabulary.** `src/config/provider-presets.ts` defines
+  `GAPS = ["tool_choice","count_tokens","prompt_cache","url_images",
+  "documents","stream_usage"]` and `PROVIDER_PRESETS` for the five
+  shim endpoints. `gaps:`/`preset:` validate in
+  `gateway.schema.ts`; `yaml-config.ts` merges each preset
+  (type/base_url/api_key_env/gaps) and lets every explicit key
+  override it — `gaps:` replaces the preset's whole list, and a
+  preset implies `passthrough: true` when the key is absent (D6).
+  `gaps` is valid only on `anthropic`/`openai` entries (the only
+  formats with a shim); an `api_key_env` stays required unless the
+  type is `ollama` or the preset declares a keyless endpoint —
+  `ollama-anthropic` and `lmstudio-anthropic` are the two keyless
+  ones. An unknown `preset` fails at config load as an ordinary
+  schema error.
+- **Preset values (each cites its provider docs; `verified` is the
+  check date):**
+  - `ollama-anthropic` → `http://localhost:11434`, gaps
+    `count_tokens`, `url_images`, `documents` — from E16's measured
+    probe (Ollama 0.40.11, `probe-ollama-anthropic.sh`, 2026-11-16):
+    count_tokens 404, url image 400. `documents` is the deliberate
+    decision E16 asked for: a base64 document returned 200 on a
+    text model, which is "accepted, not supported" — it may be
+    silently dropped, so the preset refuses documents in the
+    client's dialect instead. `tool_choice` (`any` → 200,
+    `stop_reason=tool_use`), `prompt_cache` (`cache_control`
+    accepted) and `stream_usage` (usage rides the stream) measured
+    working and are not declared.
+    Docs: https://docs.ollama.com/api/anthropic-compatibility
+  - `lmstudio-anthropic` → `http://localhost:1234`, gaps
+    `count_tokens`, `prompt_cache`, `url_images`, `documents` — the
+    docs list exactly one endpoint (`POST /v1/messages`) with text,
+    streaming and `tool_choice` examples; nothing else is
+    documented, so the four unproven gaps are declared (each fix is
+    honest: local estimate, strip with note, fetch+inline, refuse).
+    Docs: https://lmstudio.ai/docs/developer/anthropic-compat
+    (verified 2026-11-17)
+  - `deepseek-anthropic` → `https://api.deepseek.com/anthropic`,
+    `DEEPSEEK_API_KEY`, gaps `count_tokens`, `prompt_cache` — the
+    published compatibility table lists `cache_control` as Ignored
+    on every block kind and no count_tokens endpoint exists;
+    `tool_choice` (all four values), `source.type:"url"` images,
+    `document` blocks (`file`/`text` sources) and streamed usage
+    are documented supported.
+    Docs: https://api-docs.deepseek.com/guides/anthropic_api
+    (verified 2026-11-17)
+  - `glm-anthropic` → `https://api.z.ai/api/anthropic`,
+    `ZAI_API_KEY`, gaps `count_tokens`, `prompt_cache`,
+    `url_images`, `documents` — the docs describe the coding
+    endpoint for Claude Code-style clients but publish no
+    field-level compatibility table and no count_tokens endpoint,
+    so the four unproven gaps are declared.
+    Docs: https://docs.z.ai/devpack/tool/others
+    (verified 2026-11-17)
+  - `kimi-anthropic` → `https://api.moonshot.ai/anthropic`,
+    `MOONSHOT_API_KEY`, gaps `count_tokens`, `prompt_cache`,
+    `url_images`, `documents` — the Messages schema accepts only
+    `ms://<file_id>` image URLs (no http(s) URLs), documents
+    in-`messages` `cache_control` markers being ignored, defines no
+    `document` block, and serves no count_tokens endpoint;
+    `tool_choice` and streaming are documented.
+    Docs: https://platform.kimi.ai/docs/api/messages
+    (verified 2026-11-17)
+- **`patchGaps` lives in each pass-through-capable adapter**
+  (`anthropic.adapter.ts`, `openai.adapter.ts`): format knowledge
+  only — strips `tool_choice` (`tool_choice_dropped` note unless
+  the choice is the bare API default), strips `cache_control`
+  (one `cache_control_dropped` note per stripped position),
+  refuses document blocks with a `ValidationError` naming the
+  block's JSON path (400 in the source's dialect), reports
+  url-bearing image leaves as `needsMedia` JSON paths, and — on
+  the chat format — sets `stream_options.include_usage` for the
+  `stream_usage` gap. The service runs it twice: pass one
+  strips/refuses and collects `needsMedia`; `applyGapFixes` fetches
+  each leaf through media-fetch's SSRF guard, writes a
+  `{data, mimeType}` placeholder and pass two renders it in the
+  format's own inline shape (`{type:"base64",…}` source /
+  `data:` `image_url`), adding a `url_image_inlined` note — so
+  format knowledge never leaves the adapter. The input body is
+  never mutated.
+- **Fixes outside the body.** A `count_tokens` gap suppresses the
+  count_tokens forward in `passthroughCountTokens` — proxy.service's
+  §3.5 chars/4 estimate answers with the estimate header and a
+  `count_tokens_estimated` note (E5's mechanism). A `stream_usage`
+  gap whose upstream still sends no usage estimates input/output
+  with `estimateInputTokens`/`estimateOutputTokens` at
+  `finishPassthroughTrace`, sets `costEstimated` and adds a
+  `usage_estimated` note. `markPassthrough` now sweeps only
+  decode-stage notes — gap fixes record with stage "encode" and
+  survive on the trace.
+- **Ambiguities resolved.** (a) `tool_choice`'s "required/named"
+  note covers every non-default choice, including `none` —
+  dropping `none` would silently re-enable tool use. (b)
+  `prompt_cache` strips `cache_control` from nested positions only —
+  every path except the top-level `cache_control` key, which stays
+  in the body untouched with no note. The earlier reasoning
+  (Anthropic clients never send a top-level marker, so a recursive
+  strip was safe) was wrong for Kimi, whose documented extension IS
+  the request-level field: Kimi's schema honours a top-level
+  `cache_control` while markers inside `messages` are ignored
+  (https://platform.kimi.ai/docs/api/messages, read 2026-11-17).
+  Recorded per owner decision in chat 2026-11-17; covered by
+  "cache_control stripped with note" and "top-level cache_control
+  survives the prompt_cache gap" in
+  `src/services/gap-fixes.test.ts`. (c) The `needsMedia` second
+  pass renders the placeholder, which keeps the byte-destination
+  knowledge in the adapter; `applyGapFixes` never learns a format
+  shape.
+  (d) A preset's `passthrough` implication honours an explicit
+  `passthrough: false` — explicit keys always win.
+- **Files outside the Files block:**
+  `src/routing/registry.ts` (`ProviderEntry.gaps`/`preset` — the
+  internal fields the yaml mapping fills),
+  `src/transformers/adapters/index.ts` (`PATCH_GAPS` registry
+  beside `MEDIA_SUPPORT`),
+  `src/transformers/index.ts` (re-exports `PATCH_GAPS`),
+  `src/services/passthrough-trace.ts` (`stream_usage` estimate and
+  the note sweep — the trace finish is the only place reply-side
+  usage lands).
+- **Live check.** Real request/response against `npm run dev`
+  with a local stub upstream — in the PR body.

@@ -1,4 +1,5 @@
 import type { Provider } from "../transformers";
+import type { Gap, PresetName } from "../config/provider-presets";
 import { ConfigurationError } from "../utils/errors";
 
 /**
@@ -54,6 +55,14 @@ export interface ProviderEntry {
    * canonical path.
    */
   passthrough?: boolean;
+  /** The shim preset this entry was built from, if any (spec §3.3). */
+  preset?: PresetName;
+  /**
+   * Declared upstream gaps (v1.5 spec §3.3): each names one feature
+   * this upstream cannot serve — the matching fix runs on the
+   * pass-through body/reply through the source format's `patchGaps`.
+   */
+  gaps?: Gap[];
   timeoutMs?: number;
   streamIdleMs?: number;
 }

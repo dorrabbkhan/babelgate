@@ -32,7 +32,7 @@ import type { ProviderEntry } from "../routing/registry";
 import { authHeaders } from "../routing/registry";
 import type { RoutePlan, RouteTarget } from "../routing/plan-route";
 import { PROVIDER_ROUTES, type Provider } from "../transformers";
-import { runWithAttempt, snapshot } from "../observe/context";
+import { runWithAttempt, recordNote, snapshot } from "../observe/context";
 import type { CanonicalRequest } from "../types/canonical.types";
 import { UnsupportedParameterError, UpstreamError } from "../utils/errors";
 import { logger } from "../utils/logger";
@@ -56,6 +56,8 @@ import {
   maxTokensClampOf,
   toClientFacing,
 } from "./attempt-targets";
+import { applyGapFixes } from "./gap-fixes";
+import { MEDIA_DEFAULTS } from "./media-inline";
 import type { ProxyResult } from "./proxy.service";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -169,6 +171,29 @@ export function passthroughTargetBody(
 }
 
 /**
+ * §3.3 (Task 9): the entry's declared gaps fix the body after the
+ * model rewrite and before the target snapshot — the snapshot and
+ * the upstream see the same bytes. Notes the adapter's patchGaps
+ * returned are recorded with stage "encode" so markPassthrough's
+ * decode-note sweep keeps them (passthrough-trace.ts).
+ */
+async function gapFixedBody(
+  entry: ProviderEntry,
+  body: Obj,
+  media: GatewayConfig["media"],
+): Promise<Obj> {
+  if (entry.gaps === undefined || entry.gaps.length === 0) return body;
+  const { body: fixed, notes } = await applyGapFixes(
+    entry.type,
+    body,
+    entry.gaps,
+    media ?? MEDIA_DEFAULTS,
+  );
+  for (const n of notes) recordNote(n);
+  return fixed as Obj;
+}
+
+/**
  * The upstream chat endpoint for this entry — the provider route's
  * own `requestPath` (Gemini's embeds the model; the others ignore
  * it), so a pass-through hop posts to exactly the URL the bridged
@@ -196,11 +221,15 @@ export async function passthroughUnaryAttempt(
   return runWithAttempt(
     { providerName: target.provider, upstreamModel: target.model },
     async () => {
-      const body = passthroughTargetBody(
-        ctx.sourceBody,
-        target,
-        ctx.canonical,
+      const body = await gapFixedBody(
         entry,
+        passthroughTargetBody(
+          ctx.sourceBody,
+          target,
+          ctx.canonical,
+          entry,
+        ),
+        ctx.config.media,
       );
       // §3.5: one target snapshot per hop (fallbacks included).
       snapshot("target", body);
@@ -251,11 +280,15 @@ export async function passthroughStreamAttempt(
   return runWithAttempt(
     { providerName: target.provider, upstreamModel: target.model },
     async () => {
-      const body = passthroughTargetBody(
-        ctx.sourceBody,
-        target,
-        ctx.canonical,
+      const body = await gapFixedBody(
         entry,
+        passthroughTargetBody(
+          ctx.sourceBody,
+          target,
+          ctx.canonical,
+          entry,
+        ),
+        ctx.config.media,
       );
       // §3.5: one target snapshot per hop (fallbacks included).
       snapshot("target", body);
@@ -306,8 +339,8 @@ export function passthroughRelay(
  * type with no count_tokens route) answers locally instead — a
  * different dialect's count shape would be a provider-pair special
  * case. Forwarded hops obey the same fallback contract as chat
- * attempts; Task 9's `gaps` declaration will be able to suppress the
- * forward and force the local answer.
+ * attempts; an entry's `gaps` declaration suppresses the forward and
+ * forces the local answer (Task 9 — `count_tokens`).
  */
 export async function passthroughCountTokens(opts: {
   source: Provider;
@@ -335,12 +368,29 @@ export async function passthroughCountTokens(opts: {
             // Not relayable — the local estimate answers (below).
             return { upstream: undefined };
           }
-          const body: Obj = {
-            ...(sourceBody !== null && typeof sourceBody === "object"
-              ? (sourceBody as Obj)
-              : {}),
-            model: target.model,
-          };
+          if (entry.gaps?.includes("count_tokens") === true) {
+            // §3.3 (Task 9): the declared gap suppresses the forward;
+            // the local estimate answers (below).
+            recordNote(
+              {
+                stage: "encode",
+                adapter: source,
+                code: "count_tokens_estimated",
+              },
+              `count_tokens gap on "${target.provider}": answered locally`,
+            );
+            return { upstream: undefined };
+          }
+          const body = await gapFixedBody(
+            entry,
+            {
+              ...(sourceBody !== null && typeof sourceBody === "object"
+                ? (sourceBody as Obj)
+                : {}),
+              model: target.model,
+            },
+            config.media,
+          );
           snapshot("target", body);
           const upstream = await postJson({
             url: `${entry.baseUrl}${ctRoute.requestPath()}`,

@@ -20,7 +20,9 @@ import {
   makeCanonicalError,
 } from "../../utils/canonical-error";
 import { UpstreamError, ValidationError } from "../../utils/errors";
-import { recordNote } from "../../observe/context";
+import { currentAttempt, recordNote } from "../../observe/context";
+import type { TranslationNote } from "../../observe/trace";
+import type { Gap } from "../../config/provider-presets";
 import { systemText } from "../system-text";
 import type {
   ChatCompletionRequest,
@@ -1234,3 +1236,149 @@ export function fromCanonicalError(err: CanonicalError): unknown {
 }
 
 // Streaming lives in ./openai.stream — re-exported on the adapter above.
+
+// ============ GAP FIXES (v1.5 spec §3.3) ============
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type Obj = Record<string, any>;
+
+const isObj = (v: unknown): v is Obj =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+
+function gapTarget(): string {
+  return currentAttempt()?.providerName ?? "the target";
+}
+
+/** The `{data, mimeType}` placeholder applyGapFixes writes between passes. */
+function isInlineRef(v: Obj): boolean {
+  return (
+    typeof v.data === "string" &&
+    typeof v.mimeType === "string" &&
+    v.url === undefined
+  );
+}
+
+function stripCacheControl(
+  node: unknown,
+  path: string,
+  note: (code: string, path?: string) => void,
+): void {
+  if (Array.isArray(node)) {
+    node.forEach((v, i) => stripCacheControl(v, `${path}[${i}]`, note));
+    return;
+  }
+  if (!isObj(node)) return;
+  for (const [key, value] of Object.entries(node)) {
+    const p = path === "" ? key : `${path}.${key}`;
+    if (key === "cache_control") {
+      delete node[key];
+      note("cache_control_dropped", p);
+      continue;
+    }
+    stripCacheControl(value, p, note);
+  }
+}
+
+function walkJson(
+  node: unknown,
+  path: string,
+  visit: (obj: Obj, path: string) => void,
+): void {
+  if (Array.isArray(node)) {
+    node.forEach((v, i) => walkJson(v, `${path}[${i}]`, visit));
+    return;
+  }
+  if (!isObj(node)) return;
+  visit(node, path);
+  for (const [key, value] of Object.entries(node)) {
+    walkJson(value, path === "" ? key : `${path}.${key}`, visit);
+  }
+}
+
+/**
+ * Chat Completions-dialect gap fixes for pass-through bodies (v1.5
+ * spec §3.3, Task 9) — same two-pass protocol as the anthropic
+ * adapter's patchGaps (see gap-fixes.ts): pass one strips/rewrites
+ * and reports url-bearing `image_url` refs as `needsMedia` JSON
+ * paths, pass two renders each fetched `{data, mimeType}`
+ * placeholder as a `data:` URL. The input body is never mutated.
+ *
+ * `documents` refuses the OpenAI `file` content part in the
+ * dialect's own error; `stream_usage` sets
+ * `stream_options.include_usage` so the upstream emits its terminal
+ * usage chunk; `count_tokens` carries no request-body change. Only
+ * http(s) `image_url.url` values are queued — a `data:` URL is
+ * already inline and another scheme is the upstream's own to judge.
+ */
+export function patchGaps(
+  body: Record<string, unknown>,
+  gaps: readonly Gap[],
+): {
+  body: Record<string, unknown>;
+  notes: TranslationNote[];
+  needsMedia: string[];
+} {
+  const notes: TranslationNote[] = [];
+  const needsMedia: string[] = [];
+  const note = (code: string, path?: string): void => {
+    notes.push({
+      stage: "encode",
+      adapter: "openai",
+      code,
+      ...(path !== undefined ? { path } : {}),
+    });
+  };
+  if (gaps.length === 0) return { body, notes, needsMedia };
+  const out = structuredClone(body) as Obj;
+
+  // tool_choice: "auto" is the API default and drops silently;
+  // required/none/named choices earn the note.
+  if (gaps.includes("tool_choice") && out.tool_choice !== undefined) {
+    const silent = out.tool_choice === "auto";
+    delete out.tool_choice;
+    if (!silent) note("tool_choice_dropped", "tool_choice");
+  }
+
+  // prompt_cache: some OpenAI-compatible shims accept Anthropic-style
+  // cache_control markers — strip every one.
+  if (gaps.includes("prompt_cache")) stripCacheControl(out, "", note);
+
+  // stream_usage: ask the upstream for the terminal usage chunk —
+  // absent there, the trace estimates instead (passthrough-trace.ts).
+  if (gaps.includes("stream_usage") && out.stream === true) {
+    const opts = isObj(out.stream_options) ? out.stream_options : {};
+    if (opts.include_usage !== true) {
+      out.stream_options = { ...opts, include_usage: true };
+    }
+  }
+
+  const wantDocuments = gaps.includes("documents");
+  const wantUrlImages = gaps.includes("url_images");
+  if (wantDocuments || wantUrlImages) {
+    walkJson(out, "", (part, path) => {
+      if (wantDocuments && part.type === "file") {
+        throw new ValidationError(
+          `Unsupported media at ${path}: documents are not supported by ${gapTarget()}`,
+        );
+      }
+      if (part.type === "image_url") {
+        const ref = part.image_url;
+        if (!isObj(ref)) return;
+        if (
+          wantUrlImages &&
+          typeof ref.url === "string" &&
+          /^https?:\/\//i.test(ref.url)
+        ) {
+          needsMedia.push(`${path}.image_url`);
+        } else if (isInlineRef(ref)) {
+          // Second pass: fetched bytes waiting at this slot.
+          part.image_url = {
+            url: `data:${ref.mimeType};base64,${ref.data}`,
+          };
+        }
+      }
+    });
+  }
+
+  return { body: out, notes, needsMedia };
+}

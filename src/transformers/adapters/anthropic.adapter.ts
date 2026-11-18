@@ -16,8 +16,13 @@ import {
   kindFromStatus,
   makeCanonicalError,
 } from "../../utils/canonical-error";
-import { recordNote } from "../../observe/context";
-import { UnsupportedResponseFormatError } from "../../utils/errors";
+import { currentAttempt, recordNote } from "../../observe/context";
+import type { TranslationNote } from "../../observe/trace";
+import type { Gap } from "../../config/provider-presets";
+import {
+  UnsupportedResponseFormatError,
+  ValidationError,
+} from "../../utils/errors";
 import {
   EFFORT_LADDER,
   budgetFor,
@@ -1066,3 +1071,153 @@ export function fromCanonicalError(err: CanonicalError): unknown {
 
 // Message/tool conversion lives in ./anthropic.messages; streaming in
 // ./anthropic.stream — re-exported on the adapter above.
+
+// ============ GAP FIXES (v1.5 spec §3.3) ============
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type Obj = Record<string, any>;
+
+const isObj = (v: unknown): v is Obj =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+
+function gapTarget(): string {
+  return currentAttempt()?.providerName ?? "the target";
+}
+
+/** The `{data, mimeType}` placeholder applyGapFixes writes between passes. */
+function isInlineRef(v: Obj): boolean {
+  return (
+    typeof v.data === "string" &&
+    typeof v.mimeType === "string" &&
+    v.type === undefined &&
+    v.url === undefined
+  );
+}
+
+function stripCacheControl(
+  node: unknown,
+  path: string,
+  note: (code: string, path?: string) => void,
+): void {
+  if (Array.isArray(node)) {
+    node.forEach((v, i) => stripCacheControl(v, `${path}[${i}]`, note));
+    return;
+  }
+  if (!isObj(node)) return;
+  for (const [key, value] of Object.entries(node)) {
+    const p = path === "" ? key : `${path}.${key}`;
+    if (key === "cache_control") {
+      // The top-level marker is a request-level field some upstreams
+      // honour; it stays in the body untouched and earns no note.
+      if (path === "") continue;
+      delete node[key];
+      note("cache_control_dropped", p);
+      continue;
+    }
+    stripCacheControl(value, p, note);
+  }
+}
+
+function walkJson(
+  node: unknown,
+  path: string,
+  visit: (obj: Obj, path: string) => void,
+): void {
+  if (Array.isArray(node)) {
+    node.forEach((v, i) => walkJson(v, `${path}[${i}]`, visit));
+    return;
+  }
+  if (!isObj(node)) return;
+  visit(node, path);
+  for (const [key, value] of Object.entries(node)) {
+    walkJson(value, path === "" ? key : `${path}.${key}`, visit);
+  }
+}
+
+/**
+ * Anthropic-dialect gap fixes for pass-through bodies (v1.5 spec
+ * §3.3, Task 9) — all the Anthropic-format knowledge the shim needs;
+ * the service runs this twice around a media fetch (see
+ * gap-fixes.ts): pass one strips/rewrites and reports the url-bearing
+ * image `source` objects to fetch as `needsMedia` JSON paths, pass
+ * two renders each fetched `{data, mimeType}` placeholder as the
+ * dialect's base64 source. The input body is never mutated — the
+ * pass-through body shares nested objects with the client body the
+ * next fallback hop re-reads.
+ *
+ * Only http(s) `source.url` values are queued: a non-http scheme is
+ * a provider reference the upstream may itself understand, so it
+ * passes through untouched. `documents` refuses in the dialect's own
+ * error; `count_tokens` and `stream_usage` carry no request-body
+ * change (passthrough.ts and the trace finish honour them).
+ */
+export function patchGaps(
+  body: Record<string, unknown>,
+  gaps: readonly Gap[],
+): {
+  body: Record<string, unknown>;
+  notes: TranslationNote[];
+  needsMedia: string[];
+} {
+  const notes: TranslationNote[] = [];
+  const needsMedia: string[] = [];
+  const note = (code: string, path?: string): void => {
+    notes.push({
+      stage: "encode",
+      adapter: "anthropic",
+      code,
+      ...(path !== undefined ? { path } : {}),
+    });
+  };
+  if (gaps.length === 0) return { body, notes, needsMedia };
+  const out = structuredClone(body) as Obj;
+
+  // tool_choice: dropped; only the bare API-default {type:"auto"}
+  // goes silently — any/none/named/flagged choices earn the note.
+  if (gaps.includes("tool_choice") && out.tool_choice !== undefined) {
+    const choice = out.tool_choice;
+    const silent =
+      isObj(choice) &&
+      choice.type === "auto" &&
+      Object.keys(choice).length === 1;
+    delete out.tool_choice;
+    if (!silent) note("tool_choice_dropped", "tool_choice");
+  }
+
+  // prompt_cache: every nested cache_control — system blocks,
+  // content blocks and tool definitions. The top-level marker is a
+  // request-level extension some upstreams honour, so it survives.
+  if (gaps.includes("prompt_cache")) stripCacheControl(out, "", note);
+
+  const wantDocuments = gaps.includes("documents");
+  const wantUrlImages = gaps.includes("url_images");
+  if (wantDocuments || wantUrlImages) {
+    walkJson(out, "", (block, path) => {
+      if (wantDocuments && block.type === "document") {
+        throw new ValidationError(
+          `Unsupported media at ${path}: documents are not supported by ${gapTarget()}`,
+        );
+      }
+      const source = block.source;
+      if (block.type === "image" && isObj(source)) {
+        if (
+          wantUrlImages &&
+          source.type === "url" &&
+          typeof source.url === "string" &&
+          /^https?:\/\//i.test(source.url)
+        ) {
+          needsMedia.push(`${path}.source`);
+        } else if (isInlineRef(source)) {
+          // Second pass: fetched bytes waiting at this slot.
+          block.source = {
+            type: "base64",
+            media_type: source.mimeType,
+            data: source.data,
+          };
+        }
+      }
+    });
+  }
+
+  return { body: out, notes, needsMedia };
+}
