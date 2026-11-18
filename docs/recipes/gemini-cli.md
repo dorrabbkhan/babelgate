@@ -1,5 +1,12 @@
 # Recipe: Gemini CLI on any backend through babelgate
 
+> **Status: frozen.** This recipe still works with **paid Gemini API keys and
+> enterprise licences** — Google moved individual users to Antigravity CLI on
+> 2026-05-19 ([announcement](https://developers.googleblog.com/en/an-important-update-transitioning-gemini-cli-to-antigravity-cli/);
+> individual sign-in stopped 2026-06-18). For `agy`, the same
+> `GOOGLE_GEMINI_BASE_URL` mechanism applies — see
+> `docs/research/2026-11-18-antigravity-spike.md`.
+
 Gemini CLI speaks the Gemini API format (`/v1beta/models/*`). Point it at
 babelgate and every chat turn is translated to whatever provider you
 configured — a local Ollama, an OpenAI-compatible backend like OpenRouter,
