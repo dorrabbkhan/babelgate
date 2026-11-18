@@ -20,6 +20,7 @@ import {
   CACHED_USAGE,
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
+import { recordMatrixCell } from "../matrix/matrix-report";
 import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import ollamaFixtures from "../fixtures/ollama.json";
@@ -249,6 +250,7 @@ describe("provider pair coverage", () => {
 
       // Response came back translated to source format
       SOURCE_FORMAT_CHECKS[source](res.body);
+      recordMatrixCell(source, target, "plain", "pass");
     },
   );
 
@@ -418,6 +420,7 @@ describe("structured output reaches every target (spec §3.5, §4.2)", () => {
       expect(res.status, JSON.stringify(res.body)).toBe(200);
       expect(capturedRequests[target]).toHaveLength(1);
       expect(upstreamSchema(target)).toEqual(STRUCT_SCHEMA);
+      recordMatrixCell(source, target, "structured", "pass");
     },
   );
 });
