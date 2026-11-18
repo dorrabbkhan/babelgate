@@ -19,6 +19,17 @@ function isResponsesPath(path: string): boolean {
 }
 
 /**
+ * Embeddings (v1.5 spec §3.6): OpenAI-dialect inbound only, served by
+ * embeddings.service rather than a PROVIDER_ROUTES entry — detection
+ * claims both spellings of the path (/embeddings for clients whose
+ * base URL already ends in /v1) so requests and errors on it render
+ * in the OpenAI envelope.
+ */
+export function isEmbeddingsPath(path: string): boolean {
+  return path === "/v1/embeddings" || path === "/embeddings";
+}
+
+/**
  * Pure request → client-format detection (spec §3.2): the request's
  * method + path prefix selects the provider whose dialect the client
  * speaks, over the same PROVIDER_ROUTES table the services match on.
@@ -48,6 +59,7 @@ export function detectSource(
       ),
   );
   if (matches.length === 0) {
+    if (isEmbeddingsPath(path)) return "openai";
     return isResponsesPath(path) ? "responses" : undefined;
   }
   const headerNames = new Set(
