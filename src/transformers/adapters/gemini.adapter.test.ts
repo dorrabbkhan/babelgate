@@ -11,6 +11,7 @@ import type { CanonicalContentPart, CanonicalRequest, CanonicalResponse } from '
 import { canonicalRequestSchema } from '../../types/canonical.schema';
 import type { GenerateContentRequest, GenerateContentResponse, Content, FunctionResponsePart } from '../../types/gemini.types';
 import { unpackEnvelope } from '../reasoning-envelope';
+import { fromGeminiSignature } from './gemini.signature';
 import { sequentialIds } from '../../utils/ids';
 import { ValidationError } from '../../utils/errors';
 import { fromCanonicalRequest as anthropicFromCanonical } from './anthropic.adapter';
@@ -1734,7 +1735,8 @@ describe('cache hints on tool results (Task 17a)', () => {
     it('gemini client receives thought parts with envelope', () => {
       // v1.5 §3.1 + conductor's call (a): reasoning reaches the
       // Gemini client inside the `bg1.` envelope on the first
-      // thought part's `thoughtSignature`.
+      // thought part's `thoughtSignature` — base64-wrapped on the
+      // wire (the field is bytes/base64; live pass on agy 1.5.11).
       const reasoningPart: CanonicalContentPart = {
         type: 'reasoning',
         reasoning: { text: 'hmm', origin: ORIGIN },
@@ -1759,12 +1761,60 @@ describe('cache hints on tool results (Task 17a)', () => {
       expect(parts).toHaveLength(2);
       expect(parts[0].text).toBe('hmm');
       expect(parts[0].thought).toBe(true);
-      expect(unpackEnvelope(parts[0].thoughtSignature)).toEqual({
+      expect(
+        unpackEnvelope(fromGeminiSignature(parts[0].thoughtSignature)),
+      ).toEqual({
         v: 1,
         reasoning: [reasoningPart],
         signatures: [],
       });
       expect(parts[1]).toEqual({ text: 'answer' });
+    });
+
+    it('non-stream response carries the envelope as standard base64', () => {
+      // Live-pass fix (v1.5 Task 14 round 3): `thoughtSignature` is a
+      // bytes field — the wire value is standard padded base64 of
+      // the `bg1.` envelope, never the raw `bg1.…` string.
+      const canonical: CanonicalResponse = {
+        id: 'r1',
+        model: 'gemini-2.5-flash',
+        finishReason: 'stop',
+        message: {
+          role: 'assistant',
+          content: [
+            {
+              type: 'reasoning',
+              reasoning: { text: 'hmm', origin: ORIGIN },
+              signature: { origin: ORIGIN, data: 'sig_1' },
+            },
+            { type: 'text', text: 'answer' },
+          ],
+        },
+      };
+
+      const wire = fromCanonicalResponse(canonical);
+      const parts = wire.candidates?.[0]?.content?.parts as {
+        text?: string;
+        thought?: boolean;
+        functionCall?: unknown;
+        thoughtSignature?: string;
+      }[];
+
+      const sig = parts[0].thoughtSignature;
+      expect(sig).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+      expect(
+        unpackEnvelope(Buffer.from(sig!, 'base64').toString('utf8')),
+      ).toEqual({
+        v: 1,
+        reasoning: [
+          {
+            type: 'reasoning',
+            reasoning: { text: 'hmm', origin: ORIGIN },
+            signature: { origin: ORIGIN, data: 'sig_1' },
+          },
+        ],
+        signatures: [],
+      });
     });
 
     it('gemini envelope round-trips to identical canonical parts', () => {
@@ -1842,7 +1892,11 @@ describe('cache hints on tool results (Task 17a)', () => {
         functionCall?: unknown;
         thoughtSignature?: string;
       }[];
-      expect(unpackEnvelope(parts[0].thoughtSignature ?? '')).toEqual({
+      expect(
+        unpackEnvelope(
+          fromGeminiSignature(parts[0].thoughtSignature ?? ''),
+        ),
+      ).toEqual({
         v: 1,
         reasoning: [],
         signatures: [{ toolCallId: 'call_1', signature: callSig }],
@@ -1996,7 +2050,9 @@ describe('cache hints on tool results (Task 17a)', () => {
       expect(parts).toHaveLength(3);
       expect(parts[0].text).toBe('think');
       expect(parts[0].thought).toBe(true);
-      expect(unpackEnvelope(parts[0].thoughtSignature)).toEqual({
+      expect(
+        unpackEnvelope(fromGeminiSignature(parts[0].thoughtSignature)),
+      ).toEqual({
         v: 1,
         reasoning: [
           {
@@ -2013,7 +2069,9 @@ describe('cache hints on tool results (Task 17a)', () => {
         name: 'exec',
         args: { cmd: 'ls' },
       });
-      expect(unpackEnvelope(parts[2].thoughtSignature)).toEqual({
+      expect(
+        unpackEnvelope(fromGeminiSignature(parts[2].thoughtSignature)),
+      ).toEqual({
         v: 1,
         reasoning: [],
         signatures: [
@@ -2042,6 +2100,106 @@ describe('cache hints on tool results (Task 17a)', () => {
           signature: sigC,
         },
       ]);
+    });
+
+    it('stream carries the envelope as standard base64', () => {
+      // Live-pass fix (v1.5 Task 14 round 3): every emitted
+      // `thoughtSignature` is standard padded base64 of the `bg1.`
+      // envelope — on the thought part, on a functionCall part, and
+      // on the still-open call flushed just before the final chunk.
+      const origin = { provider: 'p', model: 'm' };
+      const sigR = { origin, data: 'sig_r' };
+      const sigC = { origin, data: 'sig_c' };
+      const sigOpen = { origin, data: 'sig_open' };
+      const events = [
+        { type: 'message_start', id: 'r1', model: 'm' },
+        { type: 'reasoning_start', index: 0, origin },
+        { type: 'reasoning_delta', index: 0, text: 'think' },
+        {
+          type: 'reasoning_signature',
+          index: 0,
+          signature: sigR,
+        },
+        {
+          type: 'tool_call_start',
+          index: 0,
+          id: 'call_1',
+          name: 'exec',
+          signature: sigC,
+        },
+        {
+          type: 'tool_call_delta',
+          index: 0,
+          argumentsDelta: '{"cmd":"ls"}',
+        },
+        { type: 'tool_call_end', index: 0 },
+        {
+          type: 'tool_call_start',
+          index: 1,
+          id: 'call_2',
+          name: 'exec',
+          signature: sigOpen,
+        },
+        {
+          type: 'tool_call_delta',
+          index: 1,
+          argumentsDelta: '{"cmd":"pwd"}',
+        },
+        { type: 'message_end', finishReason: 'tool_call' },
+      ];
+
+      const out = encodeStream(
+        events as unknown as Parameters<typeof encodeStream>[0],
+      );
+
+      const frames = [...out.matchAll(/data: (\{.*\})/g)].map((m) =>
+        JSON.parse(m[1]),
+      );
+      const thoughtSig =
+        frames[0].candidates[0].content.parts[0].thoughtSignature;
+      const callSig =
+        frames[1].candidates[0].content.parts[0].thoughtSignature;
+      // The still-open call flushes in its own element right before
+      // the closing finishReason chunk — the "final chunk" form.
+      const openCallSig =
+        frames[frames.length - 2].candidates[0].content.parts[0]
+          .thoughtSignature;
+      for (const sig of [thoughtSig, callSig, openCallSig]) {
+        expect(sig).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+      }
+      expect(
+        unpackEnvelope(
+          Buffer.from(thoughtSig, 'base64').toString('utf8'),
+        ),
+      ).toEqual({
+        v: 1,
+        reasoning: [
+          {
+            type: 'reasoning',
+            reasoning: { text: 'think', origin },
+            signature: sigR,
+          },
+        ],
+        signatures: [],
+      });
+      expect(
+        unpackEnvelope(
+          Buffer.from(callSig, 'base64').toString('utf8'),
+        ),
+      ).toEqual({
+        v: 1,
+        reasoning: [],
+        signatures: [{ toolCallId: 'call_1', signature: sigC }],
+      });
+      expect(
+        unpackEnvelope(
+          Buffer.from(openCallSig, 'base64').toString('utf8'),
+        ),
+      ).toEqual({
+        v: 1,
+        reasoning: [],
+        signatures: [{ toolCallId: 'call_2', signature: sigOpen }],
+      });
     });
 
     it('streamed signed text parts emit one wire part each', () => {
@@ -2091,7 +2249,9 @@ describe('cache hints on tool results (Task 17a)', () => {
       const parts = streamToModelParts(out);
       expect(parts.map((p) => p.text)).toEqual(['a', 'b', 'think']);
       expect(parts[2].thought).toBe(true);
-      expect(unpackEnvelope(parts[2].thoughtSignature)).toEqual({
+      expect(
+        unpackEnvelope(fromGeminiSignature(parts[2].thoughtSignature)),
+      ).toEqual({
         v: 1,
         reasoning: [
           {

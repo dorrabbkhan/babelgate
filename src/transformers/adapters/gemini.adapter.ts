@@ -33,6 +33,10 @@ import {
   type EnvelopePayload,
 } from "../reasoning-envelope";
 import {
+  fromGeminiSignature,
+  toGeminiSignature,
+} from "./gemini.signature";
+import {
   EFFORT_LADDER,
   budgetFor,
   effortForBudget,
@@ -281,7 +285,9 @@ export function toCanonicalRequest(
             p as { thoughtSignature?: unknown }
           ).thoughtSignature;
           if (typeof carrier === "string" && carrier !== "") {
-            const payload = unpackEnvelope(carrier);
+            const payload = unpackEnvelope(
+              fromGeminiSignature(carrier),
+            );
             if (payload === undefined) {
               recordNote(
                 {
@@ -524,7 +530,9 @@ function extractContentParts(
         ? p.thoughtSignature
         : undefined;
     const payload =
-      carrier !== undefined ? unpackEnvelope(carrier) : undefined;
+      carrier !== undefined
+        ? unpackEnvelope(fromGeminiSignature(carrier))
+        : undefined;
     const sigPath = `contents[${contentIndex}].parts[${j}].thoughtSignature`;
     if (p.thought === true) {
       if (payload !== undefined) {
@@ -1367,7 +1375,9 @@ export function fromCanonicalResponse(
   // become `{text, thought: true}` parts and the turn's envelope
   // (all reasoning parts and signatures) rides the first thought
   // part's `thoughtSignature`, or the first functionCall part's when
-  // there is no thought part. `thought: true`/`thoughtSignature`:
+  // there is no thought part — the wire value is standard base64 of
+  // the envelope (toGeminiSignature). `thought: true`/
+  // `thoughtSignature`:
   // https://ai.google.dev/gemini-api/docs/thinking and
   // https://ai.google.dev/gemini-api/docs/thought-signatures
   // (part fields per https://ai.google.dev/api/generate-content#Part).
@@ -1431,6 +1441,10 @@ export function fromCanonicalResponse(
       reasoning: reasoningParts,
       signatures: envelopeSigs,
     });
+    // The cap stays on the `bg1.` envelope itself — the wire value is
+    // its standard-base64 form (toGeminiSignature), which adds about
+    // a third; proto bytes fields travel as base64, and clients like
+    // the Go genai SDK unmarshal `thoughtSignature` into `[]uint8`.
     if (envelope === undefined) {
       recordNote(
         {
@@ -1450,7 +1464,7 @@ export function fromCanonicalResponse(
           text: part.reasoning.text ?? "",
           thought: true,
           ...(!attached && envelope !== undefined
-            ? { thoughtSignature: envelope }
+            ? { thoughtSignature: toGeminiSignature(envelope) }
             : {}),
         } as Part;
         if (!attached && envelope !== undefined) attached = true;
@@ -1465,7 +1479,7 @@ export function fromCanonicalResponse(
     for (const [i, call] of toolCalls.entries()) {
       const onFirst =
         !attached && envelope !== undefined && i === 0
-          ? { thoughtSignature: envelope }
+          ? { thoughtSignature: toGeminiSignature(envelope) }
           : {};
       if (Object.keys(onFirst).length > 0) attached = true;
       parts.push(

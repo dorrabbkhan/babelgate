@@ -191,12 +191,52 @@ hits real clients beyond agy. Candidate fix: decode `≤ 0` to "no budget" (drop
 effort) instead of failing schema validation — small, one adapter + tests; **recommend a
 v1.5 follow-up task before the recipe ships**.
 
+## Live pass (2026-11-18)
+
+The conductor ran `scripts/gates/record-antigravity-cli.sh gemini` against real Gemini
+with the owner-installed `agy` 1.5.11 — three findings, all fixed:
+
+1. **`--yolo` does not exist in agy.** It prints its usage and sends no request — the
+   first live run recorded only `/health`. agy's flag is
+   `--dangerously-skip-permissions` ("Auto-approve all tool permission requests";
+   `agy --help`). Fixed in the script (and its offline test's fake `agy`, which now
+   exits non-zero on unknown flags like the real one).
+2. **The script's default Gemini model is retired.** `gemini-2.5-flash` answers 404
+   ("no longer available to new users"); the `gemini` target's default is now
+   `gemini-3.8-flash`.
+3. **The `bg1.` envelope broke Go genai clients.** With `gemini-3.8-flash` upstream,
+   agy got a 200 SSE stream with a `run_command` functionCall, then failed:
+   `json: cannot unmarshal string into Go struct field .candidates.0.content.parts.0
+   .thoughtSignature of type []uint8: illegal base64 data at input byte 3`. The
+   `thoughtSignature` field is bytes on the wire — Go's SDK expects standard padded
+   base64 and `bg1.` is not base64 (the `.` is byte 3). Fixed in this PR: the
+   envelope crosses the wire as standard base64 (`gemini.signature.ts`), with the
+   legacy `bg1.` form still accepted inbound. The live re-run result is reported in
+   the PR status comment.
+
+Shape the live run recorded (agy's default model — babelgate's `MODEL_MAP "*=<gate
+model>"` routed it):
+
+```
+POST /v1beta/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse
+headers: host, user-agent, content-length, content-type,
+         x-goog-api-client, x-goog-api-key, accept-encoding
+body keys: contents,
+           generationConfig {maxOutputTokens,
+             thinkingConfig {includeThoughts, thinkingBudget (a number)}},
+           systemInstruction (~16 KB),
+           tools (14 function declarations)
+```
+
+Note the first request already carries a numeric `thinkingBudget`, so the
+`thinkingBudget ≤ 0` fix matters in real use — not only for custom models.
+
 ## Recommendation
 
 **Adopt as an entry point in v1.6** — it is Google's individual-facing CLI now (Gemini CLI
 for individuals ended 2026-06-18), the integration path is literally the Gemini CLI recipe
-with a different binary name, and our Gemini inbound already covers its wire format. Gate
-the launch on the `thinkingBudget ≤ 0` fix.
+with a different binary name, and our Gemini inbound already covers its wire format. The
+`thinkingBudget ≤ 0` fix has landed; adoption stays gated on the live re-run passing.
 
 Estimated size: **small** — one recipe (`docs/recipes/antigravity-cli.md`, ~½ day), the
 budgetTokens fix + tests (~1 day), a record/gate script cloned from `record-gemini-cli.sh`
@@ -237,5 +277,11 @@ add them to same PR"); all three recommendations landed in PR #140:
   resolved by the conductor on owner delegation (see docs/decisions.md,
   Task 14 entry): scope is API-key mode only, with the two unverified
   gaps noted in the Licence/terms section above.
-- **Live pass**: still pending — the conductor runs it on a real
-  Gemini key.
+- **Live pass**: ran 2026-11-18 on a real Gemini key (agy 1.5.11,
+  `gemini-3.8-flash` target) — three findings (`--yolo` →
+  `--dangerously-skip-permissions`, retired default model →
+  `gemini-3.8-flash`, and the `bg1.` envelope's `thoughtSignature`
+  encoding breaking Go genai clients); the first two fixed in the
+  record script, the third fixed in this PR via
+  `src/transformers/adapters/gemini.signature.ts`. See "Live pass"
+  above; the re-run result goes in the PR status comment.

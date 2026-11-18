@@ -18,9 +18,13 @@ import {
   capturedRequests,
   resetCaptured,
   resetOverrides,
+  resetReplyOptins,
   resetStreamCase,
+  reasoningReply,
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
+import { unpackEnvelope } from "../../src/transformers/reasoning-envelope";
+import { fromGeminiSignature } from "../../src/transformers/adapters/gemini.signature";
 
 /**
  * Gemini CLI essentials (spec §3.10, evidence E10–E12 from the
@@ -57,6 +61,7 @@ afterEach(() => {
   server.resetHandlers();
   resetCaptured();
   resetOverrides();
+  resetReplyOptins();
   resetStreamCase();
   delete process.env.UPSTREAM_RETRIES;
   resetConfig();
@@ -229,6 +234,80 @@ describe("Gemini CLI essentials (spec §3.10)", () => {
       },
       required: ["title"],
     });
+  });
+
+  it("envelope thoughtSignature round-trips through a Gemini-3-style upstream", async () => {
+    // Task 14 live-pass fix: the client-facing thoughtSignature is
+    // standard base64 of the bg1. envelope (a bytes field — Go genai's
+    // []uint8). A client echoing it — verbatim or Go-style
+    // decode→re-encode — sends the original upstream signature back
+    // on turn two (continuity, nothing foreign).
+    setPair("gemini", "gemini");
+    reasoningReply.gemini = true;
+
+    const turn1 = await request(app)
+      .post("/v1beta/models/gemini-3.8-flash:generateContent")
+      .send({
+        contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      });
+    expect(turn1.status, JSON.stringify(turn1.body)).toBe(200);
+
+    const parts = turn1.body.candidates?.[0]?.content?.parts as {
+      text?: string;
+      thought?: boolean;
+      functionCall?: { name: string; args: unknown };
+      thoughtSignature?: string;
+    }[];
+    const sig = parts.find((p) => p.thought === true)?.thoughtSignature;
+    expect(sig).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+    expect(unpackEnvelope(fromGeminiSignature(sig!))).toMatchObject({
+      v: 1,
+      signatures: [
+        {
+          toolCallId: expect.any(String),
+          signature: { data: "sig-gem-1-call" },
+        },
+      ],
+    });
+
+    // Turn two: the client echoes the model turn. Once verbatim and
+    // once as the Go-style re-encoded string (decode → standard
+    // base64 — the identical bytes, exactly what genai's []uint8
+    // round trip sends).
+    for (const echoSig of [
+      sig,
+      Buffer.from(sig!, "base64").toString("base64"),
+    ]) {
+      const echoed = parts.map((p) =>
+        p.thought === true ? { ...p, thoughtSignature: echoSig } : p,
+      );
+      const turn2 = await request(app)
+        .post("/v1beta/models/gemini-3.8-flash:generateContent")
+        .send({
+          contents: [
+            { role: "user", parts: [{ text: "hi" }] },
+            { role: "model", parts: echoed },
+          ],
+        });
+      expect(turn2.status, JSON.stringify(turn2.body)).toBe(200);
+    }
+
+    // Two upstream requests per echoed turn pair's second leg —
+    // turn 1 plus the two echo turns.
+    expect(capturedRequests.gemini).toHaveLength(3);
+    for (const upstream of capturedRequests.gemini.slice(1) as {
+      contents?: { role?: string; parts?: Record<string, unknown>[] }[];
+    }[]) {
+      const modelParts = upstream.contents?.find(
+        (c) => c.role === "model",
+      )?.parts;
+      const thoughtPart = modelParts?.find((p) => p.thought === true);
+      const callPart = modelParts?.find(
+        (p) => p.functionCall !== undefined,
+      );
+      expect(thoughtPart?.thoughtSignature).toBe("sig-gem-1-think");
+      expect(callPart?.thoughtSignature).toBe("sig-gem-1-call");
+    }
   });
 
   it("thinkingBudget -1 and 0 survive the streamGenerateContent route", async () => {

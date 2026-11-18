@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { adapters, type Provider } from "../../src/transformers";
 import type { CanonicalStreamEvent } from "../../src/types/canonical.types";
 import { unpackEnvelope } from "../../src/transformers/reasoning-envelope";
+import { fromGeminiSignature } from "../../src/transformers/adapters/gemini.signature";
 
 /**
  * Global Constraints / spec §3.3: reasoning events never produce
@@ -229,14 +230,15 @@ describe("stream encoders drop reasoning events", () => {
       JSON.parse(m[1]),
     );
     // First frame: the thought part with the bg1. envelope on
-    // thoughtSignature; second: the reply text; third: the close.
+    // thoughtSignature (base64-wrapped on the wire, Task 14 live
+    // pass); second: the reply text; third: the close.
     expect(frames).toHaveLength(3);
     const thoughtPart =
       frames[0].candidates[0].content.parts[0];
     expect(thoughtPart.text).toBe("think");
     expect(thoughtPart.thought).toBe(true);
     expect(
-      unpackEnvelope(thoughtPart.thoughtSignature),
+      unpackEnvelope(fromGeminiSignature(thoughtPart.thoughtSignature)),
     ).toEqual({
       v: 1,
       reasoning: [

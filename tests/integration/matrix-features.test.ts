@@ -25,6 +25,8 @@ import {
   MOCK_BASE_URLS,
 } from "../mocks/upstreams";
 import { recordMatrixCell } from "../matrix/matrix-report";
+import { unpackEnvelope } from "../../src/transformers/reasoning-envelope";
+import { fromGeminiSignature } from "../../src/transformers/adapters/gemini.signature";
 import openaiFixtures from "../fixtures/openai.json";
 import geminiFixtures from "../fixtures/gemini.json";
 import ollamaFixtures from "../fixtures/ollama.json";
@@ -147,7 +149,12 @@ describe("reasoning reply reaches every client (v1.5 spec §3.1)", () => {
         (p: any) => p.thought === true,
       );
       expect(part?.text).toBe("reasoning about turn 1");
-      expect(part?.thoughtSignature).toMatch(/^bg1\./);
+      // Task 14 live pass: the wire signature is standard base64 of
+      // the bg1. envelope (a bytes field), never the raw bg1. string.
+      expect(part?.thoughtSignature).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+      expect(
+        unpackEnvelope(fromGeminiSignature(part.thoughtSignature)),
+      ).toMatchObject({ v: 1 });
       recordMatrixCell(source, target, "reasoning", "pass");
     } else {
       const item = (b.output ?? []).find(

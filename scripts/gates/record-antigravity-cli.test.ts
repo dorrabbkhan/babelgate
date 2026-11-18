@@ -26,6 +26,18 @@ if [ "\${1:-}" = "--version" ]; then
   echo "agy-fake/0.0.0"
   exit 0
 fi
+# Real agy exits non-zero on an unknown flag (a 1.5.11 live run sent
+# only /health with --yolo). Only the flags record-antigravity-cli.sh
+# may pass are accepted; anything else prints usage like the real one.
+for arg in "$@"; do
+  case "$arg" in
+    -p|--print|--dangerously-skip-permissions|--model|--output-format) ;;
+    -*)
+      echo "Usage of agy:" >&2
+      exit 2
+      ;;
+  esac
+done
 printf '%s\\n' "$@" > "$FAKE_ARGV_FILE"
 settings="$HOME/.gemini/antigravity-cli/settings.json"
 if ! grep -q '"modelProvider": *"gemini"' "$settings" 2>/dev/null; then
@@ -139,14 +151,17 @@ describe("record-antigravity-cli.sh", () => {
       expect(post, `no recorded POST in ${lines.join("\n")}`).toBeDefined();
       expect(post!.headerNames).toContain("x-goog-api-key");
 
-      // The prompt reaches the CLI as the -p positional, --yolo intact.
+      // The prompt reaches the CLI as the -p positional,
+      // --dangerously-skip-permissions intact (agy's flag; it never
+      // had --yolo — the fake rejects unknown flags like real agy).
       const argv = readFileSync(argvFile, "utf8").split("\n");
       const pIdx = argv.indexOf("-p");
       expect(pIdx).toBeGreaterThanOrEqual(0);
       expect(argv[pIdx + 1]).toBe(
         "Make the failing test pass. Run npm test to check your work.",
       );
-      expect(argv).toContain("--yolo");
+      expect(argv).toContain("--dangerously-skip-permissions");
+      expect(argv).not.toContain("--yolo");
     },
     120_000,
   );

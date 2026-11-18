@@ -7170,6 +7170,98 @@ the changed files are listed here by full path:
   harnesses). Unverified gaps: Google has made no statement on
   routing that endpoint to a non-Google model, and the Gemini API /
   Google Cloud terms themselves were not read.
+- **Live pass (round 3, 2026-11-18):** the conductor ran
+  `scripts/gates/record-antigravity-cli.sh gemini` against real
+  Gemini with the owner-installed agy 1.5.11; three findings.
+  (1) `--yolo` does not exist in agy — it prints its usage and sends
+  no request (the first run recorded only `/health`); agy's flag is
+  `--dangerously-skip-permissions` (`agy --help`) — the "inherited
+  from Gemini CLI" comment was wrong. (2) The script's default
+  `gemini-2.5-flash` is retired — Google answered 404 "no longer
+  available to new users"; the `gemini` target's default is now
+  `gemini-3.8-flash`. Both fixed in the script, with the offline
+  test's fake `agy` now exiting non-zero with "Usage of agy:" on any
+  flag outside {`-p`, `--print`,
+  `--dangerously-skip-permissions`, `--model`, `--output-format`,
+  `--version`}. (3) With `gemini-3.8-flash` upstream agy got a 200
+  SSE stream with a `run_command` functionCall, then failed `json:
+  cannot unmarshal string into Go struct field .candidates.0.content
+  .parts.0.thoughtSignature of type []uint8: illegal base64 data at
+  input byte 3` — babelgate emitted the `bg1.` envelope raw, but
+  `thoughtSignature` is a bytes field (proto3 JSON: standard padded
+  base64) and `bg1.` is not base64 (its `.` is byte 3). The owner
+  decided 2026-11-18: "Fix in this PR".
+  - **Design** (Gemini path only; `canonical.*`, the Anthropic and
+    Responses adapters, and the shared `reasoning-envelope.ts`
+    pack/unpack contract are untouched): new adapter-local module
+    `src/transformers/adapters/gemini.signature.ts`.
+    `toGeminiSignature(envelope)` is standard padded base64 of the
+    `bg1.…` UTF-8 bytes — a Go client decodes it and re-encodes the
+    same string on the next turn, a TS client echoes it verbatim.
+    `fromGeminiSignature(s)` returns `bg1.`-prefixed input unchanged
+    (**legacy compat: envelopes issued before this change stay
+    accepted**), otherwise base64-decodes leniently (Node accepts
+    the standard and URL-safe alphabets and missing padding — covers
+    the Python SDK), returns the decoded `bg1.` text, or returns
+    `s` unchanged so the "not a bg1. envelope" drop path and its
+    notes behave exactly as before. `toGeminiSignature` is applied
+    at every `packEnvelope` emit site (`gemini.adapter.ts`
+    non-stream; `gemini.stream.ts` `flushReasoning` and
+    `toolCallChunk`); `fromGeminiSignature` wraps the two request
+    decode sites. The 1 MiB `ENVELOPE_CAP_BYTES` stays on
+    `packEnvelope`'s output — base64 adds about a third. Doc cite:
+    https://ai.google.dev/api/generate-content#Part today reads
+    "**thoughtSignature**: `string` — Optional. An opaque signature
+    for the thought so it can be reused in subsequent requests."
+    (the "A base64-encoded string" wording the fix brief quoted is
+    not on the current page; the bytes typing is confirmed by the
+    Go genai SDK's `[]uint8` unmarshal and the live failure).
+  - **Changed existing tests** (same or stronger exactness — every
+    assertion still unpacks the exact envelope payload, nothing was
+    weakened):
+    - `src/transformers/adapters/gemini.adapter.test.ts` —
+      `gemini client receives thought parts with envelope`,
+      `signatures with no thought part land on the first
+      functionCall`, `streamed signatures after the last reasoning
+      block ride the flushed functionCall`, `streamed signed text
+      parts emit one wire part each` (all now unwrap the emitted
+      signature via `fromGeminiSignature` before `unpackEnvelope`).
+    - `tests/contracts/stream-reasoning-drop.test.ts` —
+      `gemini: reasoning block streams as a thought part with an
+      envelope thoughtSignature` (same unwrap).
+    - `tests/integration/matrix-features.test.ts` — the gemini cell
+      of `reasoning reply reaches every client` (`/^bg1\./` →
+      standard-base64 match plus full `unpackEnvelope` payload).
+    - `scripts/gates/record-antigravity-cli.test.ts` —
+      `writes agy settings, passes the prompt and records the
+      request` (fake `agy` rejects unknown flags like the real one;
+      asserts `--dangerously-skip-permissions` present and `--yolo`
+      absent).
+    - New tests: `gemini.signature.test.ts` (six cases incl. the
+      Go-client round trip), `non-stream response carries the
+      envelope as standard base64` and `stream carries the envelope
+      as standard base64` (thought part, functionCall part, and the
+      still-open call flushed before the final chunk) in
+      `gemini.adapter.test.ts`, and `envelope thoughtSignature
+      round-trips through a Gemini-3-style upstream` (verbatim and
+      Go-style re-encoded echoes; turn-2 upstream carries the
+      original upstream signatures) in
+      `tests/integration/gemini-cli.test.ts`. Tests feeding a raw
+      non-`bg1.` or legacy `bg1.` signature inbound are unchanged —
+      they now prove the foreign and legacy forms still decode.
+  - **Files outside the Files block (new this round):**
+    `src/transformers/adapters/gemini.signature.ts`,
+    `src/transformers/adapters/gemini.signature.test.ts`,
+    `src/transformers/adapters/gemini.stream.ts`,
+    `tests/contracts/stream-reasoning-drop.test.ts`,
+    `tests/integration/matrix-features.test.ts` (already-listed
+    files gaining signature edits: `src/transformers/adapters/
+    gemini.adapter.ts`, `src/transformers/adapters/
+    gemini.adapter.test.ts`, `tests/integration/gemini-cli.test.ts`,
+    `scripts/gates/record-antigravity-cli.sh`,
+    `scripts/gates/record-antigravity-cli.test.ts`,
+    `docs/research/2026-11-18-antigravity-spike.md`,
+    `docs/decisions.md`).
 - **Files outside the Files block:**
   - `src/transformers/adapters/gemini.adapter.ts` — the
     `thinkingBudget` decode fix itself.

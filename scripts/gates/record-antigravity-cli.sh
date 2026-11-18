@@ -2,9 +2,9 @@
 # Antigravity CLI (agy) shape recorder (v1.5 Task 14 fix round —
 # owner-extended scope; same gate as record-gemini-cli.sh): starts
 # babelgate, puts record-shapes.ts in front of it, and runs a
-# non-interactive `agy -p --yolo` edit task in a temp copy of the
-# edit-task fixture with GOOGLE_GEMINI_BASE_URL pointed at the
-# recorder. Every request the CLI makes lands as one shape line —
+# non-interactive `agy -p --dangerously-skip-permissions` edit task in
+# a temp copy of the edit-task fixture with GOOGLE_GEMINI_BASE_URL
+# pointed at the recorder. Every request the CLI makes lands as one shape line —
 # method, path, query keys, header names and a value-free body shape —
 # in the JSONL the script prints.
 #
@@ -60,7 +60,7 @@ case "$target" in
     cli_args=(--target openai --base-url https://openrouter.ai/api)
     ;;
   gemini)
-    model="${1:-gemini-2.5-flash}"
+    model="${1:-gemini-3.8-flash}"
     [ $# -gt 0 ] && shift || true
     if [ $# -gt 0 ]; then
       usage
@@ -189,9 +189,10 @@ cat > "$work/home/.gemini/antigravity-cli/settings.json" <<'EOF'
 {"modelProvider": "gemini"}
 EOF
 
-# Non-interactive agy run. --yolo auto-approves tools (same flag the
-# Gemini CLI codebase it descends from uses); the trust-workspace env
-# is the inherited Gemini CLI knob — set in case agy still reads it.
+# Non-interactive agy run. --dangerously-skip-permissions
+# auto-approves tool permission requests (agy's own flag — it never
+# had Gemini CLI's --yolo; agy --help). The trust-workspace env is
+# the inherited Gemini CLI knob — set in case agy still reads it.
 (
   cd "$work/edit-task"
   env -u PROXY_API_KEY \
@@ -208,7 +209,7 @@ EOF
     GEMINI_CLI_TRUST_WORKSPACE=true \
     GEMINI_API_KEY=dummy \
     GOOGLE_GEMINI_BASE_URL="http://localhost:$recorder_port" \
-    "${agy_cmd[@]}" -p "$PROMPT" --yolo \
+    "${agy_cmd[@]}" -p "$PROMPT" --dangerously-skip-permissions \
     >"$work/agy.log" 2>&1
 ) || true
 
