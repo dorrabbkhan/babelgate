@@ -27,6 +27,35 @@ You can expect an acknowledgement within a few days. If the report is
 accepted, a fix will be prepared privately and released before details are
 made public.
 
+## Verifying releases
+
+Every `v*` release is published by `.github/workflows/release.yml` with
+three attestations you can check independently:
+
+- **npm provenance.** The npm tarball is published with
+  `npm publish --provenance`, which ties it to the release-tag workflow
+  run through a Sigstore bundle on the registry. In a project where
+  `babelgate` is installed, verify its signature (and every
+  dependency's) with:
+
+  ```sh
+  npm audit signatures
+  ```
+
+- **Signed container image.** The GHCR image is signed keyless by cosign
+  in the same workflow run. Verify a tag (or a digest,
+  `ghcr.io/dorrabbkhan/babelgate@sha256:…`) with:
+
+  ```sh
+  cosign verify ghcr.io/dorrabbkhan/babelgate:<version> \
+    --certificate-identity-regexp '^https://github\.com/dorrabbkhan/babelgate/\.github/workflows/release\.yml@refs/tags/v.*$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com
+  ```
+
+- **SBOM.** Each GitHub release attaches `babelgate-<version>.cdx.json`,
+  a CycloneDX SBOM of the runtime dependencies (devDependencies are
+  excluded). The release notes also report the runtime dependency count.
+
 ## Security notes for self-hosters
 
 - `babelgate` forwards upstream provider keys stored in its environment —
