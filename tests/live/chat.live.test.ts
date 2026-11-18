@@ -38,11 +38,16 @@ describe.each(liveTargets().map((target) => ({ target })))(
         // The ≤16 cap exists to keep paid calls cheap; a thinking
         // model needs room to finish reasoning before it emits
         // content, so thinking-model targets get a 512 budget in the
-        // source's own dialect: the local ollama target (free), and
-        // the gemini target — gemini-3.8-flash spends a 16-token
+        // source's own dialect: the local ollama target (free); the
+        // gemini target — gemini-3.8-flash spends a 16-token
         // budget on thinking and returns no text (owner's Gate 3 run:
         // finishReason MAX_TOKENS, thoughtsTokenCount 11,
-        // candidatesTokenCount 1). The ollama source sends
+        // candidatesTokenCount 1); and the anthropic target —
+        // claude-haiku spends a 16-token budget on reasoning before it
+        // emits a text block, so a non-anthropic source → anthropic
+        // target intermittently returns empty assistant text
+        // (live.yml dispatch runs 44352450611 ollama→anthropic and
+        // 44374644907 openai→anthropic). The ollama source sends
         // stream:false — Ollama's /api/chat streams NDJSON when `stream`
         // is omitted (api.md, default true), and this case parses a
         // single-object reply.
@@ -55,7 +60,9 @@ describe.each(liveTargets().map((target) => ({ target })))(
             (source === 'openai' || source === 'anthropic')
               ? { max_tokens: 512 }
               : {}),
-            ...(target === 'gemini' ? tokenBudget(source, 512) : {}),
+            ...(target === 'gemini' || target === 'anthropic'
+              ? tokenBudget(source, 512)
+              : {}),
           },
         );
         const res = await request(app).post(call.path).send(call.body);

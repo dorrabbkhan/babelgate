@@ -171,13 +171,16 @@ describe.each(liveTargets().map((target) => ({ target })))(
         useTarget(source, target);
 
         // Gemini signals streaming in the path, not the body. The
-        // gemini target runs a thinking model: the default 16-token
-        // budget is spent on reasoning, so the stream ends at
-        // MAX_TOKENS with no text — give it 512 tokens in the source's
-        // own dialect (owner's Gate 3 run; same carve-out as the
-        // chat round trip in chat.live.test.ts).
+        // gemini and anthropic targets run thinking models: the
+        // default 16-token budget is spent on reasoning, so the stream
+        // ends at MAX_TOKENS with no text — give them 512 tokens in
+        // the source's own dialect (owner's Gate 3 run for gemini;
+        // live.yml runs 44352450611/44374644907 for anthropic; same
+        // carve-out as the chat round trip in chat.live.test.ts).
         const extra: Record<string, unknown> =
-          target === 'gemini' ? tokenBudget(source, 512) : {};
+          target === 'gemini' || target === 'anthropic'
+            ? tokenBudget(source, 512)
+            : {};
         const call =
           source === 'gemini'
             ? {
