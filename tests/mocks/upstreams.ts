@@ -95,6 +95,20 @@ export function resetOverrides(): void {
 export const responseOverrides2: { status?: number; body?: unknown } = {};
 
 /**
+ * Opt-in per test (v1.5 §3.6): the input-token count an embeddings
+ * upstream reports — today only the gemini `:batchEmbedContents`
+ * handler honours it, adding `usageMetadata.promptTokenCount` to the
+ * reply. Unset, the reply carries no usage fields (the default).
+ */
+export const embedUsage: Partial<Record<Provider, number>> = {};
+
+export function resetEmbedUsage(): void {
+  for (const key of Object.keys(embedUsage) as Provider[]) {
+    delete embedUsage[key];
+  }
+}
+
+/**
  * Which fixture case each provider's upstream serves (default "text").
  * Streaming requests get the case's recorded wire bytes; non-streaming
  * requests get nonStreamBody(provider).
@@ -859,14 +873,20 @@ export const upstreamHandlers = [
         status: override.status ?? 200,
       });
     }
-    // v1.5 §3.6: :batchEmbedContents — reply shape per googleapis
-    // generative_service.proto BatchEmbedContentsResponse
-    // ({embeddings: [{values}]} in batch order; no usage fields).
+    // v1.5 §3.6: :batchEmbedContents — reply shape per
+    // https://ai.google.dev/api/embeddings
+    // ({embeddings: [{values}]} in batch order; the optional
+    // usageMetadata.promptTokenCount only when a test opts in via
+    // embedUsage).
     if (request.url.includes(":batchEmbedContents")) {
       const requests =
         (body as { requests?: unknown[] } | null)?.requests ?? [];
+      const promptTokenCount = embedUsage.gemini;
       return HttpResponse.json({
         embeddings: requests.map(() => ({ values: EMBED_VECTOR })),
+        ...(promptTokenCount !== undefined
+          ? { usageMetadata: { promptTokenCount } }
+          : {}),
       });
     }
     const optin = optinReply("gemini", request.url, body);

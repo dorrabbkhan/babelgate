@@ -38,7 +38,9 @@ export interface EmbeddingTargetTransform {
   /**
    * Decode the provider-dialect reply into vectors + the upstream's
    * input-token count, when the dialect reports one (Gemini's
-   * batchEmbedContents has no usage — the service estimates).
+   * batchEmbedContents reports it as the optional
+   * `usageMetadata.promptTokenCount` — the service estimates when
+   * the reply omits it).
    */
   decodeResponse(body: unknown): {
     vectors: number[][];

@@ -13,8 +13,10 @@ import type { EmbeddingTargetTransform } from "../../types/embeddings.types";
  * `{requests: [{model: "models/<m>", content: {parts:[{text}]},
  *   outputDimensionality?}]}` → response
  * `{embeddings: ContentEmbedding[]}` where ContentEmbedding is
- * `{values: number[]}`, in batch order. The batch reply carries NO
- * usage fields — the service estimates the input-token count.
+ * `{values: number[]}`, in batch order. The reply may carry the
+ * optional `usageMetadata.promptTokenCount`
+ * (`EmbeddingUsageMetadata`); when it is absent the service
+ * estimates the input-token count.
  */
 export const geminiEmbeddings: EmbeddingTargetTransform = {
   requestPath: (model) =>
@@ -40,6 +42,9 @@ export const geminiEmbeddings: EmbeddingTargetTransform = {
         "malformed embeddings response: embeddings is not an array",
       );
     }
+    const promptTokenCount = (
+      body as { usageMetadata?: { promptTokenCount?: unknown } } | null
+    )?.usageMetadata?.promptTokenCount;
     return {
       vectors: embeddings.map((e) => {
         const values = (e as { values?: unknown })?.values;
@@ -53,6 +58,10 @@ export const geminiEmbeddings: EmbeddingTargetTransform = {
         }
         return values;
       }),
+      inputTokens:
+        typeof promptTokenCount === "number"
+          ? promptTokenCount
+          : undefined,
     };
   },
 };

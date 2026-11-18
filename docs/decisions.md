@@ -6963,8 +6963,12 @@ the changed files are listed here by full path:
   forwarded body's `encoding_format` is therefore normalized to
   `"float"`; OpenAI's `user` and other extra fields still forward via
   the raw source body (the plan's "forwarded body").
-- **Gemini usage is estimated.** `batchEmbedContents`'s reply
-  (`{embeddings: [{values}]}`) carries no usage fields — the client
+- **Gemini usage is read from `usageMetadata.promptTokenCount` when
+  present, estimated when absent.** `batchEmbedContents`'s reply
+  (`{embeddings: [{values}], usageMetadata?}`) documents an optional
+  `EmbeddingUsageMetadata.promptTokenCount`
+  (https://ai.google.dev/api/embeddings) — `decodeResponse` maps it
+  when it is a number. Only when the reply omits it do the client
   usage block and the trace's `inputTokens` fall back to the
   per-input chars/4 estimate, with a `usage_estimated` note and
   `costEstimated: true` on the trace. Ollama's `prompt_eval_count`

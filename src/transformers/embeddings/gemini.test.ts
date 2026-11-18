@@ -51,7 +51,7 @@ describe("geminiEmbeddings", () => {
   it("decodes embeddings[].values in order, no usage", () => {
     // Response shape: googleapis generative_service.proto
     // BatchEmbedContentsResponse — {embeddings: ContentEmbedding[]},
-    // one per request, in batch order; no usage fields.
+    // one per request, in batch order; usageMetadata omitted here.
     const out = geminiEmbeddings.decodeResponse({
       embeddings: [{ values: [0.1, 0.2] }, { values: [0.3] }],
     });
@@ -62,6 +62,20 @@ describe("geminiEmbeddings", () => {
       ],
       inputTokens: undefined,
     });
+  });
+
+  it("maps usageMetadata.promptTokenCount to inputTokens", () => {
+    expect(
+      geminiEmbeddings.decodeResponse({
+        embeddings: [{ values: [1, 2] }],
+        usageMetadata: { promptTokenCount: 7 },
+      }).inputTokens,
+    ).toBe(7);
+    expect(
+      geminiEmbeddings.decodeResponse({
+        embeddings: [{ values: [1, 2] }],
+      }).inputTokens,
+    ).toBeUndefined();
   });
 
   it("throws on a malformed reply", () => {

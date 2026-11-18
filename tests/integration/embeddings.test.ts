@@ -27,6 +27,8 @@ import {
   responseOverrides,
   resetCaptured,
   resetOverrides,
+  resetEmbedUsage,
+  embedUsage,
   MOCK_BASE_URLS,
   OPENAI2_BASE_URL,
   DEAD_BASE_URL,
@@ -91,6 +93,7 @@ afterEach(() => {
   server.resetHandlers();
   resetCaptured();
   resetOverrides();
+  resetEmbedUsage();
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.BABELGATE_CONFIG;
   rmSync(TMP_CONFIG, { force: true });
@@ -158,10 +161,58 @@ describe("embeddings (spec §3.6)", () => {
     });
     expect(upstream.requests[1]!.outputDimensionality).toBe(256);
 
-    // Gemini's batchEmbedContents reply carries no usage — the
-    // client still gets an OpenAI usage block (the chars/4 estimate).
+    // This mock reply carries no usageMetadata — the client still
+    // gets an OpenAI usage block (the chars/4 estimate).
     expect(res.body.data).toHaveLength(2);
     expect(res.body.usage.prompt_tokens).toBeGreaterThan(0);
+  });
+
+  it("gemini usageMetadata.promptTokenCount is the usage", async () => {
+    process.env.TARGET_API = "gemini";
+    embedUsage.gemini = 7;
+    resetConfig();
+
+    const res = await request(app)
+      .post("/v1/embeddings")
+      .send({ model: "gemini-embedding-001", input: ["a", "b"] });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // The upstream-reported count flows straight through — no
+    // chars/4 estimate, no costEstimated on the trace.
+    expect(res.body.usage).toEqual({
+      prompt_tokens: 7,
+      total_tokens: 7,
+    });
+
+    await waitForTraces(1);
+    expect(traces[0]).toMatchObject({
+      winner: "gemini",
+      inputTokens: 7,
+      costEstimated: false,
+    });
+  });
+
+  it("gemini reply without usageMetadata estimates usage", async () => {
+    process.env.TARGET_API = "gemini";
+    resetConfig();
+
+    const res = await request(app)
+      .post("/v1/embeddings")
+      .send({ model: "gemini-embedding-001", input: ["a", "b"] });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    // chars/4 per input: "a" + "b" → 1 + 1 = 2.
+    expect(res.body.usage).toEqual({
+      prompt_tokens: 2,
+      total_tokens: 2,
+    });
+
+    await waitForTraces(1);
+    expect(traces[0]).toMatchObject({
+      winner: "gemini",
+      inputTokens: 2,
+      costEstimated: true,
+    });
   });
 
   it("ollama target maps", async () => {
