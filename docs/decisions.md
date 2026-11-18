@@ -7119,6 +7119,53 @@ the changed files are listed here by full path:
   untouched (workflow files are only ever changed by the owner applying
   a patch, E8).
 
+## v1.5 Task 12 follow-up — client-replay diagnostics (2026-11-18)
+
+- **Why:** the first real `client-replay` dispatches showed only the
+  summary table — each gate/record log stayed in a `mktemp` dir that
+  died with the runner, so a FAIL had no visible reason and the new
+  recordings were lost — and once a `client-replay` issue was open,
+  later failures were silently skipped by the dedupe check, leaving a
+  stale issue body.
+- **`client-replay.sh` delegates diagnostics to a helper.** After the
+  summary it calls `scripts/gates/client-replay-artifacts.sh`, which
+  stages `claude.jsonl`, `codex.jsonl`, the four sub-run logs and
+  `summary.md` into `tmp/client-replay/` (the workflow's upload path,
+  fixed regardless of `REPLAY_OUT_DIR`), then prints the last 40 lines
+  of every FAIL sub-run's log inside `::group::<name> log (tail)` /
+  `::endgroup::` markers — never the whole log. The key is never
+  staged or printed: a staged file containing `$OPENROUTER_API_KEY`
+  is dropped (`grep -F`), a tail containing it is withheld.
+- **Files outside the Files block:** `scripts/gates/
+  client-replay-artifacts.sh` — the diagnostics logic lives in a
+  single-purpose helper so the offline test
+  (`scripts/gates/client-replay-artifacts.test.ts`, the task's
+  optional "test file next to the script") can exercise it with a
+  scratch work dir and a fake key, the `record-claude-code.test.ts`
+  spawn technique. `client-replay.sh` itself cannot run offline (it
+  installs real client releases and calls a real upstream).
+- **The patch** (`docs/conductor/patches/
+  v1.5-replay-diagnostics.patch`, a real `git diff` of
+  `.github/workflows/live.yml` — not applied; the app cannot push
+  workflow files) adds an `actions/upload-artifact@v4` step
+  (`if: always()`, name `client-replay-${{ github.run_id }}`, path
+  `tmp/client-replay/`, `retention-days: 14`) and rewrites the failure
+  step's dedupe: an open `client-replay` issue gets a comment per
+  failing run (`gh issue comment <n> --body-file <body>`) instead of a
+  silent skip, and the shared body file — summary + the run URL
+  `$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/
+  $GITHUB_RUN_ID` — is also the new-issue body. `--jq '.[0].number //
+  empty'` makes "no open issue" an empty string rather than the
+  literal `null` the `grep -q .` check would have matched. Job
+  permissions stay `contents: read` + `issues: write`; no new pins
+  beyond the `@v4` convention the job already uses.
+- **Offline verification** (the replay itself stays the conductor's
+  recording/network step): `client-replay-artifacts.test.ts` covers
+  staging, FAIL-only group tails bounded at 40 lines, key-drop /
+  tail-withhold and missing-file tolerance — all green;
+  `git apply --check` passes on the patch and the patched `live.yml`
+  parses as YAML with the expected steps and permissions.
+
 ## v1.5 live fix — Anthropic target gets a 512-token chat budget (2026-11-18)
 
 - **Evidence (live.yml `workflow_dispatch` on main, after the Task 12
