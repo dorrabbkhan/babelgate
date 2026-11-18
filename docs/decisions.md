@@ -7118,3 +7118,49 @@ the changed files are listed here by full path:
   `docs/decisions.md`. `.github/workflows/release.yml` itself stays
   untouched (workflow files are only ever changed by the owner applying
   a patch, E8).
+
+## v1.5 live fix — Anthropic target gets a 512-token chat budget (2026-11-18)
+
+- **Evidence (live.yml `workflow_dispatch` on main, after the Task 12
+  patch):** run 44352450611 failed `tests/live/chat.live.test.ts` ›
+  `live target: 'anthropic'` › `'ollama' → 'anthropic' chat round trip`
+  with `expected '' to be truthy` — empty assistant text
+  (`chat.live.test.ts:65`); run 44374644907 failed the same class for
+  `'openai' → 'anthropic'` while the ollama case passed. Different
+  source each time, same target, same symptom: intermittent. Both runs
+  pass `max_tokens: 16` to the Anthropic target for non-anthropic
+  sources (`chatCall` in `tests/live/live.helpers.ts`: only the
+  Anthropic *source* defaults to 512; `chat.live.test.ts` raised the
+  budget only for the ollama and gemini targets).
+  `tests/live/live.helpers.ts` documents that claude-haiku can spend a
+  16-token budget on reasoning before it emits a text block — the same
+  mechanism as the gemini target's Gate 3 flake, on a path the earlier
+  fix did not cover.
+- **Fix:** `tests/live/chat.live.test.ts` gives `target === 'anthropic'`
+  the same `tokenBudget(source, 512)` the gemini target already gets —
+  in the source's own dialect — so
+  `expect(ASSISTANT_TEXT[source](res.body)).toBeTruthy()` stays
+  unchanged and still means "a text block came back". No assertion,
+  timeout or retry was touched; raising the request's token budget is
+  the only change. The live suite runs against real upstreams only
+  (`npm test` is msw-mocked), so the confirming live run is the
+  conductor's.
+- **Same failure mode in `tests/live/errors.live.test.ts`** (the
+  `stream:true → 200 stream` case): its own comment describes the
+  identical mechanism ("the default 16-token budget is spent on
+  reasoning, so the stream ends at MAX_TOKENS with no text") but
+  carved out only `target === 'gemini'`. A gemini-source →
+  anthropic-target stream can end at MAX_TOKENS and fail
+  `finishReason === 'STOP'` (and an ollama-source stream can emit only
+  its `done` line, failing `lines.length > 1`), so the anthropic
+  target now gets the same `tokenBudget(source, 512)` there too.
+- **Checked and left unchanged:**
+  `tests/live/stream.live.test.ts` — its TARGETS filter (lines 26–28)
+  runs only the ollama and openrouter targets, so the anthropic target
+  never reaches it; `tests/live/observe.live.test.ts` — its
+  Anthropic-directed bodies already send `max_tokens: 512` and its
+  remaining case is a gemini target at 128;
+  `tests/live/codex.live.test.ts` — its Codex-shaped bodies carry no
+  token cap at all (no 16-token pattern);
+  `tests/live/live.helpers.ts` — `tokenBudget` already emits the
+  budget in every source's dialect, so no helper change was needed.
