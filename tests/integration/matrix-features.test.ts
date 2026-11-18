@@ -37,7 +37,8 @@ import responsesFixtures from "../fixtures/responses.json";
  * same-format pass-through, per 5×5 pair. Each cell records the
  * status its request actually produced — "pass" (carried
  * faithfully), "note" (works with a documented caveat), "fail" (the
- * dialect cannot express it or the target refuses it) — into
+ * target refuses it), "na" (the source dialect cannot express it at
+ * all — never a gateway failure) — into
  * tests/matrix/.out/matrix.json for `npm run matrix`.
  */
 
@@ -164,7 +165,8 @@ describe("reasoning reply reaches every client (v1.5 spec §3.1)", () => {
 /**
  * A URL image part in each source's dialect. Ollama's `images` is
  * base64-only — no URL slot (docs.ollama.com/api/chat) — so its
- * row's cells are fails the test never sends.
+ * row's cells are `n/a`, not fails: the request can never reach the
+ * gateway.
  */
 const URL_IMAGE_REQUESTS: Record<
   Provider,
@@ -227,7 +229,7 @@ describe("URL image reaches every target (v1.5 spec §3.2.2)", () => {
   it.each(ALL_PAIRS)("%s → %s", async (source, target) => {
     const body = URL_IMAGE_REQUESTS[source];
     if (body === null) {
-      recordMatrixCell(source, target, "url_image", "fail", "no url field");
+      recordMatrixCell(source, target, "url_image", "na", "no url field");
       return;
     }
     setPair(source, target);
@@ -256,9 +258,9 @@ describe("URL image reaches every target (v1.5 spec §3.2.2)", () => {
 
 /**
  * A base64 PDF document in each source's dialect. Ollama has no
- * document field at all — its source cells are fails — and it is
+ * document field at all — its source cells are `n/a` — and it is
  * the only target that refuses documents (400 in the source's
- * dialect naming the field path).
+ * dialect naming the field path — those cells stay fails).
  */
 const DOCUMENT_REQUESTS: Record<
   Provider,
@@ -342,7 +344,7 @@ describe("document reaches capable targets (v1.5 spec §3.2.2)", () => {
         source,
         target,
         "document",
-        "fail",
+        "na",
         "no document field",
       );
       return;
@@ -381,8 +383,9 @@ describe("document reaches capable targets (v1.5 spec §3.2.2)", () => {
  * blocks, Responses' `function_call_output` arrays and a Chat tool
  * message's content parts can express it at all (Gemini's
  * `functionResponse` and Ollama's tool messages have no media slot —
- * those source cells are fails); only Anthropic and Responses
- * targets accept it (MEDIA_SUPPORT.toolMessageImages).
+ * those source cells are `n/a`); only Anthropic and Responses
+ * targets accept it (MEDIA_SUPPORT.toolMessageImages — the refused
+ * targets stay fails).
  */
 const TOOL_IMAGE_REQUESTS: Record<
   Provider,
@@ -507,7 +510,7 @@ describe("image in a tool result reaches capable targets (v1.5 spec §3.2.1)", (
         source,
         target,
         "tool_image",
-        "fail",
+        "na",
         "no tool-image field",
       );
       return;

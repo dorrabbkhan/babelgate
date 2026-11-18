@@ -39,11 +39,14 @@ export type MatrixFeature =
   | "tool_image"
   | "passthrough";
 
-export type MatrixStatus = "pass" | "note" | "fail";
+export type MatrixStatus = "pass" | "note" | "fail" | "na";
 
 export interface MatrixCell {
   status: MatrixStatus;
-  /** Note code (status "note") or failure reason (status "fail"). */
+  /**
+   * Note code (status "note"), failure reason (status "fail") or the
+   * missing source capability (status "na").
+   */
   note?: string;
 }
 

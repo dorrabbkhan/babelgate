@@ -6891,3 +6891,18 @@ offered and not chosen): the `tool_choice` gap fix must not delete
   `tools`/`stream_tools` — so the four baseline features and
   `structured` (pairs.test.ts) come from the existing tests; the
   five new features from `matrix-features.test.ts`.
+- **`"na"` cell status (owner-requested, 2026-11-18):** a deliberate
+  addition to the plan's `recordMatrixCell` interface — `MatrixStatus`
+  is now `"pass" | "note" | "fail" | "na"`, rendered as `n/a <reason>`.
+  `na` is used ONLY where the source (client) format cannot express the
+  input at all — `no url field` (Ollama's URL-image row: `images` is
+  base64-only), `no document field` (Ollama's document row),
+  `no tool-image field` (the Gemini and Ollama tool-image rows: no
+  media slot in their tool-result shapes). It is not a gateway failure
+  and must not read like one on the public page. Cells where the
+  gateway receives the input and refuses it stay `fail`
+  (`no document target`, `no tool-image target`, `no passthrough`),
+  and the cross-format pass-through cells stay `note canonical` — the
+  pair is served by the canonical path, which is a caveat, not an
+  inexpressible input. `--check` parses and compares `n/a` cells like
+  any other status, so a `✗`↔`n/a` drift fails the gate.

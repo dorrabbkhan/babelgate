@@ -63,6 +63,57 @@ describe("npm run matrix (v1.5 spec §3.4)", () => {
     expect(md).toContain("| gemini | ✓ | — | — | — | — |");
   });
 
+  it("renders an n/a cell", () => {
+    const report: MatrixReport = {
+      version: 1,
+      cells: {
+        url_image: {
+          ollama: { openai: { status: "na", note: "no url field" } },
+        },
+      },
+    };
+    const md = renderMatrix(report);
+    expect(md).toContain(
+      "| ollama | n/a no url field | — | — | — | — |",
+    );
+    // The legend explains n/a: the client format cannot express the
+    // input — not a gateway failure.
+    expect(md).toContain("the client format cannot express this input");
+  });
+
+  it("--check fails when a cell changes between ✗ and n/a", () => {
+    const paths = tmpPaths();
+    const naReport: MatrixReport = {
+      version: 1,
+      cells: {
+        url_image: {
+          ollama: { openai: { status: "na", note: "no url field" } },
+        },
+      },
+    };
+    const failReport: MatrixReport = {
+      version: 1,
+      cells: {
+        url_image: {
+          ollama: { openai: { status: "fail", note: "no url field" } },
+        },
+      },
+    };
+    writeFileSync(paths.report, JSON.stringify(naReport));
+    writeFileSync(paths.doc, renderMatrix(failReport));
+    let out = "";
+    const code = run(["--check"], paths, (s) => {
+      out += s + "\n";
+    });
+    expect(code).toBe(1);
+    expect(out).toContain(
+      "-| ollama | ✗ no url field | — | — | — | — |",
+    );
+    expect(out).toContain(
+      "+| ollama | n/a no url field | — | — | — | — |",
+    );
+  });
+
   it("--check passes on identical cells", () => {
     const paths = tmpPaths();
     writeFileSync(paths.doc, renderMatrix(REPORT));
