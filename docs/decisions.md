@@ -7161,6 +7161,29 @@ the changed files are listed here by full path:
   Anthropic-directed bodies already send `max_tokens: 512` and its
   remaining case is a gemini target at 128;
   `tests/live/codex.live.test.ts` — its Codex-shaped bodies carry no
-  token cap at all (no 16-token pattern);
-  `tests/live/live.helpers.ts` — `tokenBudget` already emits the
-  budget in every source's dialect, so no helper change was needed.
+  token cap at all (no 16-token pattern).
+- **Second cause (fix round, conductor local reproduction):** with the
+  512-token budget in place the `gemini → anthropic` chat case still
+  reported empty assistant text intermittently (2 of 6, then 1 of 10
+  requests) against the real Anthropic target `claude-haiku-5-5`. The
+  response was valid — `finishReason: "STOP"` — but the body was
+  `parts: [{"text":"","thought":true,"thoughtSignature":"<sig>"},
+  {"text":"Okay."}]`. Since v1.5 reasoning-out (Task 4) babelgate
+  sends reasoning as a `thought: true` part BEFORE the text part for
+  Gemini-format clients, which the Gemini API documents
+  (https://ai.google.dev/gemini-api/docs/thinking).
+  `ASSISTANT_TEXT.gemini` in `tests/live/live.helpers.ts` read only
+  `candidates[0].content.parts[0].text`, so it saw the empty thought
+  part and `expect(...).toBeTruthy()` failed. It now joins the `text`
+  of the parts that are not `thought: true` (empty string when none,
+  so a thought-only reply still fails the assertion). Re-grepping
+  `tests/live/` confirms this was the only `parts[0]` read: every
+  other `parts` use (`tests/live/stream.live.test.ts`, the gemini
+  request bodies in `tests/live/observe.live.test.ts` and
+  `tests/live/live.helpers.ts`) iterates the whole array. No
+  assertion, timeout or retry was touched.
+- **File outside the original Files block:**
+  `tests/live/live.helpers.ts` — the `ASSISTANT_TEXT.gemini`
+  extractor fix above. The earlier bullet's "no helper change was
+  needed" held for `tokenBudget`; this second cause is in the
+  extractor, not the budget.
