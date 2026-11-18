@@ -21,6 +21,7 @@ import {
   packEnvelope,
   type EnvelopePayload,
 } from "../reasoning-envelope";
+import { toGeminiSignature } from "./gemini.signature";
 import {
   fromCanonicalError,
   geminiUsageFromCanonical,
@@ -315,8 +316,10 @@ export function createStreamEncoder(
   // v1.5 §3.1 (Task 4): a reasoning block emits as one `{text,
   // thought: true}` part when it closes — its `thoughtSignature` is
   // the `bg1.` envelope (the part, its real signature inside, and
-  // the signatures collected since the last envelope). Signatures
-  // that meet no thought or functionCall part are dropped with
+  // the signatures collected since the last envelope) wrapped in
+  // standard base64 for the wire (toGeminiSignature — the field is
+  // bytes/base64, e.g. Go genai's `[]uint8`). Signatures that meet
+  // no thought or functionCall part are dropped with
   // `reasoning_dropped`.
   interface ReasoningBlock {
     index: number;
@@ -349,8 +352,10 @@ export function createStreamEncoder(
    * Emit the open reasoning block (if any) as one thought part; its
    * `thoughtSignature` is the `bg1.` envelope — the reasoning part
    * with its real signature plus every text/tool-call signature
-   * buffered since the last envelope. When no block is open, a
-   * buffered signature still rides the next functionCall part.
+   * buffered since the last envelope — base64-wrapped for the wire
+   * (toGeminiSignature; the cap stays on the envelope, base64 adds
+   * about a third). When no block is open, a buffered signature
+   * still rides the next functionCall part.
    * `thought: true`/`thoughtSignature` part fields:
    * https://ai.google.dev/gemini-api/docs/thinking and
    * https://ai.google.dev/gemini-api/docs/thought-signatures.
@@ -390,7 +395,7 @@ export function createStreamEncoder(
             text: block.redacted ? "" : block.text,
             thought: true,
             ...(envelope !== undefined && {
-              thoughtSignature: envelope,
+              thoughtSignature: toGeminiSignature(envelope),
             }),
           },
         ],
@@ -442,8 +447,8 @@ export function createStreamEncoder(
       );
     }
     // Signatures buffered since the last carrier plus this call's
-    // own ride the functionCall part as a `bg1.` envelope
-    // (thoughtSignature on any part:
+    // own ride the functionCall part as a `bg1.` envelope, emitted
+    // base64-wrapped (thoughtSignature on any part:
     // https://ai.google.dev/gemini-api/docs/thought-signatures).
     const sigs: EnvelopePayload["signatures"] = [
       ...pendingSigs.splice(0),
@@ -466,7 +471,7 @@ export function createStreamEncoder(
               args: parsed.args,
             },
             ...(envelope !== undefined && {
-              thoughtSignature: envelope,
+              thoughtSignature: toGeminiSignature(envelope),
             }),
           },
         ],

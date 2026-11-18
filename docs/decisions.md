@@ -7166,6 +7166,218 @@ the changed files are listed here by full path:
   `git apply --check` passes on the patch and the patched `live.yml`
   parses as YAML with the expected steps and permissions.
 
+## v1.5 Task 14 — Antigravity CLI spike follow-ups (owner-extended scope)
+
+- **Owner extension (2026-11-18):** the owner instructed "follow your
+  recos for all and add them to same PR", extending Task 14 past its
+  "report only, no product code" plan scope. Added in this PR:
+  - **`thinkingBudget` decode fix** in `src/transformers/adapters/
+    gemini.adapter.ts` (decode only — `canonical.types.ts` and
+    `canonical.schema.ts` untouched). Per
+    https://ai.google.dev/api/generate-content#ThinkingConfig,
+    `thinkingBudget: -1` (dynamic — the provider chooses) decodes to no
+    `budgetTokens` and no budget-derived effort (a `thinkingLevel` in
+    the same object still wins); `thinkingBudget: 0` (thinking off)
+    decodes to `reasoning.effort = "none"` unless a `thinkingLevel`
+    was also sent; any other negative or non-integer value keeps the
+    existing `field_dropped` note style and is dropped, never thrown.
+    Positive budgets are unchanged.
+  - **Recipe** `docs/recipes/antigravity-cli.md` (API-key mode via
+    `modelProvider: "gemini"` + `GOOGLE_GEMINI_BASE_URL`,
+    `customModelsConfig` for non-Gemini names verified on agy 1.5.11,
+    Limits and a neutral Terms note), indexed in `README.md`.
+  - **Gate** `scripts/gates/record-antigravity-cli.sh` (clone of
+    `record-gemini-cli.sh` for `agy`, recording under `tmp/`, never
+    `tests/fixtures/`) plus an offline `*.test.ts` in the
+    `record-claude-code.test.ts` pattern. Recording/network step: run
+    by the conductor.
+  - **`docs/roadmap.md`**: the v1.6 "only if the owner says so" line
+    replaced with adoption (terms question stayed with the owner;
+    decided in the round-2 paragraph below).
+- **Terms decision (round 2, 2026-11-18):** the owner delegated the
+  call to the conductor — "follow your recos to make the best
+  decision; check the terms yourself perhaps" — and the conductor
+  read the primary sources on 2026-11-18: antigravity.google/terms
+  (§6 and its preamble; no effective date on the page),
+  antigravity.google/docs/install ("Authenticate" section),
+  google-antigravity/antigravity-cli issue #1493 (staff statement by
+  manirajc, 2026-11-12; issue closed 2026-11-17) and issue #514
+  (open). Reading (ours, not legal advice): §6 prohibits reaching
+  Google's OAuth-backed service through third-party tools — "using
+  third party software, tools, or services to access the Service"
+  "is a breach of this Agreement" — while API-key mode never opens
+  an account session, is documented by Google, and is described by
+  Google staff as governed by the respective API and Google Cloud
+  terms, not §6. Supported scope: **API-key mode only** — API-key
+  mode plus `GOOGLE_GEMINI_BASE_URL` pointing at one's own gateway
+  is a documented use and the only mode the recipe supports;
+  babelgate is never run behind signed-in/consumer OAuth `agy` (it
+  can't be redirected anyway, and §6 plus the staff statement forbid
+  wrapping it — `agy acp` headless included — in third-party
+  harnesses). Unverified gaps: Google has made no statement on
+  routing that endpoint to a non-Google model, and the Gemini API /
+  Google Cloud terms themselves were not read.
+- **Live pass (round 3, 2026-11-18):** the conductor ran
+  `scripts/gates/record-antigravity-cli.sh gemini` against real
+  Gemini with the owner-installed agy 1.5.11; three findings.
+  (1) `--yolo` does not exist in agy — it prints its usage and sends
+  no request (the first run recorded only `/health`); agy's flag is
+  `--dangerously-skip-permissions` (`agy --help`) — the "inherited
+  from Gemini CLI" comment was wrong. (2) The script's default
+  `gemini-2.5-flash` is retired — Google answered 404 "no longer
+  available to new users"; the `gemini` target's default is now
+  `gemini-3.8-flash`. Both fixed in the script, with the offline
+  test's fake `agy` now exiting non-zero with "Usage of agy:" on any
+  flag outside {`-p`, `--print`,
+  `--dangerously-skip-permissions`, `--model`, `--output-format`,
+  `--version`}. (3) With `gemini-3.8-flash` upstream agy got a 200
+  SSE stream with a `run_command` functionCall, then failed `json:
+  cannot unmarshal string into Go struct field .candidates.0.content
+  .parts.0.thoughtSignature of type []uint8: illegal base64 data at
+  input byte 3` — babelgate emitted the `bg1.` envelope raw, but
+  `thoughtSignature` is a bytes field (proto3 JSON: standard padded
+  base64) and `bg1.` is not base64 (its `.` is byte 3). The owner
+  decided 2026-11-18: "Fix in this PR".
+  - **Design** (Gemini path only; `canonical.*`, the Anthropic and
+    Responses adapters, and the shared `reasoning-envelope.ts`
+    pack/unpack contract are untouched): new adapter-local module
+    `src/transformers/adapters/gemini.signature.ts`.
+    `toGeminiSignature(envelope)` is standard padded base64 of the
+    `bg1.…` UTF-8 bytes — a Go client decodes it and re-encodes the
+    same string on the next turn, a TS client echoes it verbatim.
+    `fromGeminiSignature(s)` returns `bg1.`-prefixed input unchanged
+    (**legacy compat: envelopes issued before this change stay
+    accepted**), otherwise base64-decodes leniently (Node accepts
+    the standard and URL-safe alphabets and missing padding — covers
+    the Python SDK), returns the decoded `bg1.` text, or returns
+    `s` unchanged so the "not a bg1. envelope" drop path and its
+    notes behave exactly as before. `toGeminiSignature` is applied
+    at every `packEnvelope` emit site (`gemini.adapter.ts`
+    non-stream; `gemini.stream.ts` `flushReasoning` and
+    `toolCallChunk`); `fromGeminiSignature` wraps the two request
+    decode sites. The 1 MiB `ENVELOPE_CAP_BYTES` stays on
+    `packEnvelope`'s output — base64 adds about a third. Doc cite:
+    https://ai.google.dev/api/generate-content#Part today reads
+    "**thoughtSignature**: `string` — Optional. An opaque signature
+    for the thought so it can be reused in subsequent requests."
+    (the "A base64-encoded string" wording the fix brief quoted is
+    not on the current page; the bytes typing is confirmed by the
+    Go genai SDK's `[]uint8` unmarshal and the live failure).
+  - **Changed existing tests** (same or stronger exactness — every
+    assertion still unpacks the exact envelope payload, nothing was
+    weakened):
+    - `src/transformers/adapters/gemini.adapter.test.ts` —
+      `gemini client receives thought parts with envelope`,
+      `signatures with no thought part land on the first
+      functionCall`, `streamed signatures after the last reasoning
+      block ride the flushed functionCall`, `streamed signed text
+      parts emit one wire part each` (all now unwrap the emitted
+      signature via `fromGeminiSignature` before `unpackEnvelope`).
+    - `tests/contracts/stream-reasoning-drop.test.ts` —
+      `gemini: reasoning block streams as a thought part with an
+      envelope thoughtSignature` (same unwrap).
+    - `tests/integration/matrix-features.test.ts` — the gemini cell
+      of `reasoning reply reaches every client` (`/^bg1\./` →
+      standard-base64 match plus full `unpackEnvelope` payload).
+    - `scripts/gates/record-antigravity-cli.test.ts` —
+      `writes agy settings, passes the prompt and records the
+      request` (fake `agy` rejects unknown flags like the real one;
+      asserts `--dangerously-skip-permissions` present and `--yolo`
+      absent).
+    - New tests: `gemini.signature.test.ts` (six cases incl. the
+      Go-client round trip), `non-stream response carries the
+      envelope as standard base64` and `stream carries the envelope
+      as standard base64` (thought part, functionCall part, and the
+      still-open call flushed before the final chunk) in
+      `gemini.adapter.test.ts`, and `envelope thoughtSignature
+      round-trips through a Gemini-3-style upstream` (verbatim and
+      Go-style re-encoded echoes; turn-2 upstream carries the
+      original upstream signatures) in
+      `tests/integration/gemini-cli.test.ts`. Tests feeding a raw
+      non-`bg1.` or legacy `bg1.` signature inbound are unchanged —
+      they now prove the foreign and legacy forms still decode.
+  - **Files outside the Files block (new this round):**
+    `src/transformers/adapters/gemini.signature.ts`,
+    `src/transformers/adapters/gemini.signature.test.ts`,
+    `src/transformers/adapters/gemini.stream.ts`,
+    `tests/contracts/stream-reasoning-drop.test.ts`,
+    `tests/integration/matrix-features.test.ts` (already-listed
+    files gaining signature edits: `src/transformers/adapters/
+    gemini.adapter.ts`, `src/transformers/adapters/
+    gemini.adapter.test.ts`, `tests/integration/gemini-cli.test.ts`,
+    `scripts/gates/record-antigravity-cli.sh`,
+    `scripts/gates/record-antigravity-cli.test.ts`,
+    `docs/research/2026-11-18-antigravity-spike.md`,
+    `docs/decisions.md`).
+- **Files outside the Files block:**
+  - `src/transformers/adapters/gemini.adapter.ts` — the
+    `thinkingBudget` decode fix itself.
+  - `src/transformers/adapters/gemini.adapter.test.ts` — decode tests
+    for `-1`, `0`, `-1` with `thinkingLevel`, `-5` note; plus the
+    `canonicalRequestSchema` import used to assert the decoded request
+    stays schema-valid.
+  - `tests/integration/gemini-cli.test.ts` — end-to-end
+    `streamGenerateContent` test proving `-1`/`0` return 200 with the
+    upstream body asserted.
+  - `docs/recipes/antigravity-cli.md` — the new recipe page.
+  - `README.md` — recipes index line for the new page (headline
+    unchanged).
+  - `scripts/gates/record-antigravity-cli.sh` — the new gate script.
+  - `scripts/gates/record-antigravity-cli.test.ts` — its offline
+    regression test.
+  - `docs/roadmap.md` — the adoption line the owner instruction asked
+    for.
+  - `docs/decisions.md` — this entry.
+- No fixture, snapshot, timeout or retry changes; no test asserts the
+  old 400, so none had to be removed.
+- **Live pass (round 4, 2026-11-18):** `origin/main` merged into the
+  branch first (the only conflict was this file — both sides had
+  appended entries; resolved keeping both in full, the Task 12
+  follow-up entry then this one). The conductor's Gemini-3
+  end-to-end re-run then got past turn 1 — the finding-3 signature
+  fix worked: agy parsed the stream, ran its tool and sent turn 2 —
+  and Google answered `400 Requests ending with a model turn are not
+  supported` for the request babelgate forwarded. Captured agy
+  1.5.11 turn-2 `contents` (against a local stub; values omitted):
+  1. `{role: "user", parts: [{text}]}`
+  2. `{role: "model", parts: [{functionCall: {id, name, args},
+     thoughtSignature}]}`
+  3. `{role: "model", parts: [{functionResponse: {id, name,
+     response: {output}}}]}` — role "model", not "user".
+
+  The function-calling docs show tool results under "user"
+  (https://ai.google.dev/gemini-api/docs/function-calling), but this
+  shipping client (agy, Go genai-based) sends them under "model" and
+  Google's API accepts it. In `toCanonicalRequest`
+  (`src/transformers/adapters/gemini.adapter.ts`) the `"model"`
+  branch filtered functionResponse parts out and skipped them, so
+  the tool result was lost and an empty assistant message ended the
+  forwarded request. **Fix (decode only, keyed by part type, not by
+  client or provider):** functionResponse parts decode to tool
+  messages (`toCanonicalToolMessages`) regardless of the content's
+  role — a model turn of only responses emits no assistant message,
+  a mixed turn emits the assistant message then the tool messages;
+  "user"-role behaviour unchanged. `canonical.*` untouched.
+  - **Tests:** `functionResponse in a model-role content becomes a
+    tool message`, `a model-role content of only functionResponse
+    parts yields no assistant message`, `a model-role content with
+    a functionCall and a functionResponse yields assistant then
+    tool messages` (`src/transformers/adapters/
+    gemini.adapter.test.ts`), and `model-role functionResponse
+    reaches Gemini, OpenAI and Ollama upstreams as a tool result`
+    (`tests/integration/gemini-cli.test.ts`) — the captured turn-2
+    shape with a `toGeminiSignature` signature; it asserts the
+    Gemini upstream `contents` ends on a user-role functionResponse
+    with the restored upstream signature, and the OpenAI and Ollama
+    upstream `messages` end on the tool result.
+  - **Files outside the Files block:** none new — every file this
+    round touched is already listed in this entry
+    (`src/transformers/adapters/gemini.adapter.ts`,
+    `src/transformers/adapters/gemini.adapter.test.ts`,
+    `tests/integration/gemini-cli.test.ts`,
+    `docs/research/2026-11-18-antigravity-spike.md`,
+    `docs/decisions.md`).
+
 ## v1.5 live fix — Anthropic target gets a 512-token chat budget (2026-11-18)
 
 - **Evidence (live.yml `workflow_dispatch` on main, after the Task 12

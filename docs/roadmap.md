@@ -156,7 +156,7 @@ across every source × target, and a live smoke run against real upstreams befor
 - **Minimal health.** Provider health checks and a circuit breaker, kept small.
 - **Response cache.** Exact-match, opt-in, small — for CI and test suites.
 - **Moved to v2.0 unless users ask earlier:** key load balancing, rate limiting per client key.
-- **Antigravity CLI** as an entry point only if the v1.5 spike and the owner say so.
+- **Antigravity CLI adopted as an entry point** (v1.5 Task 14 spike, 2026-11-18; recipe, `thinkingBudget` fix and record script landed in PR #140; API-key mode only; terms read 2026-11-18 (see docs/decisions.md)).
 
 > **🟢 POWERHOUSE: after v1.6.** Any client in any of 5 formats reaches any of ~20 providers through
 > one endpoint — Claude Code and Codex included — with streaming, tools, reasoning, media, structured output,
