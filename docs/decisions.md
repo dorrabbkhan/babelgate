@@ -6569,3 +6569,82 @@ commit — E16 and this entry; nothing remains outstanding from Task 1.
   usage lands).
 - **Live check.** Real request/response against `npm run dev`
   with a local stub upstream — in the PR body.
+
+## v1.5 Task 9 follow-up — measured `lmstudio-anthropic` gaps; `probe-anthropic-shim.sh` (2026-11-18)
+
+Off-plan follow-up to Task 9 (PR #127), owner-approved in chat
+2026-11-18: replace the docs-derived `lmstudio-anthropic` gap list with
+the measured one, and commit the probe script that produced it.
+
+- **Probe.** `scripts/gates/probe-anthropic-shim.sh` (new; the
+  conductor's `tmp/` staging copy committed unchanged except one header
+  line — it generalizes `probe-ollama-anthropic.sh` for any
+  Anthropic-compatible endpoint: `BASE` and `MODEL` required, `API_KEY`
+  optional). Run by the conductor on 2026-11-18 as
+  `BASE=http://localhost:1234 MODEL=<model> scripts/gates/probe-anthropic-shim.sh`
+  against LM Studio's headless server (`POST /v1/messages`), two
+  models: `ibm/granite-4-micro` (3B, text-only) and `qwen/qwen3-vl-8b`
+  (vision). Shape-only output — `<probe> <HTTP status> <shape>` lines:
+  error types and truncated error messages, content-block types, usage
+  key names, SSE event names; never prompt bodies, completions or
+  keys. Raw output (gitignored):
+  `tmp/probe-lmstudio-granite-4-micro.txt`,
+  `tmp/probe-lmstudio-vision.txt`.
+- **Result table** ("same" = identical shape on both models):
+
+  | probe | granite-4-micro | qwen3-vl-8b |
+  |---|---|---|
+  | baseline | 200 ok | same |
+  | tool_choice_any | 200, plain text, `stop_reason=max_tokens` (full 256-token budget), no `tool_use` | same |
+  | tool_choice_none | 200, text | same |
+  | count_tokens | HTTP 200, body error "Unexpected endpoint or method. (POST /v1/messages/count_tokens)" | same |
+  | cache_control_system | 200 | same |
+  | cache_control_toplevel | 200 | same |
+  | url_image | 400 invalid_request_error "model does not support vision" (base64 refused identically → model-caused, inconclusive) | 200 — the URL was fetched and used (a follow-up question about https://httpbin.org/image/png, a pig, answered "Pig") |
+  | pdf_base64 | 400 invalid_request_error `request.messages.0.content.0.type: Invalid discriminator value. Expected 'text' \| 'image' \| 'tool_result'` | same |
+  | stream_usage | 200; `message_start.usage` and `message_delta.usage` both `input_tokens,output_tokens,cache_read_input_tokens` | same |
+
+- **What each verdict changes** in the preset
+  (`src/config/provider-presets.ts` — gaps now
+  `["count_tokens","documents","tool_choice"]`, `verified` now
+  2026-11-18):
+  - `count_tokens` stays declared: LM Studio answers the route HTTP
+    200 with a body error, so the §3.5 local-estimate fix still
+    applies.
+  - `documents` stays declared: the `document` block type is rejected
+    outright (400), not "accepted, maybe silently dropped" as on
+    Ollama — the error also pins the accepted user-content block
+    types: `text`, `image`, `tool_result`.
+  - `prompt_cache` removed: `cache_control` was accepted on a system
+    block and at the top level on both models, so the strip-with-note
+    fix is no longer needed.
+  - `url_images` removed: qwen3-vl-8b fetched the `source.type:"url"`
+    image and answered a question about its content, so the endpoint
+    does the fetch itself; granite's 400 was the model's ("model does
+    not support vision" — a base64 image was refused identically), not
+    the endpoint's.
+  - `tool_choice` declared: `{type:"any"}` with a tool defined
+    returned plain text on both models — LM Studio appears to ignore
+    the field. Fix: field dropped with a `tool_choice_dropped` note,
+    Task 9's mechanism.
+  - `stream_usage` was never declared; confirmed: usage rides
+    `message_start` and `message_delta` on the documented message_*
+    events.
+- **Caveats.**
+  - `tool_choice` is "probable", not proven: both models answered
+    `tool_choice:{type:"any"}` with plain text. The probe cannot
+    distinguish "the endpoint dropped the field" from "the model
+    cannot be made to call a tool"; either way the client's
+    `tool_choice` is not honoured, so the gap is declared.
+  - `cache_control` was accepted, but whether LM Studio actually
+    caches is unknown: usage only ever shows
+    `cache_read_input_tokens`, never `cache_creation_input_tokens`.
+  - granite-4-micro is text-only, so its image 400s are model-caused;
+    the `url_images` verdict rests on qwen3-vl-8b. The `documents` 400
+    is a schema rejection before the model runs, so it holds for both.
+  - Single run on one LM Studio build; a different version or a model
+    with real tool support may behave differently.
+- **Files block:** `src/config/provider-presets.ts`,
+  `src/services/gap-fixes.test.ts`,
+  `scripts/gates/probe-anthropic-shim.sh`, `docs/decisions.md`.
+  Files outside the Files block: none.
