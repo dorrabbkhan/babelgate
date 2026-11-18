@@ -1172,16 +1172,20 @@ export function patchGaps(
   if (gaps.length === 0) return { body, notes, needsMedia };
   const out = structuredClone(body) as Obj;
 
-  // tool_choice: dropped; only the bare API-default {type:"auto"}
-  // goes silently — any/none/named/flagged choices earn the note.
+  // tool_choice: dropped, except {type:"none"} which stays — some
+  // upstreams honour it and sending it is never worse than deleting
+  // it. The bare API-default {type:"auto"} goes silently; any/named/
+  // flagged choices earn the note.
   if (gaps.includes("tool_choice") && out.tool_choice !== undefined) {
     const choice = out.tool_choice;
-    const silent =
-      isObj(choice) &&
-      choice.type === "auto" &&
-      Object.keys(choice).length === 1;
-    delete out.tool_choice;
-    if (!silent) note("tool_choice_dropped", "tool_choice");
+    if (!isObj(choice) || choice.type !== "none") {
+      const silent =
+        isObj(choice) &&
+        choice.type === "auto" &&
+        Object.keys(choice).length === 1;
+      delete out.tool_choice;
+      if (!silent) note("tool_choice_dropped", "tool_choice");
+    }
   }
 
   // prompt_cache: every nested cache_control — system blocks,

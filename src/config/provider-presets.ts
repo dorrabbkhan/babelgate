@@ -76,9 +76,12 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    * ("Unexpected endpoint or method"), and a base64 `document` block →
    * 400 invalid_request_error ("Expected 'text' | 'image' |
    * 'tool_result'") on both models, so `count_tokens` and `documents`
-   * stay declared. `tool_choice:{type:"any"}` → 200 but plain text on
-   * both models — LM Studio appears to ignore it, so `tool_choice` is
-   * declared (probable, not proven: see decisions.md). `cache_control`
+   * stay declared. `tool_choice` is proven
+   * (`scripts/gates/tool-check-shim.sh`, qwen3-vl-8b, 2026-11-18): the
+   * control called the tool while `any` and a named `get_time` got
+   * plain text — forced/named are ignored — but `{type:"none"}`
+   * suppressed the call, so `none` IS honoured and the fix keeps it
+   * in the body. `cache_control`
    * (system block and top-level) was accepted — whether LM Studio
    * actually caches is unproven — and a `source.type:"url"` image was
    * fetched and answered by the vision model, so neither is declared;
@@ -121,9 +124,12 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    * model call, so a client would trust a wrong number; a base64
    * `document` block → 200 but the endpoint turns the PDF into a
    * signed URL the model cannot open, so `documents` stays declared
-   * and is refused in the client's dialect; `tool_choice:{type:"any"}`
-   * → 200 with `stop_reason:end_turn` and no `tool_use` — declared,
-   * probable. `cache_control` was accepted (whether z.ai actually
+   * and is refused in the client's dialect; `tool_choice` is proven
+   * ignored (`scripts/gates/tool-check-shim.sh`, GLM-4.5-Flash,
+   * 2026-11-18): the control called the tool while `any` and a named
+   * `get_time` got `stop_reason:end_turn` text, and `{type:"none"}`
+   * still got the `tool_use` — `none` is ignored too. `cache_control`
+   * was accepted (whether z.ai actually
    * caches is unproven) and streamed usage rides the message_*
    * events, so neither is declared. `url_images` stays declared:
    * accepted (200) but unproven — a text-only model guessed the image

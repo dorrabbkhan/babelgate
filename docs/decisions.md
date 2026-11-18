@@ -6749,3 +6749,86 @@ semantic check that produced part of the evidence.
   `src/services/gap-fixes.test.ts`,
   `scripts/gates/semantic-check-shim.sh`, `docs/decisions.md`.
   Files outside the Files block: none.
+## v1.5 Task 9 follow-up — `tool_choice` gap keeps `{type:"none"}`; proven `tool_choice` results (2026-11-18)
+
+Off-plan follow-up to Task 9 (PR #127) and its two measured follow-ups
+(PRs #128, #129), stacked on `v1.5/glm-preset-measured`. Owner decision
+in chat 2026-11-18 ("follow your reco" → option A below; option B was
+offered and not chosen): the `tool_choice` gap fix must not delete
+`{type:"none"}`.
+
+- **Reversal.** Task 9's ambiguity (a) — "`none` earns the
+  `tool_choice_dropped` note because dropping it would silently
+  re-enable tool use" — is still true for `any`/named (a dropped
+  forced or named choice reverts to the `auto` default and re-enables
+  the call the client asked to force), but it is wrong for `none` on
+  endpoints that honour it: deleting `none` silently re-enables tool
+  use there, and sending `none` is never worse than deleting it on
+  endpoints that ignore it (GLM ignores it anyway — table below). The
+  fix is now: `{type:"none"}` / `"none"` stays in the body with no
+  note; the bare API default (`{type:"auto"}` / `"auto"`) is deleted
+  silently, as before; every other choice (`any`, `tool`/named,
+  `auto` with extra keys, `required`, `{type:"function"}`) is deleted
+  with one `tool_choice_dropped` note at path `tool_choice`, as
+  before. The OpenAI `patchGaps` gets the same rule for Chat
+  Completions values — same gap name, same meaning, no provider
+  checks.
+- **Probe.** `scripts/gates/tool-check-shim.sh` (new; the conductor's
+  `tmp/` staging copy committed unchanged except one header line — it
+  complements `probe-anthropic-shim.sh`, which prints shapes, while
+  this measures whether the upstream honours `tool_choice`: a control
+  plus `any`/named/`none` requests). Run by the conductor on
+  2026-11-18 as
+  `BASE=http://localhost:1234 MODEL=qwen/qwen3-vl-8b scripts/gates/tool-check-shim.sh`
+  (two runs: the first at the default `MAX_TOKENS=1024`, then
+  `MAX_TOKENS=200 TIMEOUT_S=400 ONLY="any_say_hi named"` after the two
+  forced requests timed out at curl level) and
+  `BASE=https://api.z.ai/api/anthropic MODEL=GLM-4.5-Flash API_KEY=<key> scripts/gates/tool-check-shim.sh`.
+  Shape-only output — block types, tool names, `stop_reason`; never
+  completions or keys. Raw output (gitignored):
+  `tmp/tool-lmstudio.txt`, `tmp/tool-lmstudio-forced.txt`,
+  `tmp/tool-glm-45.txt`.
+- **Result table** (control = "What time is it? Use the tool." with a
+  `get_time` tool and no `tool_choice`):
+
+  | request | LM Studio `qwen/qwen3-vl-8b` | z.ai `GLM-4.5-Flash` (standard free-tier key) |
+  |---|---|---|
+  | direct (control) | `tool_use=get_time` | `tool_use=get_time` |
+  | `any` ("Say hi.") | text only, no `tool_use` (stop `max_tokens`, 200 tokens) | text only, no `tool_use` (`end_turn`) |
+  | named `get_time` ("Say hi.") | text only, no `tool_use` | text only, no `tool_use` |
+  | `none` + direct question | text only, no `tool_use` → HONOURED | `tool_use=get_time` → IGNORED |
+
+  Quoted lines from the raw output:
+  - `tmp/tool-lmstudio.txt` (`max_tokens=1024`,
+    2026-11-18T10:55:38Z):
+    `direct 200 blocks=tool_use tool_use=get_time stop_reason=tool_use`,
+    `any_say_hi curl-failed`, `named curl-failed`,
+    `none_direct 200 blocks=text tool_use=NONE stop_reason=end_turn`
+  - `tmp/tool-lmstudio-forced.txt` (`max_tokens=200`,
+    2026-11-18T12:52:31Z):
+    `any_say_hi 200 blocks=text tool_use=NONE stop_reason=max_tokens`,
+    `named 200 blocks=text tool_use=NONE stop_reason=max_tokens`
+  - `tmp/tool-glm-45.txt` (`max_tokens=1024`,
+    2026-11-18T13:15:49Z):
+    `direct 200 blocks=thinking,text,tool_use tool_use=get_time stop_reason=tool_use`,
+    `any_say_hi 200 blocks=thinking,text tool_use=NONE stop_reason=end_turn`,
+    `named 200 blocks=thinking,text tool_use=NONE stop_reason=end_turn`,
+    `none_direct 200 blocks=thinking,text,tool_use tool_use=get_time stop_reason=tool_use`
+- **What it changes.** `tool_choice` is now PROVEN on both presets:
+  the control passed (each model can call tools), and the forced/named
+  requests still returned plain text, so the field is ignored — the
+  earlier "probable, not proven" caveat is resolved. The gap stays
+  declared on both presets; the `lmstudio-anthropic` and
+  `glm-anthropic` comments now say proven and record that `none` is
+  honoured by LM Studio and ignored by GLM. Both adapters' `patchGaps`
+  keep `none` in the body so an upstream that honours it (LM Studio)
+  sees the client's suppression.
+- **Option B (considered, not done).** A separate `tool_choice_none`
+  gap whose fix strips `tools` when the client asks for `none` —
+  considered and not done by the owner (owner decision in chat
+  2026-11-18, option A chosen).
+- **Files block:** `src/transformers/adapters/anthropic.adapter.ts`,
+  `src/transformers/adapters/openai.adapter.ts`,
+  `src/config/provider-presets.ts`, `src/services/gap-fixes.test.ts`,
+  `scripts/gates/tool-check-shim.sh`, `docs/decisions.md`.
+  Files outside the Files block: none.
