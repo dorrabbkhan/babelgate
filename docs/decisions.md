@@ -6832,3 +6832,62 @@ offered and not chosen): the `tool_choice` gap fix must not delete
   `src/config/provider-presets.ts`, `src/services/gap-fixes.test.ts`,
   `scripts/gates/tool-check-shim.sh`, `docs/decisions.md`.
   Files outside the Files block: none.
+
+## v1.5 Task 11 — generated compatibility matrix (spec §3.4)
+
+- **Files outside the Files block:**
+  - `tests/mocks/upstreams.ts`: the URL-image cells need a media host
+    for `media-fetch` to hit — added `MEDIA_URL`/`MEDIA_PNG_B64` and a
+    matching msw handler per the standing "mock new upstream behaviour
+    in tests/mocks/upstreams.ts" rule. The URL is a public-IP literal
+    (`http://93.184.216.34/pic.png`): `isIP` skips name resolution
+    entirely, so the SSRF guard still runs but no DNS lookup leaves
+    the box and msw intercepts the HTTP hop (`npm test` stays
+    offline).
+  - `tests/integration/matrix-features.test.ts` (new): home of the
+    five new feature describes (reasoning, URL image, document,
+    tool-result image, pass-through). The task's "(record cells; add
+    … cases)" also required the `recordMatrixCell` calls to land in
+    `pairs.test.ts`/`stream-pairs.test.ts`, which they did; putting
+    ~430 more lines of new cases there too would push both files
+    further past the ~400-line single-purpose rule, so the cases live
+    in their own file beside them.
+- **Interface deviation:** the plan names `vitest.config.ts`
+  (`globalTeardown`), but vitest 3.2.4 has no `globalTeardown` option —
+  `globalSetup` is the only hook, and its module's `teardown` export
+  is vitest's run-once-after-tests hook (verified against
+  `node_modules/vitest`'s `loadGlobalSetupFiles`). So the config holds
+  `globalSetup: "tests/matrix/matrix-report.ts"`; that module's
+  `setup` wipes `.out/` before workers and `teardown` merges the
+  workers' `cells-<pid>-<worker>.jsonl` files (recorded per process
+  because cells are recorded inside test workers) into
+  `.out/matrix.json` after the suite — the interface's "teardown
+  writes `tests/matrix/.out/matrix.json`" is honoured.
+- **`--check` compares cells, not bytes:** the committed
+  `docs/compatibility.md` is re-parsed into cells and compared to the
+  report's cells; a badge/link/title refresh ("header-only change")
+  can't fail CI, matching the spec's "a new client release never
+  makes main's CI red by itself". A cell difference exits 1 with a
+  unified diff of committed vs regenerated.
+- **Cell vocabulary chosen:** `note` = works with a caveat,
+  `fail` = the dialect cannot express it or the target refuses it.
+  Notes: `no_signature` (Chat/Ollama clients get reasoning text but no
+  signature round trip — conductor's call b), `inlined` (byte-only
+  Ollama target: URL fetched and inlined), `canonical` (pass-through
+  cell on a cross-format pair — served by the canonical path).
+  Fails: `no url field`, `no document field`, `no tool-image field`
+  (source dialect can't express), `no document target`,
+  `no tool-image target` (400 refusal naming the field),
+  `no passthrough` (Gemini/Ollama have no same-format shim — the
+  schema rejects `passthrough: true` there).
+- **Wire-format evidence:** every request shape reuses the dialect
+  fields the adapters already document (OpenAI `image_url`/`file`,
+  Anthropic `image`/`document`/`tool_result`, Gemini
+  `fileData`/`inlineData`, Responses `input_image`/`input_file`); the
+  new msw media handler is a fixed `image/png` GET — the fetch
+  mechanism under test, not a provider shape.
+- **`stream-pairs.test.ts` recording:** each matrix case records the
+  cell(s) it proves — `text` → `plain`/`stream`, the tool cases →
+  `tools`/`stream_tools` — so the four baseline features and
+  `structured` (pairs.test.ts) come from the existing tests; the
+  five new features from `matrix-features.test.ts`.

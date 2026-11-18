@@ -19,6 +19,9 @@ provider also gets byte-preserving pass-through to Responses-native
 upstreams (OpenRouter's Responses API, vLLM, Ollama's Responses endpoint,
 …): [docs/recipes/codex.md](docs/recipes/codex.md).
 
+What works where: [docs/compatibility.md](docs/compatibility.md) — the
+source × target matrix, generated from the test suite.
+
 ![Codex CLI fixing a failing test through babelgate, bridged to Claude on OpenRouter](docs/assets/demo-codex.gif)
 *Recorded with [scripts/demo](scripts/demo/); the model's thinking time is cut.*
 
