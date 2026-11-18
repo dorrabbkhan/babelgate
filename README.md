@@ -196,6 +196,8 @@ base URLs and key handling are in
 [docs/recipes/openai-compatible-providers.md](docs/recipes/openai-compatible-providers.md).
 Gemini CLI works too (`GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY`) —
 recipe: [docs/recipes/gemini-cli.md](docs/recipes/gemini-cli.md).
+Antigravity CLI (`agy`) uses the same mechanism in API-key mode —
+recipe: [docs/recipes/antigravity-cli.md](docs/recipes/antigravity-cli.md).
 
 ## The `babelgate` CLI
 

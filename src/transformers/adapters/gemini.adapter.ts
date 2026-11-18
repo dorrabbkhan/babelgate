@@ -33,6 +33,10 @@ import {
   type EnvelopePayload,
 } from "../reasoning-envelope";
 import {
+  fromGeminiSignature,
+  toGeminiSignature,
+} from "./gemini.signature";
+import {
   EFFORT_LADDER,
   budgetFor,
   effortForBudget,
@@ -155,6 +159,13 @@ type CanonicalReasoning = NonNullable<
  * budget (effort = the level whose starting budget fits, the budget
  * kept; a level wins when both are sent), `includeThoughts` →
  * `summary`. A non-object `thinkingConfig` keeps `field_dropped`.
+ * `thinkingBudget` also has two documented non-budget sentinels
+ * (same reference): `-1` = dynamic budget — the provider chooses,
+ * so nothing is decoded from it (a `thinkingLevel` in the same
+ * object still wins); `0` = thinking off — decoded to effort
+ * `"none"`, which the encoder turns back into `thinkingBudget: 0`
+ * on models that take a budget. Other non-positive or non-integer
+ * values keep a `field_dropped` note; they never fail the request.
  */
 function toCanonicalReasoning(
   gc: GeminiGenerationConfig | undefined,
@@ -194,16 +205,25 @@ function toCanonicalReasoning(
     }
   }
   if (fields.thinkingBudget !== undefined) {
-    if (
-      typeof fields.thinkingBudget === "number" &&
-      Number.isFinite(fields.thinkingBudget)
-    ) {
-      reasoning.effort ??= effortForBudget(fields.thinkingBudget);
-      reasoning.budgetTokens = fields.thinkingBudget;
-    } else {
+    const budget = fields.thinkingBudget;
+    if (typeof budget !== "number" || !Number.isFinite(budget)) {
       note(
         "generationConfig.thinkingConfig.thinkingBudget",
         'Dropping "thinkingBudget" (not a number)',
+      );
+    } else if (budget === -1) {
+      // -1 = dynamic budget: the provider chooses, so nothing is
+      // lost by decoding nothing.
+    } else if (budget === 0) {
+      // 0 = thinking off. `??=`: a thinkingLevel decoded above wins.
+      reasoning.effort ??= "none";
+    } else if (Number.isInteger(budget) && budget > 0) {
+      reasoning.effort ??= effortForBudget(budget);
+      reasoning.budgetTokens = budget;
+    } else {
+      note(
+        "generationConfig.thinkingConfig.thinkingBudget",
+        'Dropping "thinkingBudget" (not a positive integer, -1 or 0)',
       );
     }
   }
@@ -265,7 +285,9 @@ export function toCanonicalRequest(
             p as { thoughtSignature?: unknown }
           ).thoughtSignature;
           if (typeof carrier === "string" && carrier !== "") {
-            const payload = unpackEnvelope(carrier);
+            const payload = unpackEnvelope(
+              fromGeminiSignature(carrier),
+            );
             if (payload === undefined) {
               recordNote(
                 {
@@ -310,7 +332,21 @@ export function toCanonicalRequest(
         ...(toolCalls.length > 0 && { toolCalls }),
       };
       resolveEnvelopeSignatures(msg, envelopeSigs, contentIndex);
-      messages.push(msg);
+      // functionResponse parts are tool results wherever they sit —
+      // decode keys on part type, not on the content's role. agy
+      // (Go genai) sends them in a "model"-role content, which
+      // Google's API accepts even though the function-calling docs
+      // show them under "user" (captured agy 1.5.11 turn 2;
+      // https://ai.google.dev/gemini-api/docs/function-calling). A
+      // model turn of only responses emits no assistant message: an
+      // empty one would leave the upstream request ending on a model
+      // turn, which Google 400s ("Requests ending with a model turn
+      // are not supported").
+      const toolMessages = toCanonicalToolMessages(parts, pendingCalls);
+      if (otherParts.length > 0 || toolMessages.length === 0) {
+        messages.push(msg);
+      }
+      messages.push(...toolMessages);
     } else {
       messages.push(...toCanonicalToolMessages(parts, pendingCalls));
       if (otherParts.length > 0) {
@@ -508,7 +544,9 @@ function extractContentParts(
         ? p.thoughtSignature
         : undefined;
     const payload =
-      carrier !== undefined ? unpackEnvelope(carrier) : undefined;
+      carrier !== undefined
+        ? unpackEnvelope(fromGeminiSignature(carrier))
+        : undefined;
     const sigPath = `contents[${contentIndex}].parts[${j}].thoughtSignature`;
     if (p.thought === true) {
       if (payload !== undefined) {
@@ -1351,7 +1389,9 @@ export function fromCanonicalResponse(
   // become `{text, thought: true}` parts and the turn's envelope
   // (all reasoning parts and signatures) rides the first thought
   // part's `thoughtSignature`, or the first functionCall part's when
-  // there is no thought part. `thought: true`/`thoughtSignature`:
+  // there is no thought part — the wire value is standard base64 of
+  // the envelope (toGeminiSignature). `thought: true`/
+  // `thoughtSignature`:
   // https://ai.google.dev/gemini-api/docs/thinking and
   // https://ai.google.dev/gemini-api/docs/thought-signatures
   // (part fields per https://ai.google.dev/api/generate-content#Part).
@@ -1415,6 +1455,10 @@ export function fromCanonicalResponse(
       reasoning: reasoningParts,
       signatures: envelopeSigs,
     });
+    // The cap stays on the `bg1.` envelope itself — the wire value is
+    // its standard-base64 form (toGeminiSignature), which adds about
+    // a third; proto bytes fields travel as base64, and clients like
+    // the Go genai SDK unmarshal `thoughtSignature` into `[]uint8`.
     if (envelope === undefined) {
       recordNote(
         {
@@ -1434,7 +1478,7 @@ export function fromCanonicalResponse(
           text: part.reasoning.text ?? "",
           thought: true,
           ...(!attached && envelope !== undefined
-            ? { thoughtSignature: envelope }
+            ? { thoughtSignature: toGeminiSignature(envelope) }
             : {}),
         } as Part;
         if (!attached && envelope !== undefined) attached = true;
@@ -1449,7 +1493,7 @@ export function fromCanonicalResponse(
     for (const [i, call] of toolCalls.entries()) {
       const onFirst =
         !attached && envelope !== undefined && i === 0
-          ? { thoughtSignature: envelope }
+          ? { thoughtSignature: toGeminiSignature(envelope) }
           : {};
       if (Object.keys(onFirst).length > 0) attached = true;
       parts.push(
