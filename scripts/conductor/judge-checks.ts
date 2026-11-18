@@ -48,6 +48,10 @@ const na = (id: string, why: string): Check => ({ id, status: "N/A", reasons: [w
 
 // ---------- plan **Files:** block ----------
 
+// A bare name that looks like a repo-root file: leading dot (.gitignore)
+// or a root-config extension (.json/.md/.yaml/.yml/.toml/.sh).
+const ROOT_NAME_RE = /^\.|\.(json|md|ya?ml|toml|sh)$/;
+
 export function filesBlockPatterns(planText: string, task: string): string[] | null {
   const lines = planText.split("\n");
   const start = lines.findIndex((l) => l.startsWith(`### Task ${task}:`));
@@ -65,17 +69,29 @@ export function filesBlockPatterns(planText: string, task: string): string[] | n
       break;
     }
     // Plans write later entries on a line by bare name, after a full path
-    // in the same directory ("`src/config/gateway.schema.ts`, `yaml-config.ts`").
-    // A bare name resolves against the nearest full path before it on the
-    // line; with none before it ("`anthropic.adapter.ts`", "each
-    // `*.adapter.test.ts`") it matches that file name in any directory.
+    // in the same directory ("`src/config/gateway.schema.ts`, `yaml-config.ts`"),
+    // and mix in bare repo-root files ("`scripts/check.sh`, `package.json`,
+    // `.gitignore`"). So a bare name resolves against BOTH the nearest full
+    // path before it on the line AND the repository root; names that look
+    // like root files (leading dot, or .json/.md/.yaml/.yml/.toml/.sh) also
+    // match in any directory. With no full path before it
+    // ("`anthropic.adapter.ts`", "each `*.adapter.test.ts`") it matches that
+    // file name in any directory. Trade-off: this over-matches — a same-named
+    // file elsewhere in the tree silently counts as in-block — but a missed
+    // FLAG there is far less harmful than a false FLAG on every task whose
+    // Files line mixes full paths and bare root files.
     let dir: string | null = null;
     for (const m of l.matchAll(/`([^`]+)`/g)) {
       const p = m[1];
       if (p.includes("/")) {
         dir = p.slice(0, p.lastIndexOf("/") + 1);
         pats.push(p);
-      } else pats.push(dir !== null ? dir + p : "**/" + p);
+      } else if (dir === null) {
+        pats.push("**/" + p);
+      } else {
+        pats.push(dir + p, p);
+        if (ROOT_NAME_RE.test(p)) pats.push("**/" + p);
+      }
     }
   }
   return pats.length ? pats : null;

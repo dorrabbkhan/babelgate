@@ -209,6 +209,40 @@ describe("judge.ts (spec §3.0.1)", () => {
     );
   });
 
+  // v1.5 Task 11: the Files line mixes full paths with bare repo-root
+  // files ("`scripts/check.sh` (…), `package.json` (…), `.gitignore` (…),
+  // `README.md` (…)"); a bare name is not necessarily in the preceding
+  // path's directory.
+  const judgeTask11 = (paths: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "judge-seed-"));
+    const diffFile = join(dir, "seed.diff");
+    writeFileSync(diffFile, paths.map((p) => seed(p, ["const c = 3;"])).join(""));
+    return runJudge({
+      version: "v1.5",
+      task: "11",
+      diffFile,
+      plan: PLAN,
+      title: "feat: generated compatibility matrix",
+      reportDir: dir,
+    });
+  };
+
+  it("bare root files after a full path match the Files block", () => {
+    const r = judgeTask11([
+      "package.json",
+      ".gitignore",
+      "README.md",
+      "vitest.config.ts",
+      "scripts/check.sh",
+    ]);
+    expect(line(r, "files-block")).toBe(
+      "PASS files-block every diff file is in the task's Files block",
+    );
+    // package.json is in-block, but owner-gate still flags it for the
+    // conductor to read — the flag must not disappear.
+    expect(line(r, "owner-gate")).toMatch(/^FLAG owner-gate .*package\.json/);
+  });
+
   it("a long FLAG keeps whole reasons and counts the rest", () => {
     const paths = ["a", "b", "c", "d", "e"].map((x) => `src/extra/${x}-file.ts`);
     const r = judgeTask3(paths);
