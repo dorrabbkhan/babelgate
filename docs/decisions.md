@@ -7059,33 +7059,34 @@ the changed files are listed here by full path:
 
 ## v1.5 Task 13 — supply-chain release patch (spec §3.5)
 
-- **The patch adds the npm and GitHub-release jobs the workflow never
-  had.** The interface says "the patch changes `release.yml`" but the
-  file on main only pushed a GHCR image — there was no `npm publish`
-  step and no GitHub release to attach an SBOM to. So the patch adds two
-  jobs: `npm-publish` (`needs: smoke-pack`, `npm publish --provenance
-  --access public` with `NODE_AUTH_TOKEN` from `secrets.NPM_TOKEN` —
-  https://docs.npmjs.com/generating-provenance-statements) and `release`
-  (`needs: [docker, npm-publish]`), which creates the GitHub release the
-  SBOM attaches to. Signing lives inside the existing `docker` job,
-  right after the push, where the digest is known.
-- **Permissions: interface's union at top level, least privilege per
-  job.** The top-level `permissions:` becomes the named set
-  (`id-token: write`, `packages: write`, `contents: write`); each job
-  then narrows it, matching the file's own convention (smoke-pack
-  already narrows to `contents: read`): `docker` gets `contents: read`
-  + `packages: write` + `id-token: write` (keyless cosign mints the
-  Fulcio certificate from the job's OIDC token —
-  https://docs.sigstore.dev/cosign/signing/overview/); `npm-publish`
-  gets `contents: read` + `id-token: write` (the `--provenance`
-  Sigstore bundle); `release` gets `contents: write`.
+- **Owner decision (2026-11-18): npm publish and GitHub releases stay
+  manual.** The owner publishes to npm and creates GitHub releases by
+  hand, never from CI. So spec §3.5's npm provenance and CI-attached
+  SBOM are intentionally not delivered; the signed GHCR image is the
+  only part that ships. The patch therefore changes only the `docker`
+  job — there is no `npm-publish` or `release` job, no `NPM_TOKEN`, and
+  no `gh release create` in CI. (An earlier version of the patch added
+  those jobs; the owner overrode the Task 13 interface and the fix
+  round removed them.)
+- **Why provenance is dropped, not relocated.** `npm publish
+  --provenance` mints a Sigstore bundle from the publishing job's OIDC
+  token, which only exists inside a trusted CI builder
+  (https://docs.npmjs.com/generating-provenance-statements). A manual
+  `npm publish` from the owner's machine cannot produce one, so the
+  tarball simply carries npm's ordinary registry signature
+  (https://docs.npmjs.com/about-registry-signatures) — what
+  `npm audit signatures` actually checks.
+- **Permissions: least privilege per job, minimal top level.** Nothing
+  in the workflow writes contents, so the top-level block drops to
+  `contents: read` (its `packages: write` moved into the only job that
+  needs it). `docker` gets `contents: read` + `packages: write` +
+  `id-token: write` (keyless cosign mints the Fulcio certificate from
+  the job's OIDC token — https://docs.sigstore.dev/cosign/signing/overview/);
+  `smoke-pack` keeps `contents: read`.
 - **Cosign is pinned like the rest of the docker job.**
   `sigstore/cosign-installer@756fe2d2… # v4.1.3` (the release tag's
   commit SHA, fetched from the GitHub API —
-  https://github.com/sigstore/cosign-installer); new jobs pin
-  `actions/checkout` at the same v5.1.0 SHA the file already uses and
-  `actions/setup-node@49933ea5… # v4.4.0` (the file's only other
-  setup-node reference is `@v4`). `cosign sign --yes
+  https://github.com/sigstore/cosign-installer). `cosign sign --yes
   ghcr.io/dorrabbkhan/babelgate@${{ steps.build.outputs.digest }}`
   signs the pushed manifest digest (`id: build` added;
   `steps.build.outputs.digest` is a documented
@@ -7095,31 +7096,25 @@ the changed files are listed here by full path:
   `npm sbom --sbom-format cyclonedx --omit dev` exits 0 and emits a
   CycloneDX 1.5 document (https://docs.npmjs.com/cli/commands/npm-sbom);
   `npm ls --omit=dev --all --parseable | tail -n +2 | wc -l` prints
-  106. Both run in the `release` job after `npm ci`, and the SBOM is
-  written to `babelgate-<version>.cdx.json` (version = tag minus `v`)
-  and attached by `gh release create <tag> <file>`.
-- **Release notes keep working if `generate-notes` fails.** The notes
-  file always leads with `Runtime dependencies: <n>` and the SBOM
-  line; `gh api repos/…/releases/generate-notes` output is appended
-  under `|| true`, so a notes-API failure cannot leave npm and GHCR
-  published with no GitHub release to verify against. `--notes-file`
-  is used because `--generate-notes` and `--notes-file` are mutually
-  exclusive in `gh release create`.
-- **`npm publish` still gates on `prepublishOnly`.** The existing
-  `./scripts/check.sh` hook runs inside the `npm-publish` job too — a
-  release-time publish enforces the same gate as a local one.
-- **SECURITY.md "Verifying releases"** documents `npm audit
-  signatures` (https://docs.npmjs.com/cli/commands/npm-audit,
-  `audit signatures` subsection), `cosign verify` with
-  `--certificate-identity-regexp` pinned to
-  `release.yml@refs/tags/v.*` and
-  `--certificate-oidc-issuer https://token.actions.githubusercontent.com`
-  (flag names per
-  https://github.com/sigstore/cosign/blob/main/doc/cosign_verify.md —
-  still current), and the SBOM's location on the GitHub release. The
-  regexp is anchored `^…$` and scoped to `v*` tags — exactly the refs
-  that can trigger the workflow.
-- **Files outside the Files block:** none — the patch file is created,
-  `SECURITY.md` and this file are modified, and `.github/workflows/
-  release.yml` itself stays untouched (workflow files are only ever
-  changed by the owner applying a patch, E8).
+  106. Under the owner's manual-release decision these are the commands
+  the maintainer runs at release time: `npm ci && npm sbom
+  --sbom-format cyclonedx --omit dev > babelgate-<version>.cdx.json`,
+  then attach the file to the GitHub release by hand and put the count
+  in the notes' `Runtime dependencies: <n>` line — all documented in
+  `SECURITY.md`.
+- **SECURITY.md "Verifying releases"** keeps the `cosign verify`
+  command unchanged (`--certificate-identity-regexp` pinned to
+  `release.yml@refs/tags/v.*`,
+  `--certificate-oidc-issuer https://token.actions.githubusercontent.com`;
+  flag names per
+  https://github.com/sigstore/cosign/blob/main/doc/cosign_verify.md),
+  describes `npm audit signatures` truthfully as a registry-signature
+  check rather than provenance, and marks the SBOM and dependency
+  count as maintainer-manual steps with the exact commands.
+- **Files changed:** `docs/conductor/patches/v1.5-task13-supply-chain.patch`
+  (regenerated from a real edit of `.github/workflows/release.yml` in a
+  scratch copy — `git apply --check` against origin/main's file passes
+  and the patched file parses as YAML), `SECURITY.md`,
+  `docs/decisions.md`. `.github/workflows/release.yml` itself stays
+  untouched (workflow files are only ever changed by the owner applying
+  a patch, E8).
