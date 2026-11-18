@@ -39,9 +39,13 @@
 # Output: a markdown summary (client versions, gate results, shape
 # diff) always written to $REPLAY_OUT_DIR/summary.md, plus
 # versions.txt for the workflow's issue title; the summary is also
-# appended to $GITHUB_STEP_SUMMARY when set. Exit 1 on any gate or
-# record failure or when shape-diff reports added shapes; exit 2 on
-# usage errors.
+# appended to $GITHUB_STEP_SUMMARY when set. After the summary,
+# client-replay-artifacts.sh stages the JSONLs, the four sub-run logs
+# and summary.md into tmp/client-replay/ (the workflow's upload path —
+# a staged file containing the key is dropped) and tails each failed
+# sub-run's log into the job log inside group markers. Exit 1 on any
+# gate or record failure or when shape-diff reports added shapes;
+# exit 2 on usage errors.
 #
 # Env overrides: REPLAY_OUT_DIR (default tmp/client-replay under the
 # repo), CLAUDE_TIMEOUT_S / CODEX_TIMEOUT_S (the record scripts' hard
@@ -223,6 +227,15 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   cat "$out_dir/summary.md" >> "$GITHUB_STEP_SUMMARY"
 fi
 cat "$out_dir/summary.md"
+
+# Diagnostics: stage the artifacts where the workflow's upload step
+# reads them and tail each failed sub-run's log into the job log.
+REPLAY_WORK_DIR="$work" \
+REPLAY_SUMMARY="$out_dir/summary.md" \
+ARTIFACT_DIR="$PWD/tmp/client-replay" \
+CLAUDE_GATE="$claude_gate" CODEX_GATE="$codex_gate" \
+CLAUDE_RECORD="$claude_record" CODEX_RECORD="$codex_record" \
+  scripts/gates/client-replay-artifacts.sh
 
 failures=0
 for v in "$claude_gate" "$codex_gate" "$claude_record" "$codex_record"; do
