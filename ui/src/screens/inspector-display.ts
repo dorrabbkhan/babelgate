@@ -35,6 +35,168 @@ function byteLen(s: string): number {
   return new TextEncoder().encode(s).length;
 }
 
+// ============ Media rendering (v1.5 spec §3.2.2) ============
+// Media bytes are content too: image and document parts render as
+// `image (url: <host>/…)` / `image (<mimeType>, <KB> KB)` /
+// `document (<mimeType>, <name>, <KB> KB)` — the URL's host and the
+// byte size, never the bytes. One label covers every wire carrier:
+// canonical image/document parts, Anthropic `source` blocks, chat
+// `image_url`/`file` parts, Responses `input_image`/`input_file`,
+// Gemini `inlineData`/`fileData` and Ollama `images[]` strings.
+
+type Rec = Record<string, unknown>;
+
+function isRec(v: unknown): v is Rec {
+  return v !== null && typeof v === "object" && !Array.isArray(v);
+}
+
+function strOf(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+
+const DATA_URL = /^data:([^;,]+);base64,(.*)$/s;
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
+}
+
+function kbLabel(bytes: number): string {
+  return `${Math.max(1, Math.ceil(bytes / 1024))} KB`;
+}
+
+/** Decoded byte count of a base64 string → "<n> KB" (min 1). */
+function kbOf(base64: string): string {
+  return kbLabel(Math.floor((base64.length * 3) / 4));
+}
+
+/** A URL ref → "url: <host>/…"; a data: URI → mime + size. */
+function refLabel(url: string): string {
+  const d = DATA_URL.exec(url);
+  return d !== null
+    ? `${d[1]}, ${kbOf(d[2]!)}`
+    : `url: ${hostOf(url)}/…`;
+}
+
+function join(parts: (string | undefined)[]): string {
+  return parts.filter((p): p is string => p !== undefined).join(", ");
+}
+
+/** Byte size of a media ref — base64-decoded, or plain when `text`. */
+function sizeOf(ref: { data?: string; text?: boolean }): string | undefined {
+  if (ref.data === undefined) return undefined;
+  return ref.text === true ? kbLabel(byteLen(ref.data)) : kbOf(ref.data);
+}
+
+/** `image (<mimeType>, <KB> KB)` for bytes, `image (url: <host>/…)` for a ref. */
+function imageLabel(ref: {
+  url?: string;
+  data?: string;
+  text?: boolean;
+  mime?: string;
+}): string {
+  if (ref.url !== undefined) return `image (${refLabel(ref.url)})`;
+  if (ref.data !== undefined) {
+    return `image (${join([ref.mime, sizeOf(ref)])})`;
+  }
+  return "image";
+}
+
+/** `document (<mimeType>, <name>, <KB> KB)` — name absent when the wire has none. */
+function documentLabel(ref: {
+  url?: string;
+  data?: string;
+  text?: boolean;
+  mime?: string;
+  name?: string;
+}): string {
+  const inner = join([
+    ref.mime,
+    ref.name,
+    ref.url !== undefined ? refLabel(ref.url) : sizeOf(ref),
+  ]);
+  return inner === "" ? "document" : `document (${inner})`;
+}
+
+/** file/file_data carriers (chat `file`, Responses `input_file`) → a document. */
+function fileLabel(f: Rec): string {
+  const fd = strOf(f.file_data);
+  const d = fd !== undefined ? DATA_URL.exec(fd) : null;
+  return documentLabel({
+    url: d === null ? strOf(f.file_url) : undefined,
+    data: d !== null ? d[2] : fd,
+    mime: d !== null ? d[1] : undefined,
+    name: strOf(f.filename),
+  });
+}
+
+/**
+ * The media label for one object, or undefined when it carries no
+ * media. Detection is structural — a shape is media in every stage,
+ * so the same label serves source, canonical, target and response.
+ */
+function mediaOf(o: Rec): string | undefined {
+  switch (o.type) {
+    case "image":
+    case "document": {
+      // Canonical part (`image`/`document` key) or Anthropic wire
+      // block (`source` key — image, document and text sources).
+      const part = o[o.type];
+      const box = isRec(part)
+        ? part
+        : isRec(o.source)
+          ? o.source
+          : undefined;
+      if (box === undefined) return undefined;
+      const ref = {
+        url: strOf(box.url),
+        data: strOf(box.data),
+        // Anthropic `source.type:"text"` data is plain text, not
+        // base64 — its size is its byte length.
+        text: box.type === "text" || undefined,
+        mime: strOf(box.mimeType) ?? strOf(box.media_type),
+      };
+      return o.type === "image"
+        ? imageLabel(ref)
+        : documentLabel({ ...ref, name: strOf(box.name) });
+    }
+    case "image_url":
+    case "input_image": {
+      const url = isRec(o.image_url)
+        ? strOf(o.image_url.url)
+        : strOf(o.image_url);
+      return url !== undefined ? imageLabel({ url }) : undefined;
+    }
+    case "file":
+      return isRec(o.file) ? fileLabel(o.file) : undefined;
+    case "input_file":
+      return fileLabel(o);
+  }
+  // Gemini parts carry no `type` — inlineData is bytes, fileData a ref.
+  const inline = isRec(o.inlineData) ? o.inlineData : undefined;
+  if (inline !== undefined) {
+    const data = strOf(inline.data);
+    if (data === undefined) return undefined;
+    const mime = strOf(inline.mimeType);
+    return mime !== undefined && mime.startsWith("image/")
+      ? imageLabel({ data, mime })
+      : documentLabel({ data, mime });
+  }
+  const fileData = isRec(o.fileData) ? o.fileData : undefined;
+  if (fileData !== undefined) {
+    const url = strOf(fileData.fileUri);
+    if (url === undefined) return undefined;
+    const mime = strOf(fileData.mimeType);
+    return mime !== undefined && mime.startsWith("image/")
+      ? imageLabel({ url, mime })
+      : documentLabel({ url, mime });
+  }
+  return undefined;
+}
+
 /**
  * The display form of one body value. Canonical reasoning parts become
  * labelled `reasoning` blocks; canonical signatures become
@@ -69,6 +231,10 @@ function displayValue(value: unknown, key?: string): unknown {
         `origin ${o.origin.provider}/${o.origin.model}>`
       );
     }
+    // Media parts → `image (…)`/`document (…)` labels — the host and
+    // byte size, never the bytes (v1.5 spec §3.2.2).
+    const media = mediaOf(o);
+    if (media !== undefined) return media;
     // A canonical reasoning part → one labelled, collapsible block.
     if (
       o.type === "reasoning" &&
@@ -96,12 +262,18 @@ function displayValue(value: unknown, key?: string): unknown {
     for (const [k, v] of Object.entries(o)) {
       // Anthropic redacted_thinking.data carries signature bytes —
       // masked parent-aware, so an ordinary `data` key stays visible.
+      // Ollama `images[]` carries raw base64 strings — each becomes an
+      // `image (<KB> KB)` label (v1.5 §3.2.2).
       out[k] =
         k === "data" &&
         o.type === "redacted_thinking" &&
         typeof v === "string"
           ? `<signature: ${byteLen(v)} bytes>`
-          : displayValue(v, k);
+          : k === "images" &&
+              Array.isArray(v) &&
+              v.every((s) => typeof s === "string")
+            ? v.map((s) => `image (${kbOf(s as string)})`)
+            : displayValue(v, k);
     }
     return out;
   }

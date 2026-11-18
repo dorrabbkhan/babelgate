@@ -519,6 +519,240 @@ describe("Inspector screen", () => {
     expect(text).not.toContain("<truncated:");
   });
 
+  it("url image shows host only", async () => {
+    getMock.mockResolvedValue({
+      row: makeRow({ notes: [], diagnostics: [], repairs: [] }),
+      bodies: {
+        source: {
+          value: {
+            model: "m",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "image_url",
+                    image_url: {
+                      url: "https://cdn.example.com/pic/secret-path.png?token=abc123",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        canonical: {
+          value: {
+            model: "m",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "image",
+                    image: {
+                      url: "https://cdn.example.com/pic/secret-path.png?token=abc123",
+                      mimeType: "image/png",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: { id: "r" } } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    for (let round = 0; round < 6; round++) {
+      const closed = [...container.querySelectorAll(".twisty")].filter(
+        (t) => t.textContent?.includes("▸"),
+      );
+      if (closed.length === 0) break;
+      await act(async () => {
+        for (const t of closed) {
+          t.parentElement!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true }),
+          );
+        }
+      });
+    }
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("image (url: cdn.example.com/…)");
+    // The path, query and the full URL are content-adjacent: only the
+    // host renders (v1.5 §3.2.2 — type, size and URL, never content).
+    expect(text).not.toContain("secret-path");
+    expect(text).not.toContain("token=abc123");
+    expect(text).not.toContain(
+      "https://cdn.example.com/pic/secret-path.png",
+    );
+  });
+
+  it("pdf shows size not bytes", async () => {
+    const PDF = "QUJD".repeat(512); // 2048 base64 chars → 1536 bytes → 2 KB
+    getMock.mockResolvedValue({
+      row: makeRow({ notes: [], diagnostics: [], repairs: [] }),
+      bodies: {
+        source: {
+          value: {
+            model: "m",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "document",
+                    source: {
+                      type: "base64",
+                      media_type: "application/pdf",
+                      data: PDF,
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        canonical: {
+          value: {
+            model: "m",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "document",
+                    document: {
+                      data: PDF,
+                      mimeType: "application/pdf",
+                      name: "report.pdf",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: { id: "r" } } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    for (let round = 0; round < 6; round++) {
+      const closed = [...container.querySelectorAll(".twisty")].filter(
+        (t) => t.textContent?.includes("▸"),
+      );
+      if (closed.length === 0) break;
+      await act(async () => {
+        for (const t of closed) {
+          t.parentElement!.dispatchEvent(
+            new MouseEvent("click", { bubbles: true }),
+          );
+        }
+      });
+    }
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("document (application/pdf, report.pdf, 2 KB)");
+    expect(text).toContain("document (application/pdf, 2 KB)");
+    expect(text).not.toContain("QUJD");
+  });
+
+  it("pass-through row shows preset", async () => {
+    getMock.mockResolvedValue({
+      row: makeRow({
+        passthrough: true,
+        preset: "ollama-anthropic",
+        sourceApi: "anthropic",
+        provider: "shim",
+        notes: [],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m" } },
+        target: [{ value: { model: "upstream-m" } }],
+        response: { wire: { value: { id: "r" } } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("pass-through");
+    expect(text).toContain("ollama-anthropic");
+  });
+
+  it("gap notes listed", async () => {
+    getMock.mockResolvedValue({
+      row: makeRow({
+        passthrough: true,
+        notes: [
+          {
+            stage: "encode",
+            adapter: "anthropic",
+            code: "tool_choice_dropped",
+            path: "tool_choice",
+          },
+          {
+            stage: "encode",
+            adapter: "anthropic",
+            code: "cache_control_dropped",
+            path: "system[0]",
+          },
+          {
+            stage: "encode",
+            adapter: "anthropic",
+            code: "count_tokens_estimated",
+          },
+          {
+            stage: "encode",
+            adapter: "anthropic",
+            code: "usage_estimated",
+          },
+        ],
+        diagnostics: [],
+        repairs: [],
+      }),
+      bodies: {
+        source: { value: { model: "m" } },
+        target: [{ value: { model: "m" } }],
+        response: { wire: { value: { id: "r" } } },
+      },
+    });
+    await act(async () => {
+      render(<Inspector id="r1" />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const notes = container.querySelector(".inspector-notes");
+    expect(notes).not.toBeNull();
+    expect(notes!.textContent).toContain("tool_choice_dropped");
+    expect(notes!.textContent).toContain("cache_control_dropped");
+    expect(notes!.textContent).toContain("count_tokens_estimated");
+    expect(notes!.textContent).toContain("usage_estimated");
+  });
+
   it("pass-through badge", async () => {
     getMock.mockResolvedValue({
       row: makeRow({

@@ -76,6 +76,8 @@ export interface RequestRow {
   reasoningTokens: number | null;
   /** Set only on a pass-through row — absent elsewhere (v1.4 §3.4). */
   passthrough?: boolean;
+  /** The shim preset that relayed — pass-through rows only (v1.5 §3.3). */
+  preset?: string;
   costUsd: number | null;
   wouldCostUsd: number | null;
   costEstimated: boolean;

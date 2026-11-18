@@ -133,7 +133,7 @@ function observeStreamEvents(
  * before routing, for the bridged hop that never came) is removed —
  * the inspector shows source, target and response.wire only.
  */
-function markPassthrough(): void {
+function markPassthrough(entry: ProviderEntry): void {
   const trace = currentTrace();
   if (trace === undefined) return;
   // The routing decode's notes describe transforms that never ran —
@@ -142,6 +142,9 @@ function markPassthrough(): void {
   trace.notes = trace.notes.filter((n) => n.stage !== "decode");
   if (trace.bodies !== undefined) delete trace.bodies.canonical;
   trace.passthrough = true;
+  // §3.3 (Task 15): the preset name rides the row so the inspector's
+  // pass-through marker can name the shim endpoint that relayed.
+  if (entry.preset !== undefined) trace.preset = entry.preset;
 }
 
 /** Unary pass-through finish: diagnostics + trace + the relayed body. */
@@ -168,7 +171,7 @@ export async function finishPassthroughUnary(opts: {
   trace?.diagnostics.push(
     ...diagnoseToolCalls(observed.calls ?? [], canonical.tools),
   );
-  markPassthrough();
+  markPassthrough(result.entry);
   const usage = observed.usage;
   await finishTrace({
     reason: opts.reason,
@@ -250,7 +253,7 @@ export async function finishPassthroughTrace(opts: {
   trace?.diagnostics.push(
     ...diagnoseToolCalls(observed.calls ?? [], canonical.tools),
   );
-  markPassthrough();
+  markPassthrough(result.entry);
   const failed =
     terminal?.type === "response.failed" ||
     observation.errorKind !== undefined;

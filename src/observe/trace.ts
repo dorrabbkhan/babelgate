@@ -89,6 +89,12 @@ export interface RequestTrace extends RouteLogRecord {
    * request, so existing traces and sink shapes are unchanged.
    */
   passthrough?: boolean;
+  /**
+   * v1.5 §3.3 (Task 15): the shim preset of the entry that relayed
+   * the request — set only on pass-through rows so the inspector's
+   * pass-through marker can name it.
+   */
+  preset?: string;
   /** canonical error kind, never a message body */
   errorType?: CanonicalErrorKind | string;
   cacheReadTokens?: number;

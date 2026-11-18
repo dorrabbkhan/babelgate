@@ -79,7 +79,10 @@ function Meta({ row }: { row: RequestRow }) {
       <div>
         <strong>{row.requestedModel}</strong> → {routed}{" "}
         {row.passthrough === true && (
-          <span class="badge">pass-through</span>
+          <span class="badge">
+            pass-through
+            {row.preset !== undefined && ` · ${row.preset}`}
+          </span>
         )}{" "}
         · {row.status} · http {row.httpStatus} · {row.totalMs} ms ·{" "}
         {new Date(row.startedAt).toLocaleString()}

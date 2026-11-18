@@ -7487,3 +7487,64 @@ the changed files are listed here by full path:
   extractor fix above. The earlier bullet's "no helper change was
   needed" held for `tokenBudget`; this second cause is in the
   extractor, not the budget.
+
+## v1.5 Task 15 — inspector shows media and the shim preset (spec §3.2.2, §3.3)
+
+- **Files outside the Files block** (the Files block covers only
+  `ui/src/screens/Inspector.tsx`, `ui/src/screens/inspector-display.ts`,
+  `ui/src/screens/Inspector.test.tsx`; each extra file is needed because
+  the interface — "the pass-through marker shows the preset name" —
+  requires the preset to reach the request row, and the row is built
+  from the trace, not from config):
+  - `src/observe/trace.ts`: `RequestTrace.preset?: string` — the field
+    that carries the preset from the relay to the row; set only on
+    pass-through rows, like `passthrough` itself (v1.4 §3.4).
+  - `src/services/passthrough-trace.ts`: `markPassthrough(entry)`
+    records `entry.preset` on the trace — the only place a pass-through
+    trace is marked, so the preset can never appear on a translated
+    request.
+  - `src/observe/sinks/usage-store.ts`: migration v3
+    (`ALTER TABLE requests ADD COLUMN preset TEXT`) and one more insert
+    column — same pattern as v1.4 Task 12's `passthrough` column
+    (migration v2).
+  - `src/observe/sinks/usage-queries.ts`: `RequestRow.preset` plus the
+    two row mappings (`toRequestRow` reads `raw.preset`, `traceToRow`
+    reads `trace.preset`), so the field reaches `/ui/api/requests` and
+    `/ui/api/live` with no route change.
+  - `src/observe/sinks/usage-store.test.ts`: the two
+    `schema_version` assertions move 2 → 3 (the assertion stays exactly
+    as strong — "migrates to the latest schema"), and the v1-migration
+    test gains the preset round trip (`new-row` keeps it, `old-row`
+    gets NULL → `preset` absent). No assertion weakened or removed.
+  - `ui/src/api.ts`: UI-side `RequestRow.preset?: string`, matching the
+    server row.
+- **Started from `tmp/task15-partial.patch`** (a prior session killed
+  before it committed). Verified every hunk; three fixes on top:
+  TypeScript could not narrow `o[o.type]` in `mediaOf` (hoisted to a
+  `part` const — the applied code had not been typechecked);
+  `document ()` could render when a carrier has neither url nor data
+  (e.g. an `input_file` with only `file_id`) — now a bare `document`
+  label, matching `image`'s fallback; and an Anthropic
+  `source.type: "text"` document's `data` is plain text, not base64 —
+  its size is now the byte length, not the base64 estimate.
+- **Media masking is display-layer only** (`inspector-display.ts`
+  `mediaOf`): media bytes stay in the body ring where the privacy
+  rule already allows them (`privacy-canary.test.ts` pins that) and
+  never reach the `requests` row — the label shows type, host and
+  KB size only. Detection is structural so one label covers every
+  stage and every wire carrier: canonical `image`/`document` parts,
+  Anthropic `source` blocks, chat `image_url`/`file` parts, Responses
+  `input_image`/`input_file`, Gemini `inlineData`/`fileData`, and
+  Ollama `images[]` strings — the same shapes the adapters' decode
+  paths document.
+- **Gap notes needed no code:** `patchGaps`/`passthrough-trace` record
+  `tool_choice_dropped`, `cache_control_dropped`,
+  `count_tokens_estimated`, `usage_estimated` and `url_image_inlined`
+  with stage `"encode"`, which survives `markPassthrough`'s decode-note
+  sweep; the inspector's existing Notes block lists them. The
+  `"gap notes listed"` test pins that end to end.
+- **Ambiguity resolved:** the interface says the marker "shows the
+  preset name" but pass-through can also run without a preset
+  (`passthrough: true` opt-in) — the badge then stays the v1.4
+  `pass-through` marker, and the preset renders only when present
+  (`pass-through · <preset>`).
