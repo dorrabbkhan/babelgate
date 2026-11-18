@@ -386,4 +386,13 @@ providers:
       "tool_choice",
     ]);
   });
+
+  it("glm-anthropic preset gaps are the measured ones", () => {
+    expect(PROVIDER_PRESETS["glm-anthropic"].gaps).toEqual([
+      "count_tokens",
+      "documents",
+      "tool_choice",
+      "url_images",
+    ]);
+  });
 });
