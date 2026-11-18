@@ -126,20 +126,52 @@ x-goog-api-key: dummy
 
 ### Licence / terms on third-party endpoints
 
-- Free, closed-source binary; governed by the **Google Antigravity Additional Terms**
-  (antigravity.google/terms) on top of the universal Google ToS.
-- Terms §6 (quoted in issue #1493): "using the Service in connection with products not
-  provided by us… third party software… to access the Service (e.g. using OpenClaw with
-  Antigravity OAuth) is a breach." Google staff there: wrapping `agy`/`agy acp` headless
-  inside a third-party agent harness "is not supported under consumer plans."
-- **Reading for babelgate:** §6 restricts *OAuth/consumer* access to Google's backend.
-  API-key mode pointed at a custom endpoint is a documented feature and the request then
-  never touches "the Service" — the user supplies their own (paid) Gemini-compatible
-  upstream. magpie (yetone/magpie) already drives `agy` through its own Gemini-speaking
-  gateway the same way. That said, Google wrote these terms for gateway-abuse, not for us —
-  **treat the terms question as an owner/legal call, not settled**.
-- Quota/billing note: in API-key mode agy hides `/usage`, `/quota`, `/credits` (no account
-  quota to show) — cost tracking through babelgate's own usage store, not the client's.
+Free, closed-source binary; governed by the **Google Antigravity Additional
+Terms** on top of the universal Google ToS. Read first-hand 2026-11-18 (this
+section previously cited §6 only second-hand via issue #1493):
+
+- **antigravity.google/terms** (no effective date on the page) §6: "using third
+  party software, tools, or services to access the Service" "is a breach of
+  this Agreement" ("e.g. using OpenClaw with Antigravity OAuth"), and "using
+  the Service in connection with products not provided by us" — violations risk
+  suspension/termination of accounts. The preamble sends access "through Gemini
+  Enterprise (Google Cloud)" and "with an API Key in Gemini for business" to
+  the administrator's terms; the page has no clause on custom endpoints, base
+  URLs or a user's own Gemini API key.
+- **antigravity.google/docs/install** ("Authenticate"): "Model requests go
+  directly to the Gemini API, and the CLI never establishes an account
+  session." and "To send model requests to a different Gemini-compatible
+  endpoint, set the `GOOGLE_GEMINI_BASE_URL` environment variable".
+  `modelProvider: "gemini"` is the only accepted value.
+- **google-antigravity/antigravity-cli issue #1493** (staff manirajc
+  2026-11-12; closed 2026-11-17): using `agy acp` as a backend worker inside a
+  third-party agent harness or orchestrator is not permitted under consumer
+  sign-in (oauth-personal) — "there is no carve-out for single-account or
+  personal use"; unauthorized harness traffic on consumer OAuth "is subject to
+  automated abuse enforcement" (rate limiting or suspension under §6). Staff
+  added: "`agy acp` and `agy -p` natively support API-key and Google Cloud
+  pay-as-you-go authentication, which are governed by their respective API and
+  Google Cloud terms."
+- **issue #514** (open): no staff statement on custom base URLs. July-2026
+  comments (agy 1.0.12–1.1.0, before API-key mode landed in 1.1.13) say keys
+  and base URLs were ignored then; hands-on agy 1.5.11 (this spike) shows they
+  work now.
+
+**Reading (ours, not legal advice — decided by the conductor on owner
+delegation, 2026-11-18; recorded in docs/decisions.md):** §6 prohibits reaching
+Google's OAuth-backed service through third-party tools. API-key mode never
+opens an account session, is documented by Google, and is described by Google
+staff as governed by the API/Cloud terms, not §6 — so API-key mode plus
+`GOOGLE_GEMINI_BASE_URL` pointing at one's own gateway is a documented use,
+and it is the only mode the recipe supports. Never put babelgate behind
+signed-in/consumer OAuth `agy` (it can't be redirected anyway). **Still
+unverified:** Google has made no statement on routing that endpoint to a
+non-Google model, and the Gemini API / Google Cloud terms themselves were not
+read.
+
+Quota/billing note: in API-key mode agy hides `/usage`, `/quota`, `/credits`
+(no account quota to show) — cost tracking through babelgate's own usage
+store, not the client's.
 
 ### babelgate compatibility — verified matrix
 
@@ -180,9 +212,10 @@ No new provider adapter needed; no canonical change needed.
 | Transition announcement; agy is the individual CLI | developers.googleblog.com/en/an-important-update-transitioning-gemini-cli-to-antigravity-cli/ | 2026-05-19 |
 | Individual Gemini CLI cut-off; enterprise/API-key continue | developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals | effective 2026-06-18 |
 | Install script, `agy`, config dir | antigravity.google/docs/getting-started/ | accessed 2026-11-18 |
-| `modelProvider:"gemini"`, `GEMINI_API_KEY`, `GOOGLE_GEMINI_BASE_URL` | antigravity.google/docs/install/ + `agy changelog` (added in 1.1.13) | accessed 2026-11-18 |
-| Terms §6, third-party-access ban, consumer-plan wrapping | antigravity.google/terms; google-antigravity/antigravity-cli issue #1493 | accessed 2026-11-18 |
-| Custom-endpoint/header feature request (open) | google-antigravity/antigravity-cli issue #514 | accessed 2026-11-18 |
+| `modelProvider:"gemini"`, `GEMINI_API_KEY`, `GOOGLE_GEMINI_BASE_URL`; "the CLI never establishes an account session" | antigravity.google/docs/install/ ("Authenticate") + `agy changelog` (added in 1.1.13) | accessed 2026-11-18 |
+| Terms §6 third-party-access ban; preamble sends API-key/Cloud access to admin terms | antigravity.google/terms (read first-hand) | accessed 2026-11-18 |
+| Consumer-OAuth ban on `agy acp` harness workers; key/Cloud auth governed by API/Cloud terms | google-antigravity/antigravity-cli issue #1493 (staff manirajc 2026-11-12; closed 2026-11-17) | accessed 2026-11-18 |
+| Custom-endpoint/header feature request (open); no staff statement on base URLs | google-antigravity/antigravity-cli issue #514 | accessed 2026-11-18 |
 | `customModelsConfig` shape and quirks | issue #1228; yetone/magpie `internal/agent/agy.go` | accessed 2026-11-18 |
 | Closed source; subscription/quota complaints | thenewstack.io/google-antigravity-cli/ | 2026-05-26 |
 | Everything else | `agy` 1.5.11 binary, captured requests (this session) | 2026-11-18 |
@@ -199,8 +232,10 @@ add them to same PR"); all three recommendations landed in PR #140:
   matrix above).
 - **Recipe**: `docs/recipes/antigravity-cli.md`, indexed in the README.
 - **Record/gate script**: `scripts/gates/record-antigravity-cli.sh`
-  (+ offline test). The live pass with a real Gemini key is run by the
-  conductor — pending at merge time.
-- **Terms question**: still open for the owner (§6 covers OAuth/
-  consumer access; API-key mode to one's own upstream is the recipe's
-  scope — see the recipe's Terms note).
+  (+ offline test); the live pass is run by the conductor.
+- **Terms question**: decided 2026-11-18 — read first-hand and
+  resolved by the conductor on owner delegation (see docs/decisions.md,
+  Task 14 entry): scope is API-key mode only, with the two unverified
+  gaps noted in the Licence/terms section above.
+- **Live pass**: still pending — the conductor runs it on a real
+  Gemini key.

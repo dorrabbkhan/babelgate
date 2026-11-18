@@ -7145,7 +7145,31 @@ the changed files are listed here by full path:
     `record-claude-code.test.ts` pattern. Recording/network step: run
     by the conductor.
   - **`docs/roadmap.md`**: the v1.6 "only if the owner says so" line
-    replaced with adoption (terms question stays with the owner).
+    replaced with adoption (terms question stayed with the owner;
+    decided in the round-2 paragraph below).
+- **Terms decision (round 2, 2026-11-18):** the owner delegated the
+  call to the conductor — "follow your recos to make the best
+  decision; check the terms yourself perhaps" — and the conductor
+  read the primary sources on 2026-11-18: antigravity.google/terms
+  (§6 and its preamble; no effective date on the page),
+  antigravity.google/docs/install ("Authenticate" section),
+  google-antigravity/antigravity-cli issue #1493 (staff statement by
+  manirajc, 2026-11-12; issue closed 2026-11-17) and issue #514
+  (open). Reading (ours, not legal advice): §6 prohibits reaching
+  Google's OAuth-backed service through third-party tools — "using
+  third party software, tools, or services to access the Service"
+  "is a breach of this Agreement" — while API-key mode never opens
+  an account session, is documented by Google, and is described by
+  Google staff as governed by the respective API and Google Cloud
+  terms, not §6. Supported scope: **API-key mode only** — API-key
+  mode plus `GOOGLE_GEMINI_BASE_URL` pointing at one's own gateway
+  is a documented use and the only mode the recipe supports;
+  babelgate is never run behind signed-in/consumer OAuth `agy` (it
+  can't be redirected anyway, and §6 plus the staff statement forbid
+  wrapping it — `agy acp` headless included — in third-party
+  harnesses). Unverified gaps: Google has made no statement on
+  routing that endpoint to a non-Google model, and the Gemini API /
+  Google Cloud terms themselves were not read.
 - **Files outside the Files block:**
   - `src/transformers/adapters/gemini.adapter.ts` — the
     `thinkingBudget` decode fix itself.

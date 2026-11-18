@@ -132,9 +132,22 @@ turns rides the surface built in v1.5 Tasks 3–5.
 
 ## Terms
 
-This recipe covers **API-key mode pointed at your own upstream** — the
-request then goes to your endpoint, not Google's. It does not cover
-OAuth/consumer sign-in: Google's Antigravity Additional Terms §6
-restrict third-party tools in connection with that service
-([antigravity.google/terms](https://antigravity.google/terms)). Not
-legal advice — check the terms for your plan.
+Scope: **API-key mode only** — never run babelgate behind signed-in/
+consumer OAuth `agy` (the base-URL override is ignored there anyway,
+and §6 plus a Google staff statement forbid wrapping it — `agy acp`
+headless included — in third-party harnesses). Quotes accessed
+2026-11-18; our reading, not legal advice:
+
+| Source | What it says |
+|---|---|
+| [antigravity.google/terms](https://antigravity.google/terms) §6 | "using third party software, tools, or services to access the Service" "is a breach of this Agreement" ("e.g. using OpenClaw with Antigravity OAuth"), and "using the Service in connection with products not provided by us" → suspension/termination; the preamble sends API-key/Cloud access to the administrator's terms — no clause on custom endpoints or base URLs |
+| [antigravity.google/docs/install](https://antigravity.google/docs/install) | "Model requests go directly to the Gemini API, and the CLI never establishes an account session"; `GOOGLE_GEMINI_BASE_URL` → a "different Gemini-compatible endpoint" is documented (`modelProvider: "gemini"` only) |
+| [issue #1493](https://github.com/google-antigravity/antigravity-cli/issues/1493) (staff, closed 2026-11-17) | `agy acp` as a third-party harness worker is barred under consumer sign-in — "no carve-out for single-account or personal use"; such traffic "is subject to automated abuse enforcement"; key/Cloud auth is "governed by their respective API and Google Cloud terms" |
+| [issue #514](https://github.com/google-antigravity/antigravity-cli/issues/514) (open) | no staff statement on custom base URLs; July-2026 "ignored" reports predate API-key mode — verified working on agy 1.5.11 |
+
+Reading: §6 bans third-party access to Google's OAuth-backed service;
+API-key mode opens no account session, is documented and is described
+by staff as governed by the API/Cloud terms — the only mode this
+recipe covers. Unverified: no Google statement on routing that
+endpoint to a non-Google model, and the Gemini API / Google Cloud
+terms themselves were not read.
