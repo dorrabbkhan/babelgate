@@ -1,5 +1,5 @@
 diff --git a/.github/workflows/live.yml b/.github/workflows/live.yml
-index 55908b0..a8ddfee 100644
+index 55908b0..a39ea31 100644
 --- a/.github/workflows/live.yml
 +++ b/.github/workflows/live.yml
 @@ -3,6 +3,7 @@ name: Live
@@ -10,7 +10,17 @@ index 55908b0..a8ddfee 100644
    workflow_dispatch:
  
  permissions:
-@@ -65,3 +66,51 @@ jobs:
+@@ -10,6 +11,9 @@ permissions:
+ 
+ jobs:
+   live:
++    # Skip on the Monday replay cron: client-replay runs then instead,
++    # and the paid live suite must not run twice on Mondays.
++    if: github.event.schedule != '0 6 * * 1'
+     runs-on: ubuntu-latest
+     env:
+       LIVE_OLLAMA_MODEL: qwen2.5:0.5b
+@@ -65,3 +69,51 @@ jobs:
          # The container writes the pulled model as root; the post-job cache
          # save runs as `runner` and must be able to read every file.
          run: sudo chown -R "$USER" /home/runner/.ollama-models

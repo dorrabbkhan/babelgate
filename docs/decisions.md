@@ -7029,11 +7029,14 @@ the changed files are listed here by full path:
   flaky upstream would file a false-positive `client-replay` issue
   weekly), `userAgent`, `status` and all values — a model-slug or
   string-length change is not a shape change.
-- **The patch** adds cron `0 6 * * 1` and a `client-replay` job gated
+- **The patch** adds cron `0 6 * * 1`, a `client-replay` job gated
   `if: github.event.schedule == '0 6 * * 1' || github.event_name ==
-  'workflow_dispatch'` (the daily `live` job must not pay the replay
-  cost; dispatch included so the owner can verify the job after
-  applying the patch rather than waiting a week). Job permissions are
+  'workflow_dispatch'`, and `if: github.event.schedule != '0 6 * * 1'`
+  on the existing `live` job — without that guard the Monday cron
+  would also run the paid live suite (twice on Mondays); the daily
+  `0 3 * * *` cron and `workflow_dispatch` still run it. Dispatch is
+  included on `client-replay` so the owner can verify the job after
+  applying the patch rather than waiting a week. Job permissions are
   `contents: read` + `issues: write`; the failure step force-creates
   the `client-replay` label, then opens one issue
   (`--body-file tmp/client-replay/summary.md`, title with
