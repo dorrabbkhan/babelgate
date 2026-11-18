@@ -1,0 +1,40 @@
+diff --git a/.github/workflows/live.yml b/.github/workflows/live.yml
+index a39ea31..a73485a 100644
+--- a/.github/workflows/live.yml
++++ b/.github/workflows/live.yml
+@@ -97,6 +97,13 @@ jobs:
+         env:
+           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+         run: scripts/gates/client-replay.sh
++      - name: Upload the replay artifacts
++        if: always()
++        uses: actions/upload-artifact@v4
++        with:
++          name: client-replay-${{ github.run_id }}
++          path: tmp/client-replay/
++          retention-days: 14
+       - name: Open a client-replay issue on failure
+         if: failure()
+         env:
+@@ -110,10 +117,18 @@ jobs:
+           if [ ! -f "$summary" ]; then
+             echo "client-replay.sh exited before writing a summary — see the job log." > "$summary"
+           fi
+-          if gh issue list --label client-replay --state open --limit 1 --json number --jq '.[0].number' | grep -q .; then
+-            echo "an open client-replay issue already exists — not creating another"
++          # One issue per label: an open client-replay issue gets a
++          # comment per failing run instead of a silent skip; new
++          # issue bodies and comments both carry the run URL.
++          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
++          body=tmp/client-replay/issue-body.md
++          { cat "$summary"; echo; echo "replay run: $run_url"; } > "$body"
++          issue="$(gh issue list --label client-replay --state open \
++            --limit 1 --json number --jq '.[0].number // empty')"
++          if [ -n "$issue" ]; then
++            gh issue comment "$issue" --body-file "$body"
+           else
+             gh issue create --label client-replay \
+               --title "Client replay failed: $(cat tmp/client-replay/versions.txt 2>/dev/null || echo 'versions unknown')" \
+-              --body-file "$summary"
++              --body-file "$body"
+           fi
