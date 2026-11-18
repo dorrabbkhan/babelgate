@@ -39,6 +39,14 @@ export const MEDIA_PNG_B64 =
 /** Nothing listens on this port — a guaranteed transport failure. */
 export const DEAD_BASE_URL = "http://127.0.0.1:9";
 
+/**
+ * The deterministic vector and input-token count every embeddings
+ * upstream serves (v1.5 spec §3.6) — tests assert both the reply
+ * `data[].embedding` and the recorded usage against them.
+ */
+export const EMBED_VECTOR = [0.5, -1.25, 3];
+export const EMBED_PROMPT_TOKENS = 11;
+
 /** Captured request bodies per provider (reset between tests) */
 export const capturedRequests: Record<Provider, unknown[]> = {
   openai: [],
@@ -85,6 +93,20 @@ export function resetOverrides(): void {
 
 /** Overrides for the second OpenAI-type host (cleared by resetOverrides) */
 export const responseOverrides2: { status?: number; body?: unknown } = {};
+
+/**
+ * Opt-in per test (v1.5 §3.6): the input-token count an embeddings
+ * upstream reports — today only the gemini `:batchEmbedContents`
+ * handler honours it, adding `usageMetadata.promptTokenCount` to the
+ * reply. Unset, the reply carries no usage fields (the default).
+ */
+export const embedUsage: Partial<Record<Provider, number>> = {};
+
+export function resetEmbedUsage(): void {
+  for (const key of Object.keys(embedUsage) as Provider[]) {
+    delete embedUsage[key];
+  }
+}
 
 /**
  * Which fixture case each provider's upstream serves (default "text").
@@ -851,6 +873,22 @@ export const upstreamHandlers = [
         status: override.status ?? 200,
       });
     }
+    // v1.5 §3.6: :batchEmbedContents — reply shape per
+    // https://ai.google.dev/api/embeddings
+    // ({embeddings: [{values}]} in batch order; the optional
+    // usageMetadata.promptTokenCount only when a test opts in via
+    // embedUsage).
+    if (request.url.includes(":batchEmbedContents")) {
+      const requests =
+        (body as { requests?: unknown[] } | null)?.requests ?? [];
+      const promptTokenCount = embedUsage.gemini;
+      return HttpResponse.json({
+        embeddings: requests.map(() => ({ values: EMBED_VECTOR })),
+        ...(promptTokenCount !== undefined
+          ? { usageMetadata: { promptTokenCount } }
+          : {}),
+      });
+    }
     const optin = optinReply("gemini", request.url, body);
     if (optin) return optin;
     if (cachedUsage.gemini) {
@@ -881,6 +919,63 @@ export const upstreamHandlers = [
       return streamFixtureResponse("ollama");
     }
     return HttpResponse.json(nonStreamBody("ollama"));
+  }),
+
+  // ===== Embeddings endpoints (v1.5 spec §3.6) =====
+
+  // OpenAI embeddings object: {object:"list", data:[{object:
+  // "embedding",index,embedding}], model, usage:{prompt_tokens,
+  // total_tokens}} — https://platform.openai.com/docs/api-reference/embeddings/object
+  http.post(`${MOCK_BASE_URLS.openai}/v1/embeddings`, async ({ request }) => {
+    const body = (await request.json()) as {
+      model?: string;
+      input?: unknown;
+    };
+    capturedRequests.openai.push(body);
+    capturedHeaders.openai.push(request.headers);
+    const override = responseOverrides.openai;
+    if (override) {
+      return HttpResponse.json(override.body ?? {}, {
+        status: override.status ?? 200,
+      });
+    }
+    const n = Array.isArray(body.input) ? body.input.length : 1;
+    return HttpResponse.json({
+      object: "list",
+      data: Array.from({ length: n }, (_, i) => ({
+        object: "embedding",
+        index: i,
+        embedding: EMBED_VECTOR,
+      })),
+      model: body.model ?? "m",
+      usage: {
+        prompt_tokens: EMBED_PROMPT_TOKENS,
+        total_tokens: EMBED_PROMPT_TOKENS,
+      },
+    });
+  }),
+
+  // POST /api/embed — https://docs.ollama.com/api/embed: {model,
+  // embeddings: number[][], prompt_eval_count}.
+  http.post(`${MOCK_BASE_URLS.ollama}/api/embed`, async ({ request }) => {
+    const body = (await request.json()) as {
+      model?: string;
+      input?: unknown;
+    };
+    capturedRequests.ollama.push(body);
+    capturedHeaders.ollama.push(request.headers);
+    const override = responseOverrides.ollama;
+    if (override) {
+      return HttpResponse.json(override.body ?? {}, {
+        status: override.status ?? 200,
+      });
+    }
+    const n = Array.isArray(body.input) ? body.input.length : 1;
+    return HttpResponse.json({
+      model: body.model ?? "m",
+      embeddings: Array.from({ length: n }, () => EMBED_VECTOR),
+      prompt_eval_count: EMBED_PROMPT_TOKENS,
+    });
   }),
 
   // POST /v1/responses — request shape per
@@ -1038,6 +1133,37 @@ export const upstreamHandlers = [
       });
     }
     return HttpResponse.json(openaiFixtures.models);
+  }),
+
+  http.post(`${OPENAI2_BASE_URL}/v1/embeddings`, async ({ request }) => {
+    const body = (await request.json()) as {
+      model?: string;
+      input?: unknown;
+    };
+    capturedRequests2.push(body);
+    capturedHeaders2.push(request.headers);
+    if (
+      responseOverrides2.status !== undefined ||
+      responseOverrides2.body !== undefined
+    ) {
+      return HttpResponse.json(responseOverrides2.body ?? {}, {
+        status: responseOverrides2.status ?? 200,
+      });
+    }
+    const n = Array.isArray(body.input) ? body.input.length : 1;
+    return HttpResponse.json({
+      object: "list",
+      data: Array.from({ length: n }, (_, i) => ({
+        object: "embedding",
+        index: i,
+        embedding: EMBED_VECTOR,
+      })),
+      model: body.model ?? "m",
+      usage: {
+        prompt_tokens: EMBED_PROMPT_TOKENS,
+        total_tokens: EMBED_PROMPT_TOKENS,
+      },
+    });
   }),
 
   // ===== Media host (URL-image inlining, v1.5 spec §3.2.2) =====

@@ -1,7 +1,9 @@
 import { once } from "node:events";
 import { Router } from "express";
+import { proxyEmbeddings } from "../services/embeddings.service";
 import { proxyRequest } from "../services/proxy.service";
 import type { ProxyResult } from "../services/proxy.service";
+import { isEmbeddingsPath } from "../routing/detect-source";
 import type { Provider } from "../transformers";
 import { ProxyError, TransformError } from "../utils/errors";
 
@@ -22,21 +24,35 @@ proxyRouter.use(async (req, res, next) => {
 
   let result: ProxyResult | null = null;
   try {
-    result = await proxyRequest(
-      req.path,
-      req.method,
-      req.body,
-      String(req.id),
-      {
-        // Client format detected by the middleware; undefined → the
-        // service returns null → 404.
-        source: res.locals.sourceApi as Provider | undefined,
-        query: Object.fromEntries(
-          Object.entries(req.query).map(([k, v]) => [k, String(v)]),
-        ),
-        signal: ac.signal,
-      },
-    );
+    // Embeddings (v1.5 spec §3.6): OpenAI-dialect paths bypass the
+    // canonical pipeline entirely — the embeddings service owns the
+    // request from body decode to upstream call.
+    result =
+      req.method === "POST" && isEmbeddingsPath(req.path)
+        ? await proxyEmbeddings({
+            sourceBody: req.body,
+            headers: req.headers,
+            requestId: String(req.id),
+            signal: ac.signal,
+          })
+        : await proxyRequest(
+            req.path,
+            req.method,
+            req.body,
+            String(req.id),
+            {
+              // Client format detected by the middleware; undefined →
+              // the service returns null → 404.
+              source: res.locals.sourceApi as Provider | undefined,
+              query: Object.fromEntries(
+                Object.entries(req.query).map(([k, v]) => [
+                  k,
+                  String(v),
+                ]),
+              ),
+              signal: ac.signal,
+            },
+          );
     if (!result) return next();
 
     if (result.headers) {

@@ -6930,3 +6930,66 @@ the changed files are listed here by full path:
   pair is served by the canonical path, which is a caveat, not an
   inexpressible input. `--check` parses and compares `n/a` cells like
   any other status, so a `✗`↔`n/a` drift fails the gate.
+
+## v1.5 Task 10 — embeddings, OpenAI format inbound (spec §3.6)
+
+- **Files outside the Files block:**
+  - `tests/mocks/upstreams.ts`: the embeddings upstreams need msw
+    handlers — added `EMBED_VECTOR`/`EMBED_PROMPT_TOKENS` and a
+    `POST /v1/embeddings` handler on both openai hosts, an
+    `/api/embed` handler on the ollama host, and a
+    `:batchEmbedContents` branch inside the existing
+    `/v1beta/models/*` gemini handler (msw matches it by URL).
+    Per the standing "mock new upstream behaviour in
+    tests/mocks/upstreams.ts" rule; `npm test` stays offline.
+- **No PROVIDER_ROUTES entry — dispatch lives in the route.** The
+  task's Files block lists only `src/routes/proxy.ts` and
+  `src/routing/detect-source.ts` as modifications, so embeddings
+  paths never join the route table: `detect-source.ts` claims
+  `/v1/embeddings` and `/embeddings` as `openai` (the source format
+  for the error envelope; claimed for every method — a non-POST
+  falls through to the normal 404), and `proxy.ts` dispatches POSTs
+  on them to `embeddings.service.ts` before `proxyRequest`. The
+  consequence: `observe.middleware` scopes only `kind === "chat"`
+  routes, so `proxyEmbeddings` creates the request trace itself
+  (`clientId` + `traceparent` from the request headers) — the same
+  `newTrace` the middleware would have built. `observe/middleware.ts`
+  and `src/transformers/adapters/index.ts` stay untouched.
+- **`encoding_format` is encoded at the edge for every target.** The
+  spec's "encoded by babelgate" is literal: the upstream is always
+  asked for float vectors and `float32LeBase64` (explicit
+  `Buffer.writeFloatLE`, not platform-endian `Float32Array.buffer`)
+  produces the base64 in the client reply. On an `openai` target the
+  forwarded body's `encoding_format` is therefore normalized to
+  `"float"`; OpenAI's `user` and other extra fields still forward via
+  the raw source body (the plan's "forwarded body").
+- **Gemini usage is read from `usageMetadata.promptTokenCount` when
+  present, estimated when absent.** `batchEmbedContents`'s reply
+  (`{embeddings: [{values}], usageMetadata?}`) documents an optional
+  `EmbeddingUsageMetadata.promptTokenCount`
+  (https://ai.google.dev/api/embeddings) — `decodeResponse` maps it
+  when it is a number. Only when the reply omits it do the client
+  usage block and the trace's `inputTokens` fall back to the
+  per-input chars/4 estimate, with a `usage_estimated` note and
+  `costEstimated: true` on the trace. Ollama's `prompt_eval_count`
+  and OpenAI's `prompt_tokens` map directly.
+- **Tokenized inputs refused.** OpenAI also accepts `input` as
+  integer arrays (pre-tokenized); the minimal contract is text only
+  (`EmbeddingRequest.input: string[]`), so those are a 400
+  `VALIDATION_ERROR`, not silently mishandled.
+- **501 for `anthropic`/`responses` targets is thrown inside the
+  attempt** (`NotSupportedError` before any upstream call), so it
+  obeys chat's rule for transform-layer errors: immediate, no
+  fallback — same as `UnsupportedResponseFormatError`. The
+  `x-babelgate-attempts` header still reports the attempt count.
+- **Embeddings take the normal trace/metrics path**, not
+  `incAux` — that counter is for locally answered endpoints
+  (models/count_tokens) and its union type stays unchanged.
+- **Wire-format evidence:** OpenAI request/response
+  (https://platform.openai.com/docs/api-reference/embeddings/create
+  and …/embeddings/object), Gemini `batchEmbedContents`
+  (https://ai.google.dev/api/embeddings, googleapis
+  `generative_service.proto` `BatchEmbedContentsRequest/Response` —
+  per-request `model: "models/<m>"` and `outputDimensionality`),
+  Ollama `/api/embed` (https://docs.ollama.com/api/embed —
+  `dimensions`, `prompt_eval_count`).
