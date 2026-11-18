@@ -155,6 +155,13 @@ type CanonicalReasoning = NonNullable<
  * budget (effort = the level whose starting budget fits, the budget
  * kept; a level wins when both are sent), `includeThoughts` →
  * `summary`. A non-object `thinkingConfig` keeps `field_dropped`.
+ * `thinkingBudget` also has two documented non-budget sentinels
+ * (same reference): `-1` = dynamic budget — the provider chooses,
+ * so nothing is decoded from it (a `thinkingLevel` in the same
+ * object still wins); `0` = thinking off — decoded to effort
+ * `"none"`, which the encoder turns back into `thinkingBudget: 0`
+ * on models that take a budget. Other non-positive or non-integer
+ * values keep a `field_dropped` note; they never fail the request.
  */
 function toCanonicalReasoning(
   gc: GeminiGenerationConfig | undefined,
@@ -194,16 +201,25 @@ function toCanonicalReasoning(
     }
   }
   if (fields.thinkingBudget !== undefined) {
-    if (
-      typeof fields.thinkingBudget === "number" &&
-      Number.isFinite(fields.thinkingBudget)
-    ) {
-      reasoning.effort ??= effortForBudget(fields.thinkingBudget);
-      reasoning.budgetTokens = fields.thinkingBudget;
-    } else {
+    const budget = fields.thinkingBudget;
+    if (typeof budget !== "number" || !Number.isFinite(budget)) {
       note(
         "generationConfig.thinkingConfig.thinkingBudget",
         'Dropping "thinkingBudget" (not a number)',
+      );
+    } else if (budget === -1) {
+      // -1 = dynamic budget: the provider chooses, so nothing is
+      // lost by decoding nothing.
+    } else if (budget === 0) {
+      // 0 = thinking off. `??=`: a thinkingLevel decoded above wins.
+      reasoning.effort ??= "none";
+    } else if (Number.isInteger(budget) && budget > 0) {
+      reasoning.effort ??= effortForBudget(budget);
+      reasoning.budgetTokens = budget;
+    } else {
+      note(
+        "generationConfig.thinkingConfig.thinkingBudget",
+        'Dropping "thinkingBudget" (not a positive integer, -1 or 0)',
       );
     }
   }

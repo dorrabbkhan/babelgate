@@ -7118,3 +7118,52 @@ the changed files are listed here by full path:
   `docs/decisions.md`. `.github/workflows/release.yml` itself stays
   untouched (workflow files are only ever changed by the owner applying
   a patch, E8).
+
+## v1.5 Task 14 — Antigravity CLI spike follow-ups (owner-extended scope)
+
+- **Owner extension (2026-11-18):** the owner instructed "follow your
+  recos for all and add them to same PR", extending Task 14 past its
+  "report only, no product code" plan scope. Added in this PR:
+  - **`thinkingBudget` decode fix** in `src/transformers/adapters/
+    gemini.adapter.ts` (decode only — `canonical.types.ts` and
+    `canonical.schema.ts` untouched). Per
+    https://ai.google.dev/api/generate-content#ThinkingConfig,
+    `thinkingBudget: -1` (dynamic — the provider chooses) decodes to no
+    `budgetTokens` and no budget-derived effort (a `thinkingLevel` in
+    the same object still wins); `thinkingBudget: 0` (thinking off)
+    decodes to `reasoning.effort = "none"` unless a `thinkingLevel`
+    was also sent; any other negative or non-integer value keeps the
+    existing `field_dropped` note style and is dropped, never thrown.
+    Positive budgets are unchanged.
+  - **Recipe** `docs/recipes/antigravity-cli.md` (API-key mode via
+    `modelProvider: "gemini"` + `GOOGLE_GEMINI_BASE_URL`,
+    `customModelsConfig` for non-Gemini names verified on agy 1.5.11,
+    Limits and a neutral Terms note), indexed in `README.md`.
+  - **Gate** `scripts/gates/record-antigravity-cli.sh` (clone of
+    `record-gemini-cli.sh` for `agy`, recording under `tmp/`, never
+    `tests/fixtures/`) plus an offline `*.test.ts` in the
+    `record-claude-code.test.ts` pattern. Recording/network step: run
+    by the conductor.
+  - **`docs/roadmap.md`**: the v1.6 "only if the owner says so" line
+    replaced with adoption (terms question stays with the owner).
+- **Files outside the Files block:**
+  - `src/transformers/adapters/gemini.adapter.ts` — the
+    `thinkingBudget` decode fix itself.
+  - `src/transformers/adapters/gemini.adapter.test.ts` — decode tests
+    for `-1`, `0`, `-1` with `thinkingLevel`, `-5` note; plus the
+    `canonicalRequestSchema` import used to assert the decoded request
+    stays schema-valid.
+  - `tests/integration/gemini-cli.test.ts` — end-to-end
+    `streamGenerateContent` test proving `-1`/`0` return 200 with the
+    upstream body asserted.
+  - `docs/recipes/antigravity-cli.md` — the new recipe page.
+  - `README.md` — recipes index line for the new page (headline
+    unchanged).
+  - `scripts/gates/record-antigravity-cli.sh` — the new gate script.
+  - `scripts/gates/record-antigravity-cli.test.ts` — its offline
+    regression test.
+  - `docs/roadmap.md` — the adoption line the owner instruction asked
+    for.
+  - `docs/decisions.md` — this entry.
+- No fixture, snapshot, timeout or retry changes; no test asserts the
+  old 400, so none had to be removed.

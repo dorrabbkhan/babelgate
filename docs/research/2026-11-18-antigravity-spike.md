@@ -148,8 +148,8 @@ x-goog-api-key: dummy
 | Catalog model (`gemini-3.8-flash-low`) → Ollama stub | ✅ full round trip, tools translated, usage recorded |
 | `thinkingConfig.thinkingLevel` | ✅ 200 |
 | `thinkingConfig.thinkingBudget: 1024` | ✅ 200 |
-| `thinkingConfig.thinkingBudget: -1` (dynamic; sent by every custom model) | ❌ **400** |
-| `thinkingConfig.thinkingBudget: 0` (thinking off) | ❌ **400** |
+| `thinkingConfig.thinkingBudget: -1` (dynamic; sent by every custom model) | ❌ **400** on `main` → ✅ after this PR |
+| `thinkingConfig.thinkingBudget: 0` (thinking off) | ❌ **400** on `main` → ✅ after this PR |
 | `countTokens` / model list | not called by agy (stub saw none) |
 
 The `thinkingBudget` reject is `budgetTokens: z.number().int().positive()` in
@@ -186,3 +186,21 @@ No new provider adapter needed; no canonical change needed.
 | `customModelsConfig` shape and quirks | issue #1228; yetone/magpie `internal/agent/agy.go` | accessed 2026-11-18 |
 | Closed source; subscription/quota complaints | thenewstack.io/google-antigravity-cli/ | 2026-05-26 |
 | Everything else | `agy` 1.5.11 binary, captured requests (this session) | 2026-11-18 |
+
+## Follow-up status
+
+Owner extended Task 14 on 2026-11-18 ("follow your recos for all and
+add them to same PR"); all three recommendations landed in PR #140:
+
+- **`thinkingBudget` fix**: `gemini.adapter.ts` decodes `-1` to "no
+  budget" (provider chooses; `thinkingLevel` still wins), `0` to
+  effort `"none"`, and other non-positive/non-integer values to a
+  `field_dropped` note — requests stop 400ing (see compatibility
+  matrix above).
+- **Recipe**: `docs/recipes/antigravity-cli.md`, indexed in the README.
+- **Record/gate script**: `scripts/gates/record-antigravity-cli.sh`
+  (+ offline test). The live pass with a real Gemini key is run by the
+  conductor — pending at merge time.
+- **Terms question**: still open for the owner (§6 covers OAuth/
+  consumer access; API-key mode to one's own upstream is the recipe's
+  scope — see the recipe's Terms note).

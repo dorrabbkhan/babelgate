@@ -230,4 +230,40 @@ describe("Gemini CLI essentials (spec §3.10)", () => {
       required: ["title"],
     });
   });
+
+  it("thinkingBudget -1 and 0 survive the streamGenerateContent route", async () => {
+    // Antigravity CLI custom models send thinkingBudget -1 (dynamic
+    // budget); 0 is thinking off — both documented ThinkingConfig
+    // values (https://ai.google.dev/api/generate-content#ThinkingConfig)
+    // that used to 400 on the positive() budgetTokens schema.
+    setPair("gemini", "gemini");
+
+    const dynamic = await request(app)
+      .post("/v1beta/models/gemini-2.5-flash:streamGenerateContent")
+      .send({
+        contents: [{ role: "user", parts: [{ text: "hi" }] }],
+        generationConfig: { thinkingConfig: { thinkingBudget: -1 } },
+      });
+    expect(dynamic.status, JSON.stringify(dynamic.body)).toBe(200);
+
+    const off = await request(app)
+      .post("/v1beta/models/gemini-2.5-flash:streamGenerateContent")
+      .send({
+        contents: [{ role: "user", parts: [{ text: "hi" }] }],
+        generationConfig: { thinkingConfig: { thinkingBudget: 0 } },
+      });
+    expect(off.status, JSON.stringify(off.body)).toBe(200);
+
+    // -1 decodes to "provider chooses" — no thinkingConfig upstream;
+    // 0 decodes to effort "none" — thinkingBudget 0 back on the wire
+    // (2.5-flash takes a budget and can disable thinking).
+    expect(capturedRequests.gemini).toHaveLength(2);
+    const [dynamicUp, offUp] = capturedRequests.gemini as {
+      generationConfig?: { thinkingConfig?: unknown };
+    }[];
+    expect(dynamicUp.generationConfig?.thinkingConfig).toBeUndefined();
+    expect(offUp.generationConfig?.thinkingConfig).toEqual({
+      thinkingBudget: 0,
+    });
+  });
 });

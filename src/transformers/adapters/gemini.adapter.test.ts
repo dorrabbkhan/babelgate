@@ -8,6 +8,7 @@ import {
 } from './gemini.adapter';
 import { createStreamEncoder } from './gemini.stream';
 import type { CanonicalContentPart, CanonicalRequest, CanonicalResponse } from '../../types/canonical.types';
+import { canonicalRequestSchema } from '../../types/canonical.schema';
 import type { GenerateContentRequest, GenerateContentResponse, Content, FunctionResponsePart } from '../../types/gemini.types';
 import { unpackEnvelope } from '../reasoning-envelope';
 import { sequentialIds } from '../../utils/ids';
@@ -1245,6 +1246,68 @@ describe('cache hints on tool results (Task 17a)', () => {
       expect(canonical.config?.reasoning).toEqual({
         effort: 'low',
         summary: true,
+      });
+    });
+
+    // The two documented non-budget sentinels —
+    // https://ai.google.dev/api/generate-content#ThinkingConfig
+    // (Antigravity CLI custom models send -1).
+    it('thinkingBudget -1 decodes without budgetTokens', () => {
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: -1 },
+        },
+      } as GenerateContentRequest);
+
+      expect(
+        canonical.config?.reasoning?.budgetTokens,
+      ).toBeUndefined();
+      expect(canonicalRequestSchema.safeParse(canonical).success).toBe(
+        true,
+      );
+    });
+
+    it('thinkingBudget 0 decodes to effort none', () => {
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+      } as GenerateContentRequest);
+
+      expect(canonical.config?.reasoning).toEqual({ effort: 'none' });
+      expect(canonicalRequestSchema.safeParse(canonical).success).toBe(
+        true,
+      );
+    });
+
+    it('thinkingBudget -1 with thinkingLevel keeps the level', () => {
+      const canonical = toCanonicalRequest({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          thinkingConfig: { thinkingLevel: 'high', thinkingBudget: -1 },
+        },
+      } as GenerateContentRequest);
+
+      expect(canonical.config?.reasoning).toEqual({ effort: 'high' });
+    });
+
+    it('thinkingBudget -5 is dropped with a note', () => {
+      const trace = traced(() =>
+        toCanonicalRequest({
+          contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+          generationConfig: {
+            thinkingConfig: { thinkingBudget: -5 },
+          },
+        } as GenerateContentRequest),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'gemini',
+        code: 'field_dropped',
+        path: 'generationConfig.thinkingConfig.thinkingBudget',
       });
     });
   });
