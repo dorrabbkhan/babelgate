@@ -52,6 +52,16 @@ OPENAI_API_KEY=<your OpenRouter key> \
 
 Then the same two `export` lines and `claude`.
 
+## On an Anthropic-speaking endpoint (the shim)
+
+Ollama, LM Studio, DeepSeek, z.ai and Kimi all serve Anthropic
+Messages — translation is unnecessary, but their endpoints leave gaps
+(`count_tokens`, `tool_choice`, `cache_control`, URL images, PDFs).
+With a provider `preset` (or `passthrough: true` plus a declared
+`gaps:` list) babelgate forwards Claude Code's requests unchanged and
+fixes each declared gap first. Full recipe and the per-preset gap
+lists: [docs/recipes/native-endpoints.md](native-endpoints.md).
+
 ### Keys with a spend limit: `max_output_tokens`
 
 Claude Code requests a large output budget by default, and OpenRouter
@@ -116,9 +126,23 @@ hardware or credits.
 - **`count_tokens` is estimated** as `ceil(chars/4)` locally and marked
   `x-babelgate-token-estimate: true` — fine for Claude Code's context
   budgeting.
-- **Thinking is dropped.** `thinking`/`redacted_thinking` blocks,
-  thinking deltas, `cache_control` and `metadata` are discarded
-  (debug-logged by type name only); Claude Code keeps working.
+- **Thinking is carried, not dropped.** Claude Code's
+  `thinking: {type: "enabled", budget_tokens}` (and `adaptive`) maps to
+  the target's thinking control, and the reply's `thinking` blocks go
+  back to the client — signed. When the model is not Anthropic the
+  signature field carries a `bg1.` envelope, so a history made through
+  babelgate keeps babelgate's signatures: on the next turn the same
+  provider gets its own reasoning back bit-for-bit, and reasoning from
+  another provider (after a fallback, or a hand-edited history) is
+  dropped with a `reasoning_dropped` note, never forwarded. A provider
+  that shouldn't think gets `reasoning: false` in `babelgate.yaml`,
+  which restores the v1.4 behaviour for it — thinking dropped with a
+  note, same as before. `cache_control` and `metadata` are still
+  discarded on translated paths (debug-logged by type name only).
+- **Media follows the tools.** Images inside `tool_result` blocks —
+  Claude Code's screenshots and read-back PDFs — translate to targets
+  that accept them; URL images and `document` blocks likewise (PDFs
+  refuse loudly where the target can't read them).
 - **`TARGET_CONTEXT_WINDOW=32768`** is set by the preset → Ollama
   `options.num_ctx`, so a tool-heavy session doesn't silently truncate
   the window.

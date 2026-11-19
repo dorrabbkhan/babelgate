@@ -1,7 +1,8 @@
 # babelgate
 
-A small proxy that sits in front of LLM APIs and translates between their
-request/response formats — streaming and tool calls included. Point your
+**The translator you can check.** A small proxy that sits in front of
+LLM APIs and translates between their request/response formats —
+streaming, tool calls, reasoning and media included. Point your
 OpenAI client at it, and it can talk to Gemini, Ollama, or Anthropic behind
 the scenes — and vice versa. Point Claude Code or Codex CLI at it, and it
 runs on any tool-capable model you can reach.
@@ -19,14 +20,42 @@ provider also gets byte-preserving pass-through to Responses-native
 upstreams (OpenRouter's Responses API, vLLM, Ollama's Responses endpoint,
 …): [docs/recipes/codex.md](docs/recipes/codex.md).
 
-What works where: [docs/compatibility.md](docs/compatibility.md) — the
-source × target matrix, generated from the test suite.
+The "check" is the product:
+
+- **A published compatibility matrix** — every source × target ×
+  feature cell, generated from the tests:
+  [docs/compatibility.md](docs/compatibility.md).
+- **The translation inspector** — source, canonical and target side by
+  side, every dropped field named (`/ui`, see below).
+- **Small and auditable** — a cosign-signed container image, a
+  CycloneDX SBOM attached to each release, few runtime dependencies:
+  [SECURITY.md](SECURITY.md).
+- **A shim for native endpoints** — where a provider already speaks the
+  client's format, babelgate passes through and fixes the gaps that
+  endpoint leaves: [docs/recipes/native-endpoints.md](docs/recipes/native-endpoints.md).
 
 ![Codex CLI fixing a failing test through babelgate, bridged to Claude on OpenRouter](docs/assets/demo-codex.gif)
 *Recorded with [scripts/demo](scripts/demo/); the model's thinking time is cut.*
 
 ![Claude Code fixing the same failing test through babelgate on a free OpenRouter model](docs/assets/demo.gif)
 *Recorded with [scripts/demo](scripts/demo/); the model's thinking time is cut.*
+
+## How is this different?
+
+Putting Claude Code or Codex on another model is table stakes — several
+tools do it. babelgate is the one whose translations you can verify:
+
+| | babelgate | LiteLLM · Bifrost · CCR | OpenRouter · CF AI Gateway |
+|---|---|---|---|
+| Per-pair conformance matrix, published | ✓ generated from tests | not documented | not documented |
+| Inspector: source → canonical → target diff | ✓ | ◐ request logs | ◐ logs / debug echo |
+| Native-endpoint shim with declared gaps | ✓ presets + `gaps:` | not documented | not documented |
+| Replays each new Claude Code / Codex release | ✓ weekly job | not documented | not documented |
+
+The honest trade-offs — provider count, MCP gateway, semantic cache,
+load balancing, team governance, a hosted option — all belong to the
+others, and the full dated matrix says "use X if you need that":
+[docs/comparison.md](docs/comparison.md).
 
 ## Quick start: Claude Code on a local model
 
@@ -194,10 +223,12 @@ across all providers. Any OpenAI-compatible backend (Groq, DeepSeek,
 Together, LM Studio, vLLM, llama.cpp…) is a `type: openai` provider —
 base URLs and key handling are in
 [docs/recipes/openai-compatible-providers.md](docs/recipes/openai-compatible-providers.md).
-Gemini CLI works too (`GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY`) —
-recipe: [docs/recipes/gemini-cli.md](docs/recipes/gemini-cli.md).
 Antigravity CLI (`agy`) uses the same mechanism in API-key mode —
 recipe: [docs/recipes/antigravity-cli.md](docs/recipes/antigravity-cli.md).
+Gemini CLI still works with paid API keys and enterprise licences
+(`GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY`) — Google moved individual
+users to Antigravity CLI, so the recipe is frozen:
+[docs/recipes/gemini-cli.md](docs/recipes/gemini-cli.md).
 
 ## The `babelgate` CLI
 
@@ -261,7 +292,10 @@ The actual request flow:
    up. Unknown paths fall through to a 404.
 3. The body is converted to canonical, routed to a provider (config
    file, or the single `TARGET_API` in env-only mode), then encoded in
-   the target's format.
+   the target's format — unless the provider already speaks the client's
+   format and pass-through applies (`preset`/`passthrough` and `type:
+   responses` below), in which case the body is forwarded with only its
+   declared gap fixes.
 4. It's forwarded upstream to the provider's `base_url` + the target's
    endpoint, with the right auth headers.
 5. The response comes back through the same path in reverse.
@@ -291,6 +325,22 @@ Endpoint kinds:
   chars/4 estimate, marked by the `x-babelgate-token-estimate: true`
   response header. Claude Code calls it constantly; the estimate keeps
   it happy without a fake upstream.
+- **Media** — URL images, documents (PDF, plain text) and images inside
+  tool results translate through canonical. A target that needs bytes
+  gets them fetched under a guard (`http:`/`https:` only, private
+  addresses refused, 20 MB / 15 s caps — `media:` YAML section or
+  `MEDIA_FETCH`/`MEDIA_ALLOW_PRIVATE` env); a target that can't take a
+  document or tool image gets a 400 in the client's dialect, never a
+  silent drop.
+- **Embeddings** — `POST /v1/embeddings` (OpenAI format) routes to
+  OpenAI-compatible, Gemini and Ollama targets; aliases and fallbacks
+  apply.
+- **Pass-through / the shim** — when the routed provider speaks the
+  client's format (`type: responses` always; `type: anthropic` /
+  `type: openai` with a shim `preset` or `passthrough: true`), the body
+  is relayed without the canonical round trip, with each declared
+  `gaps` entry's fix applied:
+  [docs/recipes/native-endpoints.md](docs/recipes/native-endpoints.md).
 
 Every completed chat request logs token usage (`inputTokens`,
 `outputTokens`, `finishReason`, upstream latency) via pino — grep for
@@ -349,10 +399,15 @@ see the section above and [examples/](examples/). With no file,
 | `METRICS`               | `/metrics` Prometheus endpoint (default `on`)                             |
 | `UI` / `UI_ALLOW_REMOTE` / `UI_ALLOWED_HOSTS` | `/ui` + `/ui/api`: `on` / remote clients without a key (`false`) / extra `Host`s (empty) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Set to emit GenAI-convention spans (never content); unset = no OTel |
+| `MEDIA_FETCH` / `MEDIA_ALLOW_PRIVATE` | URL media fetching: `true` / `false` (YAML `media:` section) — private/loopback/link-local targets always need `allow_private` |
 
 Provider YAML keys `max_output_tokens`, `cache_hints`, `live_prices`,
 `repair_tool_calls`, `local` and the `observe:`/`prices:` blocks are in
-[docs/recipes/observability.md](docs/recipes/observability.md).
+[docs/recipes/observability.md](docs/recipes/observability.md). The
+shim keys — `preset`, `gaps`, `passthrough` — are in
+[docs/recipes/native-endpoints.md](docs/recipes/native-endpoints.md);
+`reasoning: false` restores v1.4's drop behaviour for that provider
+([docs/recipes/claude-code.md](docs/recipes/claude-code.md)).
 
 Routing and upstream endpoints are conventions, not configuration: each
 provider's routes (`kind`, `method`, `pathPrefix`, `requestPath`) live in
@@ -567,12 +622,22 @@ fixtures/tests — see
   machines can't fit the model). Local models may call tools unreliably,
   and on CPU-only machines a slow model can stall past
   `UPSTREAM_STREAM_IDLE_MS` (default 300 s) and have its stream cut.
-- **Reasoning is mapped only for Responses clients.** From a `/v1/responses`
-  request (Codex), `reasoning` maps to each target's thinking control and the
-  provider's signed thinking is carried back between turns of the same
-  provider/model — but `thinking`/`redacted_thinking` blocks, thinking deltas
-  and `reasoning_effort` from the other four source formats are still dropped
-  (debug-logged by type name only), as is `cache_control`/`metadata`.
+- **Reasoning stays bound to its origin.** All five client formats now
+  carry the model's reasoning: request fields (`thinking`,
+  `reasoning_effort`, `thinkingConfig`, `think`, `reasoning`) map to the
+  target's thinking control, and signed thinking
+  (`signature`/`thoughtSignature`, packed in `bg1.` envelopes) returns
+  between turns of the same provider/model. Reasoning from provider X
+  is never sent to provider Y — it's dropped with a `reasoning_dropped`
+  note, and an Anthropic target that can't present a foreign block gets
+  thinking disabled for that request. `reasoning: false` on a provider
+  restores the v1.4 drop behaviour for it. `cache_control`/`metadata`
+  on non-shim paths are still dropped (debug-logged by type name only).
+- **Media is refused, never silently dropped.** Documents go only to
+  targets that read them — elsewhere the request fails with a 400 in the
+  client's dialect naming the field (text documents become text parts
+  instead). Images inside tool results are refused on Chat and Ollama
+  targets, which can't carry them.
 - **`parallel_tool_calls` is honoured only from Responses clients** —
   decoded on `/v1/responses` and mapped to OpenAI, Anthropic and Responses
   targets; the other sources can't express it and providers get their own
@@ -597,10 +662,12 @@ fixtures/tests — see
 ## Roadmap
 
 Shipped so far: the 16-pair matrix (v1.1), one endpoint for many
-providers (v1.2), observability and the `/ui` (v1.3), and the Responses
-API / Codex entry point (v1.4). Release notes are in
-[CHANGELOG.md](CHANGELOG.md); the version-by-version plan, including
-reasoning across every client format in v1.5, lives in
+providers (v1.2), observability and the `/ui` (v1.3), the Responses
+API / Codex entry point (v1.4), and "correct everywhere" (v1.5 —
+reasoning and media for every client format, the native-endpoint shim,
+the generated compatibility matrix with client-release replay, signed
+releases, minimal embeddings). Release notes are in
+[CHANGELOG.md](CHANGELOG.md); the version-by-version plan lives in
 [docs/roadmap.md](docs/roadmap.md).
 
 ## Docker
@@ -611,7 +678,11 @@ docker run -p 3000:3000 --env-file .env babelgate
 ```
 
 Release tags also publish `ghcr.io/dorrabbkhan/babelgate:<version>` and
-`:latest` via `.github/workflows/release.yml`.
+`:latest` via `.github/workflows/release.yml` — the image is signed
+with keyless cosign in CI, the npm package is published by hand
+(without provenance), and a maintainer-generated CycloneDX SBOM is
+attached to each GitHub release. Verification steps:
+[SECURITY.md](SECURITY.md).
 
 Multi-stage build: provider SDKs are `devDependencies` (type-only imports),
 so the runtime image ships `dist/` (server and built UI) plus the
