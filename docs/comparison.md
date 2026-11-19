@@ -27,7 +27,7 @@ can go stale — dates and sources are below.
 | Translation inspector (source / canonical / target side by side, dropped fields named) | ✓ — `ui/src/screens/Inspector.tsx`, `src/observe/` body ring | not documented | not documented | ◐ request logs, resolved routes, per-request cost | ◐ `debug.echo_upstream_body` returns the transformed request (streaming only) | ◐ per-request logs and analytics |
 | Ollama `/api/*` as an inbound client format | ✓ — `PROVIDER_ROUTES` in `src/transformers/adapters/index.ts` (`/api/chat`, `/api/tags`) | ✗ — inbound documented as OpenAI, Anthropic and Google formats | ✗ — inbound integrations are an enumerated list without Ollama | not documented | not documented | not documented |
 | Native-endpoint shim with declared per-provider gaps | ✓ — provider `preset` / `gaps` / `passthrough`: `src/config/provider-presets.ts`, `src/services/gap-fixes.ts` | ◐ generic pass-through endpoints exist; no gap vocabulary or per-endpoint fixes | not documented | not documented | not documented | not documented |
-| Signed releases, provenance, SBOM | ✓ — `.github/workflows/release.yml` (npm `--provenance`, cosign-signed image, CycloneDX SBOM), `SECURITY.md` | not documented | not documented | not documented | n/a (hosted) | n/a (hosted) |
+| Signed releases, SBOM | ✓ — `.github/workflows/release.yml` (cosign-signed GHCR image), maintainer-attached CycloneDX SBOM, `SECURITY.md` | not documented | not documented | not documented | n/a (hosted) | n/a (hosted) |
 | Reasoning carried between turns across formats | ✓ — signed thinking/`thoughtSignature`s round-trip inside `bg1.` envelopes (`src/transformers/reasoning-envelope.ts`), origin-bound | not verified | not verified | not verified | ◐ reasoning tokens returned; `reasoning` request parameter; signed-block round-trip across formats not documented | not verified |
 | Replays each new Claude Code / Codex release | ✓ — weekly `client-replay` job in `.github/workflows/live.yml`, `scripts/gates/client-replay.sh`; result badge on the matrix | not documented | not documented | not documented | not documented | not documented |
 | Claude Code on any model | ✓ — `docs/recipes/claude-code.md`, release-gate script | ✓ — Anthropic Messages endpoint documented for Claude Code | ✓ — Anthropic inbound integration | ✓ — its purpose | ✓ — Anthropic `/api/v1/messages` endpoint | ◐ documented for Anthropic / Bedrock / Vertex Claude models |
@@ -38,7 +38,7 @@ can go stale — dates and sources are below.
 | Load balancing / health / circuit breaker | planned (v1.6) | ✓ | ✓ | ◐ credential pools, key rotation, ordered fallback | ✓ automatic provider fallback | ✓ |
 | Cache | planned (v1.6, opt-in exact-match) | ✓ | ✓ semantic cache | not documented | ◐ provider prompt-caching passthrough with sticky routing | ✓ |
 | Cost / usage dashboard | ✓ SQLite usage store + `/ui` | ✓ | ✓ | ◐ per-request cost estimate in logs | ✓ hosted dashboard | ✓ analytics |
-| Prometheus / OpenTelemetry | ✓ `/metrics` + OTel spans | ✓ | ✓ | not documented | n/a (hosted) | ◐ analytics + Logpush |
+| Prometheus / OpenTelemetry | ✓ `/metrics` + OTel spans | ✓ | ✓ | not documented | n/a (hosted) | ◐ OTel trace export; analytics + Logpush |
 | MCP gateway | ✗ not a feature — MCP calls pass through as content | ✓ MCP Gateway | ✓ MCP tools | ✓ ToolHub / MCP | not documented | not documented |
 | Virtual keys / budgets / SSO / audit | planned | ✓ | ✓ keys + budgets in OSS; SSO/audit enterprise | not documented | ✓ keyed accounts + limits | ◐ rate limits, Access integration |
 | Providers / models covered | ◐ five provider types; any OpenAI-compatible host via config | ✓ 100+ | ✓ | ✓ many presets | ✓ hundreds of models, one key | ✓ many providers |
@@ -133,16 +133,27 @@ Competitors — one row per `✗`/`◐` cell (accessed 2026-11-19):
 - claude-code-router, "translation inspector" `◐`, "load balancing"
   `◐`, "cost dashboard" `◐`, "inbound formats" `◐`: request logs,
   resolved routes and credential pools — <https://github.com/musistudio/claude-code-router>
+- claude-code-router, "hosted option" `✗`: self-described as "one
+  local control plane"; distributed as a CLI and desktop app, no
+  hosted service — <https://github.com/musistudio/claude-code-router>
 - OpenRouter, "translation inspector" `◐`: `debug.echo_upstream_body`
   — <https://openrouter.ai/docs/api/reference/overview>
 - OpenRouter, "reasoning" `◐`: `reasoning` request parameter and
   reasoning tokens — <https://openrouter.ai/docs/guides/best-practices/reasoning-tokens>
 - OpenRouter, "cache" `◐`: provider prompt-caching passthrough with
   sticky routing — <https://openrouter.ai/docs/guides/features/prompt-caching>
-- OpenRouter, "embeddings inbound" `✓`: an embeddings endpoint is listed
-  among its APIs — <https://openrouter.ai/docs/guides/features/prompt-caching>
+- OpenRouter, "embeddings inbound" `✓`: `POST /api/v1/embeddings`
+  endpoint — <https://openrouter.ai/docs/api/api-reference/embeddings/submit-an-embedding-request>
 - OpenRouter, "Claude Code" `✓`: Anthropic Messages endpoint —
   <https://openrouter.ai/docs/api/api-reference/anthropic-messages/create-a-message>
+- Cloudflare AI Gateway, "translation inspector" `◐`: per-request
+  logs (prompt, response, provider, tokens, cost) and dashboard
+  analytics — <https://developers.cloudflare.com/ai-gateway/observability/logging/>,
+  <https://developers.cloudflare.com/ai-gateway/observability/analytics/>
+- Cloudflare AI Gateway, "Prometheus / OpenTelemetry" `◐`: OTel trace
+  export to OTLP backends, plus analytics and Logpush —
+  <https://developers.cloudflare.com/ai-gateway/observability/otel-integration/>,
+  <https://developers.cloudflare.com/ai-gateway/observability/logging/logpush/>
 - Cloudflare AI Gateway, "Claude Code" `◐`: Anthropic endpoint serving
   Claude on Anthropic / Bedrock / Vertex — <https://developers.cloudflare.com/ai-gateway/integrations/coding-agents/claude-code/>
 - Cloudflare AI Gateway, "streaming + tools" `◐` and "inbound formats"

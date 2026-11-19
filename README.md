@@ -27,9 +27,9 @@ The "check" is the product:
   [docs/compatibility.md](docs/compatibility.md).
 - **The translation inspector** — source, canonical and target side by
   side, every dropped field named (`/ui`, see below).
-- **Small and auditable** — provenance-signed npm releases, a
-  cosign-signed container image, a CycloneDX SBOM, few runtime
-  dependencies: [SECURITY.md](SECURITY.md).
+- **Small and auditable** — a cosign-signed container image, a
+  CycloneDX SBOM attached to each release, few runtime dependencies:
+  [SECURITY.md](SECURITY.md).
 - **A shim for native endpoints** — where a provider already speaks the
   client's format, babelgate passes through and fixes the gaps that
   endpoint leaves: [docs/recipes/native-endpoints.md](docs/recipes/native-endpoints.md).
@@ -678,10 +678,11 @@ docker run -p 3000:3000 --env-file .env babelgate
 ```
 
 Release tags also publish `ghcr.io/dorrabbkhan/babelgate:<version>` and
-`:latest` via `.github/workflows/release.yml` — the npm package ships
-with provenance (`npm publish --provenance`), the image is signed with
-keyless cosign, and a CycloneDX SBOM is attached to each GitHub
-release. Verification steps: [SECURITY.md](SECURITY.md).
+`:latest` via `.github/workflows/release.yml` — the image is signed
+with keyless cosign in CI, the npm package is published by hand
+(without provenance), and a maintainer-generated CycloneDX SBOM is
+attached to each GitHub release. Verification steps:
+[SECURITY.md](SECURITY.md).
 
 Multi-stage build: provider SDKs are `devDependencies` (type-only imports),
 so the runtime image ships `dist/` (server and built UI) plus the
