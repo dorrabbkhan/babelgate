@@ -9,8 +9,12 @@
  * observer decoder's canonical `usage` event on anthropic/chat — so
  * no second wire-format field map exists anywhere.
  */
-import type { ProviderEntry } from "../routing/registry";
-import { adapters } from "../transformers";
+import type {
+  ProviderEntry,
+  ProviderRegistry,
+} from "../routing/registry";
+import type { Hop } from "../routing/route-log";
+import { adapters, type Provider } from "../transformers";
 import { currentTrace, recordNote, snapshot } from "../observe/context";
 import { finishTrace } from "../observe/emit";
 import {
@@ -33,8 +37,9 @@ import {
   maxTokensClampOf,
   type AttemptResult,
 } from "./attempt-targets";
-import type {
-  PassthroughStreamAttempt,
+import {
+  isPassthrough,
+  type PassthroughStreamAttempt,
 } from "./passthrough";
 import type { ProxyResult } from "./proxy.service";
 
@@ -133,7 +138,7 @@ function observeStreamEvents(
  * before routing, for the bridged hop that never came) is removed —
  * the inspector shows source, target and response.wire only.
  */
-function markPassthrough(entry: ProviderEntry): void {
+export function markPassthrough(entry: ProviderEntry): void {
   const trace = currentTrace();
   if (trace === undefined) return;
   // The routing decode's notes describe transforms that never ran —
@@ -145,6 +150,28 @@ function markPassthrough(entry: ProviderEntry): void {
   // §3.3 (Task 15): the preset name rides the row so the inspector's
   // pass-through marker can name the shim endpoint that relayed.
   if (entry.preset !== undefined) trace.preset = entry.preset;
+}
+
+/**
+ * The failure-path half of markPassthrough (v1.5 follow-up): when the
+ * attempt loop's LAST recorded hop was a pass-through relay for this
+ * source, the finished error/aborted trace is marked like a won one —
+ * passthrough: true, the entry's preset, decode notes swept, no
+ * canonical body stage — so a 500ing or timed-out shim call never
+ * shows as a translated request. The last hop in the route record
+ * decides: a fallback that died on a canonical entry keeps its
+ * translated row, and an empty record means nothing reached an
+ * upstream.
+ */
+export function markFailedPassthroughHop(
+  source: Provider,
+  hops: Hop[],
+  registry: ProviderRegistry,
+): void {
+  const last = hops[hops.length - 1];
+  if (last === undefined || !registry.has(last.provider)) return;
+  const entry = registry.get(last.provider);
+  if (isPassthrough(source, entry)) markPassthrough(entry);
 }
 
 /** Unary pass-through finish: diagnostics + trace + the relayed body. */
