@@ -169,12 +169,29 @@ if (process.env.ANTHROPIC_API_KEY) {
           },
         ],
         // ANY on turn 1 only — turn 2 answers the tool result with text.
+        // Forced tool use works with adaptive thinking on Haiku 5.5
+        // (https://platform.claude.com/docs/en/build-with-claude/thinking,
+        // "Response prefill and forced tool use"); the same page says
+        // Opus 5.5, Sonnet 5.5, Fable 5.2/5.1 and Mythos 5.2/5.1 reject
+        // it with a 400 — a LIVE_ANTHROPIC_MODEL override to one of
+        // those needs AUTO on turn 1 instead.
         toolConfig: {
           functionCallingConfig: { mode: forceCall ? 'ANY' : 'AUTO' },
         },
         generationConfig: {
-          maxOutputTokens: 2048,
-          thinkingConfig: { thinkingBudget: 1024, includeThoughts: true },
+          maxOutputTokens: 16384,
+          // thinkingBudget 8192 decodes to effort "medium"
+          // (effortForBudget, src/transformers/reasoning-effort.ts:47 —
+          // minimal = 1024, low = 2048). The previous 1024 decoded to
+          // "minimal", and the default live model claude-haiku-5-5 uses
+          // adaptive thinking, for which the encoder omits `thinking`
+          // on "minimal" + records reasoning_effort_lowered
+          // (docs/decisions.md ≈ l.4343, the owner-reviewed v1.5 Task
+          // 3/4 behaviour) — the upstream body carried no `thinking`
+          // and no `output_config` for ANY, AUTO and no-tools alike,
+          // so the reply had no thought part. The budget was the
+          // test's bug, not the product's.
+          thinkingConfig: { thinkingBudget: 8192, includeThoughts: true },
         },
       });
 

@@ -7708,3 +7708,47 @@ the changed files are listed here by full path:
     Claude Code and Codex; `npm run matrix -- --check` passes on main.
   - Results: _pending — the owner runs `npm run test:live` and the
     gates and appends the summary here._
+- **Fix round 1 (PR #147) — required fixes from the owner's live
+  run:**
+  - **Files outside the Files block:**
+    - `src/services/media-fetch.ts` — product bug from Task 6: URL
+      media downloads by host name always failed ("request failed",
+      surfacing live as a 400 for `www.w3.org`). `fetchHop`'s
+      pinned `lookup` answered `(address, family)` unconditionally,
+      but Node ≥ 20 defaults `net.autoSelectFamily` to true, so
+      http/https call `lookup` with `{all:true}` and expect
+      `cb(null, [{address, family}])`
+      (https://nodejs.org/api/net.html#socketconnectoptions-connectlistener,
+      https://nodejs.org/api/dns.html#dnslookuphostname-options-callback);
+      the single-address shape throws ERR_INVALID_IP_ADDRESS. The
+      callback now honours `options.all`; the checked address is
+      still the only one connected to (no second DNS lookup) and
+      caps, timeouts and the private-range guard are unchanged.
+    - `src/services/media-fetch.test.ts` — two no-network
+      regression cases on a real loopback `node:http` server (msw
+      `passthrough` keeps the request's own connect options,
+      `lookup` included): a host-name URL and a host-name redirect
+      hop. Both failed "request failed" before the fix and pass
+      after.
+  - **`tests/live/reasoning.live.test.ts`** ("gemini sdk shape on
+    claude with thinking"): `thinkingBudget` 1024 → 8192 and
+    `maxOutputTokens` 2048 → 16384. 1024 decodes to effort
+    `minimal` (`effortForBudget`,
+    `src/transformers/reasoning-effort.ts:47` — minimal = 1024,
+    low = 2048), and the default live model `claude-haiku-5-5` uses
+    adaptive thinking, for which the encoder omits `thinking` on
+    `minimal` + records `reasoning_effort_lowered` — the
+    owner-reviewed v1.5 Task 3/4 behaviour above (≈ l.4343). The
+    upstream body had no `thinking`/`output_config`, so the reply
+    had no thought part: the test's budget was wrong, not the
+    product. `functionCallingConfig` ANY stays on turn 1 — forced
+    tool use works with adaptive thinking on Haiku 5.5 per
+    https://platform.claude.com/docs/en/build-with-claude/thinking
+    ("Response prefill and forced tool use"; the same page says
+    Opus 5.5, Sonnet 5.5, Fable 5.2/5.1 and Mythos 5.2/5.1 reject
+    it with a 400, noted in the test for `LIVE_ANTHROPIC_MODEL`
+    overrides). The opposite direction ("claude code shape on
+    gemini", `budget_tokens: 1024` → `minimal`) stays unchanged:
+    the Gemini encoder does not drop `minimal` — `gemini-3.8-flash`
+    has no `minimal` level, so it clamps up to the floor `low`
+    (`reasoning_effort_clamped`) and thinking stays on.
