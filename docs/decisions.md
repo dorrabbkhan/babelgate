@@ -7571,6 +7571,13 @@ the changed files are listed here by full path:
     test loads and validates it (`api_key_env: ZAI_API_KEY` is spelled
     out redundantly with the preset so the file names every env var it
     needs — the test's `envFor` only sets vars literally present).
+  - `docs/roadmap.md` — the owner's 2026-11-18 Task 13 decision (npm
+    publish and GitHub releases stay manual; no npm provenance, no
+    CI-attached SBOM) made the roadmap's "provenance-signed npm
+    releases" proof point and the v1.5 "npm provenance" clause false;
+    both clauses now describe what is on main (cosign-signed GHCR
+    image, maintainer-attached CycloneDX SBOM, npm published by hand
+    without provenance, few runtime dependencies).
 - **Comparison-page rules applied:** every `✗`/`◐` competitor cell
   cites a primary URL in the Sources section (LiteLLM's supported-
   endpoints list and pass-through page, Bifrost's integrations list,

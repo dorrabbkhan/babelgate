@@ -14,7 +14,8 @@ replayed against it, and a translation inspector that shows exactly what it chan
 and SDK on every model. Proof points, in launch-copy order:
 - **Published compatibility matrix**, generated from the tests, with the client versions last replayed.
 - **The translation inspector**: source, canonical and target side by side, every dropped field named.
-- **Small and auditable**: provenance-signed npm releases, signed images, an SBOM, few runtime dependencies.
+- **Small and auditable**: cosign-signed GHCR images, a maintainer-attached CycloneDX SBOM, npm
+  published by hand without provenance, few runtime dependencies.
 - **A shim for native endpoints**: where a provider already speaks the client's format (Ollama, LM Studio,
   vLLM, DeepSeek, GLM, Kimi, Qwen and OpenRouter serve the Anthropic API; several serve Responses), babelgate
   passes through and fixes the gaps that endpoint leaves.
@@ -142,7 +143,7 @@ across every source × target, and a live smoke run against real upstreams befor
 - **Native-endpoint shim.** Same-format pass-through for Anthropic and Chat with provider presets (Ollama,
   LM Studio, DeepSeek, GLM, Kimi Anthropic endpoints) and declared gaps, each with one fix.
 - **Proof.** Generated compatibility matrix (CI fails when stale); weekly replay of the latest Claude Code and
-  Codex; npm provenance, signed images, SBOM.
+  Codex; cosign-signed GHCR images, maintainer-attached CycloneDX SBOM.
 - **Embeddings, minimal.** OpenAI-format inbound; OpenAI-compatible, Gemini and Ollama targets.
 - **Gemini CLI frozen; Antigravity CLI spike** (one day, report only).
 
