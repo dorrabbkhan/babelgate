@@ -6,7 +6,9 @@ import {
   afterEach,
   afterAll,
 } from "vitest";
-import { http, HttpResponse } from "msw";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
+import { http, HttpResponse, passthrough } from "msw";
 import { setupServer } from "msw/node";
 import { fetchMedia, MediaFetchError } from "./media-fetch";
 
@@ -249,5 +251,81 @@ describe("fetchMedia (v1.5 spec §3.2.2)", () => {
 
     expect(out.mimeType).toBe("image/png");
     expect(Buffer.from(out.data, "base64")).toEqual(PNG);
+  });
+
+  it("host-name url connects to the checked address", async () => {
+    // Node ≥ 20 defaults net.autoSelectFamily to true, so http/https
+    // call the pinned `lookup` with {all:true} and expect a
+    // [{address, family}] callback — a lookup that ignores `all`
+    // fails every host-name URL with "request failed"
+    // (https://nodejs.org/api/net.html#socketconnectoptions-connectlistener).
+    // A real loopback server exercises it end to end; msw bypasses
+    // the request (passthrough keeps the request's own connect
+    // options, `lookup` included).
+    const pdfBody = "%PDF-1.4 babelgate loopback body";
+    const real = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/pdf" });
+      res.end(pdfBody);
+    });
+    await new Promise<void>((resolveListen) =>
+      real.listen(0, "127.0.0.1", resolveListen),
+    );
+    try {
+      const port = (real.address() as AddressInfo).port;
+      server.use(
+        http.get(`http://localhost:${port}/*`, () => passthrough()),
+      );
+
+      const out = await fetchMedia(`http://localhost:${port}/doc.pdf`, {
+        allowPrivate: true,
+        resolve: async () => ["127.0.0.1"],
+      });
+
+      expect(out.mimeType).toBe("application/pdf");
+      expect(Buffer.from(out.data, "base64").toString()).toBe(pdfBody);
+    } finally {
+      await new Promise<void>((resolveClose) =>
+        real.close(() => resolveClose()),
+      );
+    }
+  });
+
+  it("host-name url follows a redirect to the checked address", async () => {
+    // Same pinned-lookup path on the second hop: the 302 target is a
+    // host name, so its lookup runs under autoSelectFamily too.
+    const pdfBody = "%PDF-1.4 babelgate redirected body";
+    const real = createServer((req, res) => {
+      const port = (real.address() as AddressInfo).port;
+      if (req.url === "/final.pdf") {
+        res.writeHead(200, { "Content-Type": "application/pdf" });
+        res.end(pdfBody);
+      } else {
+        res.writeHead(302, {
+          Location: `http://localhost:${port}/final.pdf`,
+        });
+        res.end();
+      }
+    });
+    await new Promise<void>((resolveListen) =>
+      real.listen(0, "127.0.0.1", resolveListen),
+    );
+    try {
+      const port = (real.address() as AddressInfo).port;
+      server.use(
+        http.get(`http://localhost:${port}/*`, () => passthrough()),
+      );
+
+      const out = await fetchMedia(`http://localhost:${port}/doc.pdf`, {
+        allowPrivate: true,
+        resolve: async () => ["127.0.0.1"],
+      });
+
+      expect(out.mimeType).toBe("application/pdf");
+      expect(Buffer.from(out.data, "base64").toString()).toBe(pdfBody);
+    } finally {
+      await new Promise<void>((resolveClose) =>
+        real.close(() => resolveClose()),
+      );
+    }
   });
 });

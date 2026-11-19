@@ -5,6 +5,7 @@ import {
   toCanonicalResponse,
   fromCanonicalResponse,
   fromCanonicalModelList,
+  documentFilename,
 } from './openai.adapter';
 import { toCanonicalRequest as anthropicToCanonicalRequest } from './anthropic.adapter';
 import { fromCanonicalRequest as anthropicFromCanonical } from './anthropic.adapter';
@@ -1508,6 +1509,41 @@ describe('reasoning_content (v1.4 spec §3.3)', () => {
           },
         },
       ]);
+    });
+
+    it('document without a name gets a filename derived from its mime type', () => {
+      // Task 17 fix round 2: Chat Completions 400s a `file` part whose
+      // file_data has no filename, so one is always sent — the
+      // document's name, else a name derived from the MIME type.
+      const result = fromCanonicalRequest({
+        model: 'gpt-4',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'document',
+                document: { data: 'JVBERi0=', mimeType: 'application/pdf' },
+              },
+            ],
+          },
+        ],
+      });
+      expect(result.messages[0].content).toEqual([
+        {
+          type: 'file',
+          file: {
+            file_data: 'data:application/pdf;base64,JVBERi0=',
+            filename: 'document.pdf',
+          },
+        },
+      ]);
+      // A text/plain document encodes to a text part, never a file
+      // part, so the derivation's text/plain arm is checked on the
+      // helper directly.
+      expect(documentFilename({ mimeType: 'text/plain' })).toBe(
+        'document.txt',
+      );
     });
 
     it('image_url part in a tool message decodes to an image part', () => {

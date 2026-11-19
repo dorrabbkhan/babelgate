@@ -7608,6 +7608,212 @@ the changed files are listed here by full path:
   cosign and the SBOM; the Gemini CLI line carries the frozen note per
   spec §3.7.
 
+## v1.5 Task 17 — live-suite cases; `--expect-preset`; gates A, B, C · OWNER REVIEW
+
+- **Files outside the Files block:**
+  - `scripts/gates/observe-check.test.ts` — the flag's pure-logic
+    cases live beside the existing `--expect-*` cases (the repo's
+    test-first rule: the new flag's tests ship in the same change).
+- **`scripts/gates/observe-check.ts` gained `--expect-preset <name>`** —
+  gate B's flag. The `requests` row's `preset` column (v1.5 spec §3.3,
+  Task 15; `/ui/api/requests` already exposes it) must equal the name
+  on every row since start — same every-row semantics as
+  `--expect-passthrough`: a row with no preset, or a different one, is
+  a routing bug, not an observation to tolerate. Three new cases in
+  `observe-check.test.ts`.
+- **`tests/live/reasoning.live.test.ts`** (spec §4 live): the two
+  signed-signature paths plus the always-on shim case (the file needs
+  one test that runs with no keys; the shim case needs only local
+  Ollama — it lives here because the Files block names no third live
+  file). `claude code shape on gemini, three-turn reasoning loop`
+  (GEMINI_API_KEY): the Task 1 recording's Claude Code shape — system
+  block array, tools, `metadata.user_id`, `thinking: {type:"enabled",
+  budget_tokens: 1024}` — with `tool_choice:{type:"any"}` so every
+  turn ends in a functionCall part, which Gemini 3 signs even when no
+  thought text comes back (E15: the recorded replies carried
+  `thoughtSignature` on functionCall parts and no `thought:true`
+  part), guaranteeing an envelope each turn. Each turn echoes the
+  assistant content — the `bg1.` signature on the thinking block
+  included — plus a `tool_result`, the way Claude Code resends them.
+  `gemini sdk shape on claude with thinking` (ANTHROPIC_API_KEY): the
+  recording's `generationConfig.thinkingConfig {thinkingBudget,
+  includeThoughts}` plus a `functionCallingConfig ANY` first turn —
+  Claude's adaptive thinking is only guaranteed at a tool loop's
+  start (PR #108 gate B) — then a `functionResponse` turn under AUTO.
+  Turn 1 asserts a `thought` part whose `thoughtSignature` base64-
+  decodes to a `{v:1}` envelope; turn 2 asserts the loop survives
+  passback (200 + Gemini shape + non-empty parts — whether the second
+  reply thinks again is the model's call). Wire fields per
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+  (`thinking`, `tool_result`) and
+  https://ai.google.dev/gemini-api/docs/thought-signatures
+  (`thinkingConfig`, `thoughtSignature`, `functionResponse`,
+  `functionCallingConfig`).
+  `ollama-anthropic preset pass-through with tools` (always on): an
+  inline YAML (`preset: ollama-anthropic`, `base_url` overridden to
+  the suite's OLLAMA_API_BASE_URL, throwaway `usage_db`, `*` route to
+  LIVE_OLLAMA_SHIM_MODEL) and a `tool_choice:any` request tagged
+  `x-babelgate-client: live-shim`; asserts 200 + Anthropic shape +
+  the `x-babelgate-provider/model` headers, then the newest
+  `/ui/api/requests` row carries `passthrough` and
+  `preset:"ollama-anthropic"` — the same columns gate B's
+  `--expect-passthrough --expect-preset` read.
+- **`tests/live/media.live.test.ts`** (spec §4 live): `url image and
+  pdf per capable provider` iterates `liveTargets()` minus
+  `openrouter` (its media capability is the model owner's choice, not
+  a declared provider feature) filtered on `MEDIA_SUPPORT` — URL
+  image + document support — sending Anthropic `source.type:"url"`
+  image and document blocks one request each. An always-on refusal
+  case (Anthropic document → Ollama target → 400 naming documents in
+  the source dialect, no upstream contact) keeps the file non-empty
+  with no keys. Media URLs default to httpbin's PNG (the gate probes'
+  URL) and the W3C dummy PDF; LIVE_MEDIA_IMAGE_URL /
+  LIVE_MEDIA_PDF_URL override.
+- **`tests/live/live.helpers.ts`** gained `LIVE_OLLAMA_SHIM_MODEL`
+  (default the suite's Ollama model — the shim case needs a
+  tool-capable one), `LIVE_MEDIA_IMAGE_URL`, `LIVE_MEDIA_PDF_URL` and
+  `waitForClientRow(client)`, which polls `/ui/api/requests?client=`
+  (the endpoint observe-check reads) until a row lands — the usage
+  store binds lazily on the first /ui/api hit, so callers hit it once
+  before the request under test.
+- **`examples/claude-code-gemini-thinking.yaml`** (gate A): provider
+  `type: gemini`, `GEMINI_API_KEY`, `claude-*` → `gemini-3.8-flash`
+  (thinking-capable and in the bundled price table, which is what
+  `--expect-cost` asserts). **`examples/claude-code-ollama-
+  anthropic.yaml`** (gate B): `preset: ollama-anthropic` (implied
+  `passthrough`), `claude-*` → `qwen3-coder:30b` (a tool-capable
+  local model; the comment says to pick what is pulled). Both load
+  under `src/config/examples.test.ts`.
+- **Recording/network steps: run by the conductor/owner.** The live
+  suite needs real keys and a reachable Ollama; the sandbox has
+  neither. Verified offline instead: `observe-check.test.ts` (21
+  cases) green; both new live files collect under
+  `vitest.live.config.ts`; the always-on refusal case and the shim
+  pass-through case run green against a local stub Ollama
+  (`/api/tags` + an Anthropic-shaped `/v1/messages` reply; the stub
+  also covered `x-babelgate-client` row lookup, `passthrough` and
+  `preset` on the stored row). `npm run test:live` and the three
+  gates below are the owner's, per the plan.
+- **Gates (owner; recorded here with client versions, models,
+  duration, cost):**
+  - **A:** `OBSERVE_CHECK="--expect-cost --expect-no-note
+    reasoning_dropped" scripts/gates/claude-code-edit.sh config
+    examples/claude-code-gemini-thinking.yaml` → GATE PASS + OBSERVE
+    PASS expected.
+  - **B:** `OBSERVE_CHECK="--expect-passthrough --expect-preset
+    ollama-anthropic" scripts/gates/claude-code-edit.sh config
+    examples/claude-code-ollama-anthropic.yaml` on a tool-capable
+    local model → GATE PASS + OBSERVE PASS expected.
+  - **C:** latest scheduled `client-replay` run green on the current
+    Claude Code and Codex; `npm run matrix -- --check` passes on main.
+  - Results: _pending — the owner runs `npm run test:live` and the
+    gates and appends the summary here._
+- **Fix round 1 (PR #147) — required fixes from the owner's live
+  run:**
+  - **Files outside the Files block:**
+    - `src/services/media-fetch.ts` — product bug from Task 6: URL
+      media downloads by host name always failed ("request failed",
+      surfacing live as a 400 for `www.w3.org`). `fetchHop`'s
+      pinned `lookup` answered `(address, family)` unconditionally,
+      but Node ≥ 20 defaults `net.autoSelectFamily` to true, so
+      http/https call `lookup` with `{all:true}` and expect
+      `cb(null, [{address, family}])`
+      (https://nodejs.org/api/net.html#socketconnectoptions-connectlistener,
+      https://nodejs.org/api/dns.html#dnslookuphostname-options-callback);
+      the single-address shape throws ERR_INVALID_IP_ADDRESS. The
+      callback now honours `options.all`; the checked address is
+      still the only one connected to (no second DNS lookup) and
+      caps, timeouts and the private-range guard are unchanged.
+    - `src/services/media-fetch.test.ts` — two no-network
+      regression cases on a real loopback `node:http` server (msw
+      `passthrough` keeps the request's own connect options,
+      `lookup` included): a host-name URL and a host-name redirect
+      hop. Both failed "request failed" before the fix and pass
+      after.
+  - **`tests/live/reasoning.live.test.ts`** ("gemini sdk shape on
+    claude with thinking"): `thinkingBudget` 1024 → 8192 and
+    `maxOutputTokens` 2048 → 16384. 1024 decodes to effort
+    `minimal` (`effortForBudget`,
+    `src/transformers/reasoning-effort.ts:47` — minimal = 1024,
+    low = 2048), and the default live model `claude-haiku-5-5` uses
+    adaptive thinking, for which the encoder omits `thinking` on
+    `minimal` + records `reasoning_effort_lowered` — the
+    owner-reviewed v1.5 Task 3/4 behaviour above (≈ l.4343). The
+    upstream body had no `thinking`/`output_config`, so the reply
+    had no thought part: the test's budget was wrong, not the
+    product. `functionCallingConfig` ANY stays on turn 1 — forced
+    tool use works with adaptive thinking on Haiku 5.5 per
+    https://platform.claude.com/docs/en/build-with-claude/thinking
+    ("Response prefill and forced tool use"; the same page says
+    Opus 5.5, Sonnet 5.5, Fable 5.2/5.1 and Mythos 5.2/5.1 reject
+    it with a 400, noted in the test for `LIVE_ANTHROPIC_MODEL`
+    overrides). The opposite direction ("claude code shape on
+    gemini", `budget_tokens: 1024` → `minimal`) stays unchanged:
+    the Gemini encoder does not drop `minimal` — `gemini-3.8-flash`
+    has no `minimal` level, so it clamps up to the floor `low`
+    (`reasoning_effort_clamped`) and thinking stays on.
+- **Fix round 2 (PR #147) — required fixes from the owner's live
+  rerun on 81791f2 plus the owner's direct API checks:**
+  - **Files outside the Files block:**
+    - `src/transformers/adapters/openai.adapter.ts` — product bug
+      from Task 6: a canonical document with no `name` encoded to a
+      Chat Completions `file` part with `file_data` and no
+      `filename`, which the live OpenAI media case 400'd
+      (`Missing required parameter:
+      'messages[0].content[1].file.file_id'`). The owner's direct
+      check on gpt-4o-mini: the same PDF as `file_data` with no
+      `filename` → that 400; with `"filename":"dummy.pdf"` → 200.
+      https://platform.openai.com/docs/guides/pdf-files pairs
+      `filename` with `file_data`, so a filename is now always
+      sent: the document's own name, else one derived from its
+      MIME type (application/pdf → `document.pdf`, text/plain →
+      `document.txt`, other → `document`) by the new exported
+      `documentFilename` helper.
+    - `src/transformers/adapters/responses.items.ts` — the same
+      optional-filename shape on `input_file` with `file_data`; a
+      separate local `inputFilename` helper applies the same rule
+      there (adapters stay independent). `file_url` is unchanged —
+      the name-less remote case keeps sending no `filename`.
+    - `src/transformers/adapters/openai.adapter.test.ts` and
+      `src/transformers/adapters/responses.adapter.test.ts` — the
+      regression cases; no existing expected value changed.
+  - **`tests/live/reasoning.live.test.ts`** ("gemini sdk shape on
+    claude with thinking") + **`tests/live/live.helpers.ts`**
+    (new `LIVE_ANTHROPIC_THINKING_MODEL`, default
+    `claude-haiku-4-5`): the case still failed at budget 8192 on
+    `claude-haiku-5-5` — `no thought part in the reply`. The
+    product is fine (adaptive `thinking` + `output_config.effort`
+    are sent and a thinking block maps to a `thought` part); the
+    test was non-deterministic because adaptive models decide for
+    themselves whether to think — the owner's direct check on
+    claude-haiku-5-5 returned `["tool_use"]` only at effort medium
+    AND high, with tool_choice any AND auto. Owner decision:
+    "Haiku 4.5, manual thinking". claude-haiku-4-5 is not in
+    `ADAPTIVE_MODELS`, so babelgate encodes legacy
+    `thinking:{type:"enabled", budget_tokens}` — manual thinking
+    always returns a signed thinking block; the owner's check on
+    it (`budget_tokens:8192`, `tool_choice:auto`,
+    `max_tokens:16384`) got `["thinking","tool_use"]`. Because
+    forced tool use is invalid with manual extended thinking
+    (https://platform.claude.com/docs/en/build-with-claude/thinking,
+    "Thinking with tool use"), turn 1's functionCallingConfig is
+    now AUTO like turn 2 — the assertions are unchanged (thought
+    part, `{v:1}` envelope, functionCall on turn 1).
+- **Owner fix (`conductor: fix`) —
+  `examples/claude-code-ollama-anthropic.yaml`:** removed the
+  `context_window: 32768` line rather than keep it with a corrected
+  comment — under `passthrough: true` the Anthropic body relays to
+  /v1/messages unchanged and that format has no num_ctx field, so
+  the setting was dead config here (`context_window` only reaches
+  `options.num_ctx` on the canonical → native /api/chat path via
+  `attempt-targets.ts` → `ollama.adapter.ts`), and a kept-but-inert
+  line would still read as if it did something. The comment now
+  says why pass-through cannot set it and tells users to start
+  Ollama with a larger window — `OLLAMA_CONTEXT_LENGTH=32768
+  ollama serve` for a native install or `docker run -e
+  OLLAMA_CONTEXT_LENGTH=32768 ollama/ollama` under Docker
+  (https://docs.ollama.com/faq).
+
 ## v1.5 follow-up: pass-through error traces (branch v1.5/passthrough-error-trace)
 
 - **Cause:** Gate B (v1.5 Task 17, PR #147) — Claude Code through the
