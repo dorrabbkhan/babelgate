@@ -23,7 +23,14 @@ providers:
     # (set base_url here when Ollama listens elsewhere), no
     # api_key_env (keyless), gaps count_tokens + url_images +
     # documents, and passthrough.
-    context_window: 32768   # Ollama options.num_ctx, as the claude-code preset sets
+    # Pass-through cannot set num_ctx: the Anthropic body relays to
+    # /v1/messages unchanged and that format has no context-window
+    # field — `context_window` only feeds the native /api/chat
+    # adapter's options.num_ctx. Ollama's default window truncates
+    # Claude Code's prompt, so start the server with a larger one
+    # (https://docs.ollama.com/faq — OLLAMA_CONTEXT_LENGTH):
+    #   OLLAMA_CONTEXT_LENGTH=32768 ollama serve               # native
+    #   docker run -e OLLAMA_CONTEXT_LENGTH=32768 ollama/ollama  # docker
     timeout_ms: 600000      # local models are slow; same value the CLI preset uses
 routes:
   - match: claude-*

@@ -7799,3 +7799,17 @@ the changed files are listed here by full path:
     "Thinking with tool use"), turn 1's functionCallingConfig is
     now AUTO like turn 2 — the assertions are unchanged (thought
     part, `{v:1}` envelope, functionCall on turn 1).
+- **Owner fix (`conductor: fix`) —
+  `examples/claude-code-ollama-anthropic.yaml`:** removed the
+  `context_window: 32768` line rather than keep it with a corrected
+  comment — under `passthrough: true` the Anthropic body relays to
+  /v1/messages unchanged and that format has no num_ctx field, so
+  the setting was dead config here (`context_window` only reaches
+  `options.num_ctx` on the canonical → native /api/chat path via
+  `attempt-targets.ts` → `ollama.adapter.ts`), and a kept-but-inert
+  line would still read as if it did something. The comment now
+  says why pass-through cannot set it and tells users to start
+  Ollama with a larger window — `OLLAMA_CONTEXT_LENGTH=32768
+  ollama serve` for a native install or `docker run -e
+  OLLAMA_CONTEXT_LENGTH=32768 ollama/ollama` under Docker
+  (https://docs.ollama.com/faq).
