@@ -11,6 +11,7 @@
  *     [--since <epoch-ms>] [--expect-cost] [--expect-cache-read]
  *     [--expect-providers a,b] [--expect-saved]
  *     [--expect-no-note <code>...] [--expect-passthrough]
+ *     [--expect-preset <name>]
  *
  * Exit 0 prints "OBSERVE PASS"; exit 1 prints "OBSERVE FAIL: <the
  * failed expectation>"; exit 2 is a usage error. Loopback only — the
@@ -42,6 +43,8 @@ export interface ObserveRow {
   }[];
   /** Set only on a pass-through row (v1.4 §3.4). */
   passthrough?: boolean;
+  /** The shim preset that relayed — pass-through rows only (v1.5 §3.3). */
+  preset?: string;
 }
 
 /** The inspector body of GET /ui/api/requests/<id> (the §3.5 stages). */
@@ -63,6 +66,7 @@ export interface ObserveFlags {
   expectSaved: boolean;
   expectNoNote: string[];
   expectPassthrough: boolean;
+  expectPreset?: string;
 }
 
 /**
@@ -131,6 +135,15 @@ export function evaluateObservations(
   if (flags.expectPassthrough && rows.some((r) => r.passthrough !== true)) {
     return "--expect-passthrough: a row is not marked pass-through";
   }
+  // v1.5 gate B: every row since start must have been relayed by the
+  // named shim preset — a row with no preset, or a different one, is a
+  // routing bug, not an observation to tolerate.
+  if (
+    flags.expectPreset !== undefined &&
+    rows.some((r) => r.preset !== flags.expectPreset)
+  ) {
+    return `--expect-preset ${flags.expectPreset}: a row's preset is not "${flags.expectPreset}"`;
+  }
   return null;
 }
 
@@ -164,7 +177,8 @@ function usage(): never {
     "usage: observe-check.ts --base <url> --client <id> " +
       "[--since <epoch-ms>] [--expect-cost] [--expect-cache-read] " +
       "[--expect-providers a,b] [--expect-saved] " +
-      "[--expect-no-note <code>...] [--expect-passthrough]",
+      "[--expect-no-note <code>...] [--expect-passthrough] " +
+      "[--expect-preset <name>]",
   );
   process.exit(2);
 }
@@ -184,6 +198,7 @@ function parseCli(argv: string[]): CliArgs {
         "expect-saved": { type: "boolean", default: false },
         "expect-no-note": { type: "string", multiple: true },
         "expect-passthrough": { type: "boolean", default: false },
+        "expect-preset": { type: "string" },
       },
     });
     if (values.base === undefined || values.client === undefined) {
@@ -207,6 +222,9 @@ function parseCli(argv: string[]): CliArgs {
       expectSaved: values["expect-saved"]!,
       expectNoNote: values["expect-no-note"] ?? [],
       expectPassthrough: values["expect-passthrough"]!,
+      ...(values["expect-preset"] !== undefined && {
+        expectPreset: values["expect-preset"],
+      }),
     };
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));

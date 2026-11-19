@@ -21,6 +21,7 @@ const FLAGS: ObserveFlags = {
   expectSaved: false,
   expectNoNote: [],
   expectPassthrough: false,
+  expectPreset: undefined,
 };
 
 const ROW: ObserveRow = {
@@ -229,5 +230,41 @@ describe("evaluateObservations", () => {
     expect(evaluateObservations(FLAGS, [ROW], bodies, 7)).toBe(
       "latest request has no four-stage inspector body (source/canonical/target/response)",
     );
+  });
+
+  // v1.5 Task 17 (spec §4, gate B): every row since start must name
+  // the preset that relayed it — a row without a preset, or with a
+  // different one, means routing went somewhere else.
+  it("--expect-preset fails on a row with no preset", () => {
+    const flags = { ...FLAGS, expectPreset: "ollama-anthropic" };
+    expect(
+      evaluateObservations(flags, [PASS_THROUGH_ROW], PASS_THROUGH_BODIES, 7),
+    ).toContain('--expect-preset ollama-anthropic');
+  });
+
+  it("--expect-preset fails on a row with a different preset", () => {
+    const flags = { ...FLAGS, expectPreset: "ollama-anthropic" };
+    const other: ObserveRow = {
+      ...PASS_THROUGH_ROW,
+      preset: "glm-anthropic",
+    };
+    expect(
+      evaluateObservations(flags, [other], PASS_THROUGH_BODIES, 7),
+    ).toContain('--expect-preset ollama-anthropic');
+  });
+
+  it("--expect-preset passes when every row names the preset", () => {
+    const flags = { ...FLAGS, expectPreset: "ollama-anthropic" };
+    const shimmed: ObserveRow = {
+      ...PASS_THROUGH_ROW,
+      preset: "ollama-anthropic",
+    };
+    const second: ObserveRow = {
+      ...shimmed,
+      id: "r2",
+    };
+    expect(
+      evaluateObservations(flags, [shimmed, second], PASS_THROUGH_BODIES, 7),
+    ).toBeNull();
   });
 });
