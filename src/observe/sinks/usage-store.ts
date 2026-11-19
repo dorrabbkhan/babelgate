@@ -68,6 +68,14 @@ ALTER TABLE requests ADD COLUMN reasoning_tokens INTEGER;
 ALTER TABLE requests ADD COLUMN passthrough INTEGER;
 `,
   },
+  {
+    // v1.5 Task 15: the shim preset that relayed — set on pass-through
+    // rows so the inspector's marker can name it; NULL elsewhere.
+    version: 3,
+    sql: `
+ALTER TABLE requests ADD COLUMN preset TEXT;
+`,
+  },
 ];
 
 /** Forward-only migrations driven by the `schema_version` table. */
@@ -108,10 +116,10 @@ export function createUsageStore(opts: {
       id, started_at, client, user_agent, source_api, requested_model,
       route_reason, provider, model, stream, status, http_status, error_type,
       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-      reasoning_tokens, passthrough,
+      reasoning_tokens, passthrough, preset,
       cost_usd, would_cost_usd, cost_estimated, price_source,
       ttfb_ms, total_ms, finish_reason, hops, notes, diagnostics, repairs
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertBody = db.prepare(
     "INSERT OR REPLACE INTO bodies (id, snapshots) VALUES (?, ?)",
@@ -153,6 +161,7 @@ export function createUsageStore(opts: {
           row.cacheWriteTokens,
           row.reasoningTokens,
           row.passthrough === true ? 1 : null,
+          row.preset ?? null,
           row.costUsd,
           row.wouldCostUsd,
           row.costEstimated ? 1 : 0,

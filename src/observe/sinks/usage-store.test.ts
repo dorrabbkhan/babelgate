@@ -245,7 +245,7 @@ describe("createUsageStore", () => {
     store.close();
   });
 
-  it("v1 database migrates to v2", () => {
+  it("v1 database migrates to the latest schema", () => {
     // A v1 DB as v1.3 wrote it: the pre-v2 requests/bodies DDL at
     // schema_version 1 with one existing row.
     const path = dbPath();
@@ -284,6 +284,7 @@ INSERT INTO requests (
         requestId: "new-row",
         reasoningTokens: 77,
         passthrough: true,
+        preset: "ollama-anthropic",
       }),
     );
     store.flush();
@@ -292,7 +293,7 @@ INSERT INTO requests (
     const version = db
       .prepare("SELECT MAX(version) AS v FROM schema_version")
       .get() as { v: number };
-    expect(version.v).toBe(2);
+    expect(version.v).toBe(3);
     db.close();
 
     // The pre-existing row survives with NULLs for the new columns.
@@ -300,9 +301,11 @@ INSERT INTO requests (
     expect(old).toBeDefined();
     expect(old?.reasoningTokens).toBeNull();
     expect(old?.passthrough).toBeUndefined();
+    expect(old?.preset).toBeUndefined();
     const added = store.getRequest("new-row");
     expect(added?.reasoningTokens).toBe(77);
     expect(added?.passthrough).toBe(true);
+    expect(added?.preset).toBe("ollama-anthropic");
     expect(store.listRequests({ limit: 10 }).rows).toHaveLength(2);
     store.close();
   });
@@ -320,7 +323,7 @@ INSERT INTO requests (
     const version = db
       .prepare("SELECT MAX(version) AS v FROM schema_version")
       .get() as { v: number };
-    expect(version.v).toBe(2);
+    expect(version.v).toBe(3);
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
