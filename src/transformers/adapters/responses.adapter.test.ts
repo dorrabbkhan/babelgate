@@ -367,6 +367,40 @@ describe("Responses adapter", () => {
       ]);
     });
 
+    it("document without a name gets a filename derived from its mime type", () => {
+      // Task 17 fix round 2: `input_file` with `file_data` has the
+      // same required-filename shape as Chat Completions' `file`
+      // part — always send one, derived from the MIME type when the
+      // document has no name.
+      const wire = fromCanonicalRequest({
+        model: "m",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "document",
+                document: { data: "JVBERi0=", mimeType: "application/pdf" },
+              },
+            ],
+          },
+        ],
+      });
+      expect(wire.input).toEqual([
+        {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_file",
+              file_data: "data:application/pdf;base64,JVBERi0=",
+              filename: "document.pdf",
+            },
+          ],
+        },
+      ]);
+    });
+
     it("dropped fields are noted, never sent", () => {
       const trace = traced(() =>
         toCanonicalRequest(fixtures.requests.codex as ResponsesRequest),

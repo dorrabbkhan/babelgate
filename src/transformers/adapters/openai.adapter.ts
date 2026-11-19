@@ -822,7 +822,7 @@ function convertFromCanonicalContent(
         }
       | {
           type: "file";
-          file: { file_data: string; filename?: string };
+          file: { file_data: string; filename: string };
           cache_control?: OpenAICacheControl;
         }
     > {
@@ -881,13 +881,30 @@ function convertFromCanonicalContent(
         type: "file" as const,
         file: {
           file_data: `data:${document.mimeType};base64,${document.data}`,
-          ...(document.name !== undefined && { filename: document.name }),
+          filename: documentFilename(document),
         },
         ...(cacheControl && { cache_control: cacheControl }),
       };
     }
     return { type: "text" as const, text: "" };
   });
+}
+
+/**
+ * Chat Completions rejects a `file` part whose `file_data` has no
+ * `filename` — a nameless document got a live 400
+ * `Missing required parameter: 'messages[0].content[1].file.file_id'`
+ * on gpt-4o-mini while the same PDF with `"filename":"dummy.pdf"`
+ * returned 200 (owner's direct check, Task 17 fix round 2), and
+ * https://platform.openai.com/docs/guides/pdf-files pairs `filename`
+ * with `file_data`. So a filename is always sent: the document's own
+ * name, else one derived from its MIME type.
+ */
+export function documentFilename(document: CanonicalDocument): string {
+  if (document.name) return document.name;
+  if (document.mimeType === "application/pdf") return "document.pdf";
+  if (document.mimeType === "text/plain") return "document.txt";
+  return "document";
 }
 
 // ============ RESPONSE: OpenAI → Canonical ============

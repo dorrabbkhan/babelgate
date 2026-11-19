@@ -15,6 +15,7 @@ import {
   SOURCE_FORMAT_CHECKS,
   LIVE_OLLAMA_URL,
   LIVE_OLLAMA_SHIM_MODEL,
+  LIVE_ANTHROPIC_THINKING_MODEL,
 } from './live.helpers';
 
 /**
@@ -141,17 +142,16 @@ if (process.env.ANTHROPIC_API_KEY) {
   describe('live reasoning: gemini → anthropic', () => {
     it('gemini sdk shape on claude with thinking', async () => {
       useTarget('gemini', 'anthropic');
-      const model = liveModel('anthropic');
+      // Haiku 4.5, not liveModel('anthropic'): manual thinking is what
+      // makes the thought part deterministic — see the constant's
+      // comment in live.helpers.ts.
+      const model = LIVE_ANTHROPIC_THINKING_MODEL;
       const path = `/v1beta/models/${model}:generateContent`;
 
       // The shape the Task 1 recording shows the Gemini SDK sending:
       // generationConfig.thinkingConfig {thinkingBudget,
-      // includeThoughts} — here aimed at Claude. The functionCallingConfig
-      // ANY is the recording's sequential-call loop: Claude's adaptive
-      // thinking is only guaranteed at a tool loop's start (PR #108
-      // gate B), so a forced call is what makes the signed thinking
-      // block deterministic.
-      const body = (contents: unknown[], forceCall = true) => ({
+      // includeThoughts} — here aimed at Claude.
+      const body = (contents: unknown[]) => ({
         contents,
         tools: [
           {
@@ -168,29 +168,27 @@ if (process.env.ANTHROPIC_API_KEY) {
             ],
           },
         ],
-        // ANY on turn 1 only — turn 2 answers the tool result with text.
-        // Forced tool use works with adaptive thinking on Haiku 5.5
+        // AUTO on both turns — forced tool use (ANY) is invalid with
+        // manual extended thinking; Claude 400s it
         // (https://platform.claude.com/docs/en/build-with-claude/thinking,
-        // "Response prefill and forced tool use"); the same page says
-        // Opus 5.5, Sonnet 5.5, Fable 5.2/5.1 and Mythos 5.2/5.1 reject
-        // it with a 400 — a LIVE_ANTHROPIC_MODEL override to one of
-        // those needs AUTO on turn 1 instead.
+        // "Thinking with tool use"). The owner's direct check on
+        // claude-haiku-4-5 had the turn-1 reply call the tool under
+        // AUTO anyway (types ["thinking","tool_use"]).
         toolConfig: {
-          functionCallingConfig: { mode: forceCall ? 'ANY' : 'AUTO' },
+          functionCallingConfig: { mode: 'AUTO' },
         },
         generationConfig: {
           maxOutputTokens: 16384,
           // thinkingBudget 8192 decodes to effort "medium"
           // (effortForBudget, src/transformers/reasoning-effort.ts:47 —
-          // minimal = 1024, low = 2048). The previous 1024 decoded to
-          // "minimal", and the default live model claude-haiku-5-5 uses
-          // adaptive thinking, for which the encoder omits `thinking`
-          // on "minimal" + records reasoning_effort_lowered
-          // (docs/decisions.md ≈ l.4343, the owner-reviewed v1.5 Task
-          // 3/4 behaviour) — the upstream body carried no `thinking`
-          // and no `output_config` for ANY, AUTO and no-tools alike,
-          // so the reply had no thought part. The budget was the
-          // test's bug, not the product's.
+          // minimal = 1024, low = 2048). On Haiku 4.5 (not adaptive) it
+          // encodes legacy thinking {type:"enabled", budget_tokens:
+          // 8192}, which always returns a signed thinking block — the
+          // deterministic case this test needs. Round 1's claude-
+          // haiku-5-5 is adaptive: it decides whether to think itself,
+          // and the owner's direct check got ["tool_use"] only at
+          // effort medium AND high — the thought part could never be
+          // deterministic on it.
           thinkingConfig: { thinkingBudget: 8192, includeThoughts: true },
         },
       });
@@ -225,7 +223,7 @@ if (process.env.ANTHROPIC_API_KEY) {
         unpackEnvelope(fromGeminiSignature(thought!.thoughtSignature!)),
       ).toMatchObject({ v: 1 });
       const call = modelParts.find((p) => p.functionCall !== undefined);
-      expect(call, 'no functionCall in the reply (mode ANY)').toBeDefined();
+      expect(call, 'no functionCall in the reply (mode AUTO)').toBeDefined();
 
       // The SDK appends the candidate's parts unchanged — signature
       // included — and answers the call with a functionResponse, so
@@ -255,7 +253,6 @@ if (process.env.ANTHROPIC_API_KEY) {
                 ],
               },
             ],
-            false,
           ),
         );
       expect(second.status, JSON.stringify(second.body)).toBe(200);

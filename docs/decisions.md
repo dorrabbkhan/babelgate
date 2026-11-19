@@ -7752,3 +7752,50 @@ the changed files are listed here by full path:
     the Gemini encoder does not drop `minimal` — `gemini-3.8-flash`
     has no `minimal` level, so it clamps up to the floor `low`
     (`reasoning_effort_clamped`) and thinking stays on.
+- **Fix round 2 (PR #147) — required fixes from the owner's live
+  rerun on 81791f2 plus the owner's direct API checks:**
+  - **Files outside the Files block:**
+    - `src/transformers/adapters/openai.adapter.ts` — product bug
+      from Task 6: a canonical document with no `name` encoded to a
+      Chat Completions `file` part with `file_data` and no
+      `filename`, which the live OpenAI media case 400'd
+      (`Missing required parameter:
+      'messages[0].content[1].file.file_id'`). The owner's direct
+      check on gpt-4o-mini: the same PDF as `file_data` with no
+      `filename` → that 400; with `"filename":"dummy.pdf"` → 200.
+      https://platform.openai.com/docs/guides/pdf-files pairs
+      `filename` with `file_data`, so a filename is now always
+      sent: the document's own name, else one derived from its
+      MIME type (application/pdf → `document.pdf`, text/plain →
+      `document.txt`, other → `document`) by the new exported
+      `documentFilename` helper.
+    - `src/transformers/adapters/responses.items.ts` — the same
+      optional-filename shape on `input_file` with `file_data`; a
+      separate local `inputFilename` helper applies the same rule
+      there (adapters stay independent). `file_url` is unchanged —
+      the name-less remote case keeps sending no `filename`.
+    - `src/transformers/adapters/openai.adapter.test.ts` and
+      `src/transformers/adapters/responses.adapter.test.ts` — the
+      regression cases; no existing expected value changed.
+  - **`tests/live/reasoning.live.test.ts`** ("gemini sdk shape on
+    claude with thinking") + **`tests/live/live.helpers.ts`**
+    (new `LIVE_ANTHROPIC_THINKING_MODEL`, default
+    `claude-haiku-4-5`): the case still failed at budget 8192 on
+    `claude-haiku-5-5` — `no thought part in the reply`. The
+    product is fine (adaptive `thinking` + `output_config.effort`
+    are sent and a thinking block maps to a `thought` part); the
+    test was non-deterministic because adaptive models decide for
+    themselves whether to think — the owner's direct check on
+    claude-haiku-5-5 returned `["tool_use"]` only at effort medium
+    AND high, with tool_choice any AND auto. Owner decision:
+    "Haiku 4.5, manual thinking". claude-haiku-4-5 is not in
+    `ADAPTIVE_MODELS`, so babelgate encodes legacy
+    `thinking:{type:"enabled", budget_tokens}` — manual thinking
+    always returns a signed thinking block; the owner's check on
+    it (`budget_tokens:8192`, `tool_choice:auto`,
+    `max_tokens:16384`) got `["thinking","tool_use"]`. Because
+    forced tool use is invalid with manual extended thinking
+    (https://platform.claude.com/docs/en/build-with-claude/thinking,
+    "Thinking with tool use"), turn 1's functionCallingConfig is
+    now AUTO like turn 2 — the assertions are unchanged (thought
+    part, `{v:1}` envelope, functionCall on turn 1).

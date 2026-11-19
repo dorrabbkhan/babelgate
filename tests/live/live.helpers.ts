@@ -70,6 +70,20 @@ const DEFAULT_OPENROUTER_MODEL = 'qwen/qwen3-coder';
 export const OPENROUTER_ANTHROPIC_MODEL =
   process.env.LIVE_OPENROUTER_ANTHROPIC_MODEL || 'anthropic/claude-haiku-4.5';
 
+/**
+ * Anthropic model for the gemini → anthropic thinking case (Task 17
+ * fix round 2, owner decision "Haiku 4.5, manual thinking").
+ * claude-haiku-4-5 is NOT in ADAPTIVE_MODELS
+ * (src/transformers/adapters/anthropic.adapter.ts), so babelgate
+ * encodes legacy `thinking:{type:"enabled", budget_tokens}` — manual
+ * extended thinking always returns a signed thinking block. Adaptive
+ * models (e.g. the default claude-haiku-5-5) decide for themselves
+ * whether to think, so a thought part can't be deterministic on
+ * them. Override with LIVE_ANTHROPIC_THINKING_MODEL.
+ */
+export const LIVE_ANTHROPIC_THINKING_MODEL =
+  process.env.LIVE_ANTHROPIC_THINKING_MODEL || 'claude-haiku-4-5';
+
 const ALL_PROVIDERS: Provider[] = [
   'openai',
   'gemini',

@@ -677,10 +677,11 @@ function toInputContent(
 
 /**
  * Canonical document → `input_file` (v1.5 §3.2.2): bytes →
- * `file_data` as a `data:` URL; a URL → `file_url` (the wire slot
- * for remote PDFs); `name` → `filename`. A text/plain document
- * decodes to input_text — media-inline already converts it; this is
- * the defensive path for a direct encode.
+ * `file_data` as a `data:` URL (which always carries a `filename` —
+ * see inputFilename); a URL → `file_url` (the wire slot for remote
+ * PDFs); `name` → `filename`. A text/plain document decodes to
+ * input_text — media-inline already converts it; this is the
+ * defensive path for a direct encode.
  */
 function toInputFile(document: CanonicalDocument): Record<string, unknown> {
   if (document.mimeType === "text/plain") {
@@ -707,8 +708,26 @@ function toInputFile(document: CanonicalDocument): Record<string, unknown> {
   return {
     type: "input_file",
     file_data: `data:${document.mimeType};base64,${document.data}`,
-    ...filename,
+    filename: inputFilename(document),
   };
+}
+
+/**
+ * `input_file` with `file_data` carries the same required-filename
+ * shape as Chat Completions' `file` part — the owner's direct check
+ * 400'd a nameless `file_data` (`Missing required parameter:
+ * 'messages[0].content[1].file.file_id'`, gpt-4o-mini) and passed with
+ * `"filename":"dummy.pdf"` (Task 17 fix round 2);
+ * https://platform.openai.com/docs/guides/pdf-files pairs `filename`
+ * with `file_data`. The document's own name wins; otherwise one is
+ * derived from the MIME type. Local copy of the chat adapter's
+ * derivation — adapters never share helpers.
+ */
+function inputFilename(document: CanonicalDocument): string {
+  if (document.name) return document.name;
+  if (document.mimeType === "application/pdf") return "document.pdf";
+  if (document.mimeType === "text/plain") return "document.txt";
+  return "document";
 }
 
 export function toOutputContent(
