@@ -58,16 +58,44 @@ provider's errors (Gemini's gRPC status object, Anthropic's
 `detectSource` middleware records the request's dialect so even
 body-parse and 404 errors render correctly.
 
-### Pass-through and reasoning origin (v1.4)
+### Pass-through and the shim (v1.4, v1.5)
 
-Two exceptions live inside that same flow, not beside it. When the source
-is **Responses** (`POST /v1/responses`) and the routed entry is
-`type: responses`, `src/services/passthrough.ts` skips canonical entirely:
-the body goes upstream with only `model` rewritten (and the
+Same-format traffic lives inside that same flow, not beside it. When
+the source format equals the routed provider's type and pass-through
+applies — always for `type: responses`, automatically on shim
+`preset`s, opt-in via `passthrough: true` for `anthropic` and `openai`
+entries — `src/services/passthrough.ts` skips canonical entirely: the
+body goes upstream with only `model` rewritten (and the
 `max_output_tokens` clamp), the reply or SSE stream relays byte-for-byte
-with `model` restored in the lifecycle events, and the trace — hops, usage
-from `response.completed`, cost, diagnostics — is emitted as usual and
-marked `passthrough: true`.
+with `model` restored in the lifecycle events, and the trace — hops, usage,
+cost, diagnostics — is emitted as usual and marked `passthrough: true`
+(plus the preset name where one set it).
+
+A provider's `gaps:` declares what its same-format endpoint lacks; the
+fixed vocabulary lives in `src/config/provider-presets.ts` (one preset
+per known shim endpoint, each verified against provider docs) and each
+gap's single fix is applied by the source adapter's `patchGaps`,
+orchestrated by `src/services/gap-fixes.ts` — URL images are fetched
+and inlined, `documents` gaps refuse in the source's dialect,
+`count_tokens` answers the local estimate. The vocabulary is per gap,
+never per provider pair.
+
+### Media (v1.5)
+
+Canonical `image` parts may carry a `url` instead of `data`, a new
+`document` part covers PDF and plain text, and tool-result content may
+contain images. Each adapter's `MEDIA_SUPPORT` declares what its target
+reads (`imageUrl`, `documentData`, `documentUrl`, `toolMessageImages`);
+`src/services/media-inline.ts` drives encoding: URLs kept for
+URL-capable targets, `src/services/media-fetch.ts` fetches and inlines
+for byte-only targets (`http`/`https` only; private, loopback,
+link-local, CGNAT, ULA and metadata ranges refused per resolved address
+and redirect hop unless `media.allow_private`; 20 MB / 15 s caps),
+text documents become text parts, and everything else refuses with a
+400 in the source's dialect. The URL may be logged; the bytes never
+are — the privacy canary carries a PDF and a URL image sentinel.
+
+### Reasoning origin
 
 Canonical **reasoning parts and signatures** carry an
 `origin {provider, model}` set by the decoding adapter from
@@ -75,10 +103,15 @@ Canonical **reasoning parts and signatures** carry an
 encode/call/decode in `runWithAttempt`, fallback hops included). An encoder
 emits a reasoning part or signature only when its origin equals the current
 attempt's — reasoning never crosses providers — and drops the rest with a
-`reasoning_dropped` note. Responses clients get their upstream's reasoning
-back inside `bg1.` `encrypted_content` envelopes
-(`src/transformers/adapters/responses.envelope.ts`), which later requests
-unpack back into canonical parts.
+`reasoning_dropped` note. Every client format now emits reasoning in its
+own shape: Anthropic `thinking` blocks, Gemini `thought` parts,
+`reasoning_content` on Chat, `message.thinking` on Ollama and Responses
+`reasoning` items; when the origin provider differs, signatures ride
+inside `bg1.` envelopes — Anthropic `signature`, Gemini
+`thoughtSignature` and Responses `encrypted_content` fields all carry
+them (`src/transformers/reasoning-envelope.ts`, shared since v1.5; the
+Responses behaviour and its 1 MB cap are unchanged). `reasoning: false`
+on a provider restores the v1.4 drop behaviour for it.
 
 ## Routing
 

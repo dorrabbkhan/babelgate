@@ -63,6 +63,38 @@ curl http://localhost:3000/v1/chat/completions \
 `GET /v1/models` works too — the upstream catalog is translated into
 OpenAI's list shape, so model dropdowns in apps populate.
 
+## Embeddings
+
+`POST /v1/embeddings` is served in OpenAI format and routed like chat —
+`model` names resolve through aliases and routes, and the call lands on
+an OpenAI-compatible (`/v1/embeddings` pass-through), Gemini
+(`batchEmbedContents`) or Ollama (`/api/embed`) target:
+
+```python
+resp = client.embeddings.create(model="nomic-embed-text", input="hello")
+```
+
+`dimensions` maps where the target supports it (a trace note where it
+doesn't), and `encoding_format: "base64"` is handled by babelgate
+itself. An Anthropic target gets a `501` in OpenAI's error shape.
+Usage and cost land on the trace like any request.
+
+## Media
+
+`image_url` parts keep URLs as URLs for targets that read them
+(OpenAI-compatible, Anthropic, Gemini); a target that needs bytes —
+Ollama — gets the image fetched and inlined under a guard:
+`http:`/`https:` only, private/loopback/link-local addresses refused
+unless `media.allow_private: true` in `babelgate.yaml`, 20 MB and 15 s
+caps, and the bytes are never logged. `media.fetch: false` refuses
+such requests instead of fetching.
+
+`file` parts become documents where the target reads them — Anthropic,
+Gemini and OpenAI-compatible targets take PDFs (OpenAI-compatible by
+base64, not URL); plain-text files become text parts everywhere. A
+target that can't take the document — Ollama — gets a `400` in OpenAI's
+error shape naming the field, never a silent drop.
+
 ## Model names
 
 The model in the request is forwarded to the target unchanged. So the

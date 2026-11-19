@@ -1,0 +1,54 @@
+# Claude Code on endpoints that already speak Anthropic — the
+# native-endpoint shim. Recipe: docs/recipes/native-endpoints.md
+#
+# A provider-level `preset` (not to be confused with the CLI's
+# `--preset`, which chooses client export lines) fills the provider's
+# type, base_url, api_key_env and its declared `gaps`, and implies
+# `passthrough: true`: the request is forwarded in the client's own
+# format without the canonical round trip, each declared gap's fix is
+# applied to the body first, and the trace is marked
+# "pass-through · <preset>". Explicit keys override preset values.
+#
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo native-endpoints.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/native-endpoints.yaml
+#   ZAI_API_KEY=<key> \
+#     npx babelgate --config native-endpoints.yaml --preset claude-code
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
+#
+# Routing (first match wins; anything unmatched goes to the default):
+#   claude-*haiku*  -> ollama/qwen2.5-coder:7b through Ollama's Anthropic
+#                    endpoint (pass-through with its gaps fixed)
+#   claude-*        -> zai/GLM-4.6V-Flash through z.ai's Anthropic
+#                    endpoint, falling back to the Ollama endpoint
+default: ollama
+providers:
+  ollama:
+    preset: ollama-anthropic
+    # The preset fills: type anthropic, base_url http://localhost:11434,
+    # no api_key_env (keyless), gaps count_tokens + url_images +
+    # documents, and passthrough.
+    context_window: 32768   # an ordinary provider key — overrides add, not replace
+    timeout_ms: 600000      # local models are slow; same value the CLI preset uses
+  zai:
+    preset: glm-anthropic
+    # The preset fills type anthropic, base_url
+    # https://api.z.ai/api/anthropic, api_key_env ZAI_API_KEY and gaps
+    # count_tokens + documents + tool_choice + url_images. The explicit
+    # api_key_env below is already the preset's value — it is spelled
+    # out so this file names every env var it needs.
+    api_key_env: ZAI_API_KEY
+  custom:
+    # No preset: declare the endpoint and its gaps yourself.
+    type: anthropic
+    base_url: http://localhost:8080
+    api_key_env: SHIM_API_KEY
+    passthrough: true        # opt in — automatic only on shim presets
+    gaps: [count_tokens, tool_choice]
+routes:
+  - match: claude-*haiku*   # Claude Code's cheap background calls stay small and local
+    to: ollama/qwen2.5-coder:7b
+  - match: claude-*
+    to: zai/GLM-4.6V-Flash
+    fallback:
+      - ollama/qwen3-coder:30b
