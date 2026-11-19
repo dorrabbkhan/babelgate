@@ -7607,3 +7607,63 @@ the changed files are listed here by full path:
   `reasoning: false`; the Docker section now mentions provenance,
   cosign and the SBOM; the Gemini CLI line carries the frozen note per
   spec §3.7.
+
+## v1.5 follow-up: Codex 0.170 recorder
+
+- **Why:** live run 44549011473 (client-replay dispatch, 2026-11-19)
+  failed the codex record step with "no requests recorded":
+  record-shapes printed `listening on :37305` and `codex exec`
+  finished the edit task with a real model reply, so model traffic
+  reached a working upstream without ever connecting to the
+  recorder's IPv4 socket.
+- **Cause:** `localhost` was the only name-resolved hop in the
+  topology. The scratch config.toml pointed `base_url` at
+  `http://localhost:<port>/v1` while record-shapes binds
+  `127.0.0.1` only — every other listener the job exposes to Codex
+  (babelgate's `app.listen(port)` → `::`) is dual-stack, which is why
+  the edit-task gate still passed in the same job. The run is
+  consistent with `localhost` resolving to `::1` on that runner
+  image (nsswitch/myhostname ordering varies across ubuntu-latest
+  image releases); the exact destination socket cannot be
+  reconstructed because the artifact keeps only the last 20 lines of
+  codex's log. Either way the recorder's capture contract depended on
+  a resolver answer it does not control. Not a Codex-0.170 wire
+  change: run 44352450611 the day before recorded codex-cli 0.170.0
+  fine, and the probes below show its request path is identical to
+  0.169.0's.
+- **Probe evidence** (scratch HOME/CODEX_HOME, the exact config.toml
+  the script writes, `OPENROUTER_API_KEY=dummy`): `codex exec`
+  0.169.0 and 0.170.0 both send ordinary `POST /v1/responses` —
+  top-level keys `model, stream, input, tools, tool_choice,
+  parallel_tool_calls, reasoning, store, include, prompt_cache_key,
+  client_metadata` — with no `Upgrade` header and zero WebSocket
+  attempts across dozens of requests; `localhost`, `127.0.0.1` and
+  `[::1]` each reach the matching listener. `codex doctor` on 0.170.0
+  reports `provider: rec`, `wire_api: responses`,
+  `websockets: false`, CODEX_HOME honoured; `exec --help` and
+  `config.schema.json` show no new provider keys. With the pin below,
+  `record-codex.sh` + a local SSE stub records 0.170.0 (and 0.169.0)
+  again end-to-end.
+- **Fix:** `scripts/gates/record-codex.sh` writes
+  `base_url = "http://127.0.0.1:<port>/v1"` — the literal address the
+  recorder binds, so resolver behaviour cannot reroute the hop.
+  `scripts/gates/record-shapes.ts` additionally logs `upgrade`
+  attempts and `clientError`s to its log (sockets still destroyed,
+  nothing proxied) so a future transport change surfaces instead of
+  producing an empty JSONL — the Files-block change is the
+  recorder-side surfacing of the "moved to another transport" case
+  this follow-up was told to check for, not a new accepted transport.
+- **`CODEX_VERSION` stays 0.169.0.** The pin states the committed
+  recording's provenance (`tests/fixtures/codex/recording.jsonl` is a
+  0.169.0 artifact and was not refreshed — that refresh is the
+  owner's fixture decision). 0.170.0 is verified recordable; moving
+  the pin belongs to the recording refresh, not this fix.
+- **Upstream references:** Codex 0.170.0 release notes
+  (<https://github.com/openai/codex/releases/tag/rust-v0.170.0> —
+  "Oversized WebSocket requests now fall back to HTTP without
+  unnecessary retries", WebRTC realtime work) and the reworked
+  outbound-route layer at tag `rust-v0.170.0`
+  (`codex-rs/http-client/src/outbound_proxy.rs`, which resolves
+  system/env proxy routes before connecting; see also
+  openai/codex#56919, a loopback custom-provider routing regression
+  in this version range).

@@ -475,6 +475,28 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// Socket-level events never reach the request handler above, so
+// without these lines a transport change is invisible: a WebSocket
+// upgrade attempt would get its socket destroyed silently and a
+// malformed request a silent reset — the JSONL stays empty while the
+// client keeps talking to whatever answered it elsewhere. Log them
+// (method/path/headers only, never bodies) so "no requests recorded"
+// is distinguishable from "requests arrived on a transport we do not
+// forward". The sockets are destroyed exactly as node's default
+// handling would — nothing is proxied.
+server.on("upgrade", (req, socket) => {
+  console.error(
+    `record-shapes: upgrade attempt ${req.method} ${req.url} (${req.headers.upgrade ?? "-"}) — not forwarded`,
+  );
+  socket.destroy();
+});
+server.on("clientError", (err, socket) => {
+  console.error(
+    `record-shapes: client error ${(err as NodeJS.ErrnoException).code ?? err.message}`,
+  );
+  socket.destroy();
+});
+
 mkdirSync(dirname(outJsonl), { recursive: true });
 server.listen(listenPort, "127.0.0.1", () => {
   console.log(`record-shapes listening on :${listenPort} -> ${forwardBase}`);
