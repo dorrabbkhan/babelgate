@@ -7607,3 +7607,104 @@ the changed files are listed here by full path:
   `reasoning: false`; the Docker section now mentions provenance,
   cosign and the SBOM; the Gemini CLI line carries the frozen note per
   spec §3.7.
+
+## v1.5 Task 17 — live-suite cases; `--expect-preset`; gates A, B, C · OWNER REVIEW
+
+- **Files outside the Files block:**
+  - `scripts/gates/observe-check.test.ts` — the flag's pure-logic
+    cases live beside the existing `--expect-*` cases (the repo's
+    test-first rule: the new flag's tests ship in the same change).
+- **`scripts/gates/observe-check.ts` gained `--expect-preset <name>`** —
+  gate B's flag. The `requests` row's `preset` column (v1.5 spec §3.3,
+  Task 15; `/ui/api/requests` already exposes it) must equal the name
+  on every row since start — same every-row semantics as
+  `--expect-passthrough`: a row with no preset, or a different one, is
+  a routing bug, not an observation to tolerate. Three new cases in
+  `observe-check.test.ts`.
+- **`tests/live/reasoning.live.test.ts`** (spec §4 live): the two
+  signed-signature paths plus the always-on shim case (the file needs
+  one test that runs with no keys; the shim case needs only local
+  Ollama — it lives here because the Files block names no third live
+  file). `claude code shape on gemini, three-turn reasoning loop`
+  (GEMINI_API_KEY): the Task 1 recording's Claude Code shape — system
+  block array, tools, `metadata.user_id`, `thinking: {type:"enabled",
+  budget_tokens: 1024}` — with `tool_choice:{type:"any"}` so every
+  turn ends in a functionCall part, which Gemini 3 signs even when no
+  thought text comes back (E15: the recorded replies carried
+  `thoughtSignature` on functionCall parts and no `thought:true`
+  part), guaranteeing an envelope each turn. Each turn echoes the
+  assistant content — the `bg1.` signature on the thinking block
+  included — plus a `tool_result`, the way Claude Code resends them.
+  `gemini sdk shape on claude with thinking` (ANTHROPIC_API_KEY): the
+  recording's `generationConfig.thinkingConfig {thinkingBudget,
+  includeThoughts}` plus a `functionCallingConfig ANY` first turn —
+  Claude's adaptive thinking is only guaranteed at a tool loop's
+  start (PR #108 gate B) — then a `functionResponse` turn under AUTO.
+  Turn 1 asserts a `thought` part whose `thoughtSignature` base64-
+  decodes to a `{v:1}` envelope; turn 2 asserts the loop survives
+  passback (200 + Gemini shape + non-empty parts — whether the second
+  reply thinks again is the model's call). Wire fields per
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+  (`thinking`, `tool_result`) and
+  https://ai.google.dev/gemini-api/docs/thought-signatures
+  (`thinkingConfig`, `thoughtSignature`, `functionResponse`,
+  `functionCallingConfig`).
+  `ollama-anthropic preset pass-through with tools` (always on): an
+  inline YAML (`preset: ollama-anthropic`, `base_url` overridden to
+  the suite's OLLAMA_API_BASE_URL, throwaway `usage_db`, `*` route to
+  LIVE_OLLAMA_SHIM_MODEL) and a `tool_choice:any` request tagged
+  `x-babelgate-client: live-shim`; asserts 200 + Anthropic shape +
+  the `x-babelgate-provider/model` headers, then the newest
+  `/ui/api/requests` row carries `passthrough` and
+  `preset:"ollama-anthropic"` — the same columns gate B's
+  `--expect-passthrough --expect-preset` read.
+- **`tests/live/media.live.test.ts`** (spec §4 live): `url image and
+  pdf per capable provider` iterates `liveTargets()` minus
+  `openrouter` (its media capability is the model owner's choice, not
+  a declared provider feature) filtered on `MEDIA_SUPPORT` — URL
+  image + document support — sending Anthropic `source.type:"url"`
+  image and document blocks one request each. An always-on refusal
+  case (Anthropic document → Ollama target → 400 naming documents in
+  the source dialect, no upstream contact) keeps the file non-empty
+  with no keys. Media URLs default to httpbin's PNG (the gate probes'
+  URL) and the W3C dummy PDF; LIVE_MEDIA_IMAGE_URL /
+  LIVE_MEDIA_PDF_URL override.
+- **`tests/live/live.helpers.ts`** gained `LIVE_OLLAMA_SHIM_MODEL`
+  (default the suite's Ollama model — the shim case needs a
+  tool-capable one), `LIVE_MEDIA_IMAGE_URL`, `LIVE_MEDIA_PDF_URL` and
+  `waitForClientRow(client)`, which polls `/ui/api/requests?client=`
+  (the endpoint observe-check reads) until a row lands — the usage
+  store binds lazily on the first /ui/api hit, so callers hit it once
+  before the request under test.
+- **`examples/claude-code-gemini-thinking.yaml`** (gate A): provider
+  `type: gemini`, `GEMINI_API_KEY`, `claude-*` → `gemini-3.8-flash`
+  (thinking-capable and in the bundled price table, which is what
+  `--expect-cost` asserts). **`examples/claude-code-ollama-
+  anthropic.yaml`** (gate B): `preset: ollama-anthropic` (implied
+  `passthrough`), `claude-*` → `qwen3-coder:30b` (a tool-capable
+  local model; the comment says to pick what is pulled). Both load
+  under `src/config/examples.test.ts`.
+- **Recording/network steps: run by the conductor/owner.** The live
+  suite needs real keys and a reachable Ollama; the sandbox has
+  neither. Verified offline instead: `observe-check.test.ts` (21
+  cases) green; both new live files collect under
+  `vitest.live.config.ts`; the always-on refusal case and the shim
+  pass-through case run green against a local stub Ollama
+  (`/api/tags` + an Anthropic-shaped `/v1/messages` reply; the stub
+  also covered `x-babelgate-client` row lookup, `passthrough` and
+  `preset` on the stored row). `npm run test:live` and the three
+  gates below are the owner's, per the plan.
+- **Gates (owner; recorded here with client versions, models,
+  duration, cost):**
+  - **A:** `OBSERVE_CHECK="--expect-cost --expect-no-note
+    reasoning_dropped" scripts/gates/claude-code-edit.sh config
+    examples/claude-code-gemini-thinking.yaml` → GATE PASS + OBSERVE
+    PASS expected.
+  - **B:** `OBSERVE_CHECK="--expect-passthrough --expect-preset
+    ollama-anthropic" scripts/gates/claude-code-edit.sh config
+    examples/claude-code-ollama-anthropic.yaml` on a tool-capable
+    local model → GATE PASS + OBSERVE PASS expected.
+  - **C:** latest scheduled `client-replay` run green on the current
+    Claude Code and Codex; `npm run matrix -- --check` passes on main.
+  - Results: _pending — the owner runs `npm run test:live` and the
+    gates and appends the summary here._

@@ -1,8 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import request from 'supertest';
 import { expect } from 'vitest';
+import { app } from '../../src/app';
 import { resetConfig } from '../../src/config/env-config';
+import type { RequestRow } from '../../src/observe/sinks/usage-queries';
 import type { Provider } from '../../src/transformers';
 
 /**
@@ -17,6 +20,28 @@ export const LIVE_OLLAMA_URL =
 
 /** Model exercised against live Ollama (D5: small, CPU-friendly). */
 export const LIVE_OLLAMA_MODEL = process.env.LIVE_OLLAMA_MODEL || 'qwen2.5:0.5b';
+
+/**
+ * Tool-capable local model for the Ollama Anthropic shim case (spec
+ * §4, gate B): the pass-through request carries tools, so the model
+ * must be one Ollama's /v1/messages endpoint serves tool_use for.
+ * Defaults to the suite's Ollama model; override with
+ * LIVE_OLLAMA_SHIM_MODEL when it isn't tool-capable.
+ */
+export const LIVE_OLLAMA_SHIM_MODEL =
+  process.env.LIVE_OLLAMA_SHIM_MODEL || LIVE_OLLAMA_MODEL;
+
+/**
+ * Public media the live media cases point providers at (spec §4):
+ * the same httpbin PNG the gate probes used, and the W3C dummy PDF —
+ * both tiny, stable and public (media.allow_private stays off).
+ * LIVE_MEDIA_IMAGE_URL / LIVE_MEDIA_PDF_URL override.
+ */
+export const LIVE_MEDIA_IMAGE_URL =
+  process.env.LIVE_MEDIA_IMAGE_URL || 'https://httpbin.org/image/png';
+export const LIVE_MEDIA_PDF_URL =
+  process.env.LIVE_MEDIA_PDF_URL ||
+  'https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf';
 
 /**
  * A live upstream the suite can target. `"openrouter"` isn't a Provider:
@@ -427,6 +452,32 @@ export function outputText(body: unknown): string {
     .filter((part) => part.type === 'output_text')
     .map((part) => part.text ?? '')
     .join('');
+}
+
+/**
+ * The newest /ui/api/requests row for `client` — the endpoint the
+ * gate's observe-check.ts reads. Rows flush to the store every
+ * ~250 ms, so poll until one lands or the deadline passes. The usage
+ * store registers as a trace sink only once getUsageStore() first
+ * runs (a /ui/api hit does that), so call this once BEFORE the
+ * request whose row you want.
+ */
+export async function waitForClientRow(
+  client: string,
+  deadlineMs = 10_000,
+): Promise<RequestRow | undefined> {
+  const deadline = Date.now() + deadlineMs;
+  for (;;) {
+    const res = await request(app)
+      .get(
+        `/ui/api/requests?client=${encodeURIComponent(client)}&limit=5`,
+      )
+      .set('x-babelgate-ui', '1');
+    const rows = (res.body as { rows?: RequestRow[] }).rows ?? [];
+    if (rows.length > 0) return rows[0];
+    if (Date.now() >= deadline) return undefined;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 /** Pull the assistant text out of a source-shaped chat response. */
