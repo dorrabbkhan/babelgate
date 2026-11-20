@@ -58,6 +58,12 @@ Antigravity CLI) stays, kept small.
    every client in §3.4; launch posts and the demo are refreshed; `docs/compatibility.md` and the replay
    badge are green on `main` on release day.
 6. No existing expected value, fixture or contract snapshot changes except those pre-approved in D6.
+7. **After launch (measured, not gated):** 60 days after the posts go out, against the roadmap's tiers —
+   floor 300 stars and 1 community-doc listing; goal 1k stars, 2 listings, 5 outside contributors; stretch
+   2k stars, 3 listings, 10+ contributors — plus weekly installs (binaries, npm, Homebrew) and issues from
+   outside users. Release-download and install counts need no telemetry in the product: they come from
+   GitHub release, npm and Homebrew analytics. Below the floor, the pitch or channel is reviewed before the
+   next version spec.
 
 ## 2. Scope
 

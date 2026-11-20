@@ -178,9 +178,19 @@ Detail in `docs/superpowers/specs/2026-11-20-babelgate-v1.6-design.md`.
 > one endpoint — Claude Code and Codex included — with streaming, tools, reasoning, media, structured output,
 > embeddings, fallbacks, a cost dashboard and a translation inspector. It installs in one command; every pair is
 > contract-tested and the results are published; each new Claude Code and Codex release is replayed; releases
-> are signed. Targets, measured 60 days after the launch posts go out: 2k GitHub
-> stars; listed in Ollama, Open WebUI and Claude Code community docs; 10+ outside contributors; **the
-> first teams asking for shared keys and budgets** — the signal for Phase 3.
+> are signed. Targets, measured 60 days after the launch posts go out (tiered 2026-11-20; a single 2k-star
+> target needed a breakout launch):
+>
+> | | Stars | Community-doc listings (Ollama, Open WebUI, Claude Code) | Outside contributors |
+> |---|---|---|---|
+> | Floor | 300 | 1 | — |
+> | Goal | 1k | 2 | 5 |
+> | Stretch | 2k | 3 | 10+ |
+>
+> Usage signals beside stars: weekly installs (release binaries, npm, Homebrew), issues from people other than
+> the maintainers, and the first "we use this at work" contact. **The first teams asking for shared keys and
+> budgets** remain the signal for Phase 3. Missing the floor means the pitch or the channel is rethought
+> before more product work.
 
 ---
 
