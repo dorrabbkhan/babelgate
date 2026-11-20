@@ -233,8 +233,16 @@ carries it in `textIndex`, other targets ignore it.
   checked against each new Claude Code and Codex release, signed releases) without jargon, and install
   commands per OS. Technical depth is one click away, not on the page. Plain HTML/CSS in `site/`, no
   framework and no new dependencies; no trackers or third-party scripts. A Pages workflow patch for the
-  owner to apply (the app has no Workflows permission); enabling Pages is the owner's act. The look is
-  reviewed by the owner as a mockup before it is built.
+  owner to apply (the app has no Workflows permission); enabling Pages is the owner's act.
+  **Direction approved 2026-11-20 as a first draft to build on:** `docs/assets/landing-mockup-v2.html`.
+  Calm editorial look (serif headline "Any AI tool, any model. *And we show you it works.*"), then the
+  install command first (typed-in animation, copy button, OS tabs), then an animated diagram (tools → babelgate
+  hub with a ticker of translations → models, free ones marked), then the "Every combination, checked" table
+  with checks popping in and a "last checked automatically" line. Modern-tool-site motion is wanted; it is
+  CSS and inline SVG only (no animation libraries, no trackers), and `prefers-reduced-motion` gets a still page.
+  **Honesty rule:** every table cell and the "last checked" versions come from the generated matrix and the
+  latest replay run at build time, never typed by hand; clients that are recipe-only (e.g. Cursor, Open WebUI)
+  are marked "verified by hand on <version>" or left out. The owner reviews the built page (Task 16b).
 - **What the site links to:** user-facing docs only — install, recipes, `docs/compatibility.md`, release
   verification (`SECURITY.md`), `docs/comparison.md`, the GitHub repo. Not linked: `docs/superpowers/`
   (specs, plans), `docs/roadmap.md`, `docs/decisions.md`, `docs/conductor/`, `docs/research/`,
@@ -287,7 +295,7 @@ hand monthly and before every version spec; no scheduled workflow (keeps the app
 | 14 | Competitor-check script (§3.9) | | Sonnet |
 | 15 | UI: breaker state, cache hits, free-tier cost label | | Sonnet |
 | 16 | Launch readiness: README, launch post + variants, listings text, repo hygiene, Sponsors/support docs, demo tapes | OWNER REVIEW | Sonnet |
-| 16b | Landing page in `site/` + Pages workflow patch (mockup approved by the owner first) | OWNER REVIEW | Sonnet |
+| 16b | Landing page in `site/` from the approved mockup; table and versions generated from the matrix and replay; Pages workflow patch | OWNER REVIEW | Sonnet |
 | 17 | Live-suite cases; gates E and F | OWNER REVIEW | Opus |
 | 18 | CHANGELOG, `1.6.0`; gate G at publish | OWNER GATE | Sonnet |
 
@@ -312,7 +320,7 @@ likely overrun.
 | D4 | winget submission | **Prepared by Task 7, submitted by the owner** (2026-11-20) to `microsoft/winget-pkgs` at release time |
 | D5 | Launch scope | v1.6 = the roadmap's v1.6 + launch ready + open issues (#148, #99) (2026-11-20); posting is the owner's act after release |
 | D6 | Pre-approved test/fixture changes | *To list in the plan:* the Codex recording re-recorded on the new pin in Task 2; any test pinning `between_tools` → `thinking_dropped` in Task 3; the #99 drop assertions in Gemini decoder tests in Task 4. Each replacement asserts the new behaviour at least as exactly |
-| D8 | Website | **Single non-technical landing page** on GitHub Pages (2026-11-20); docs stay in the repo; internal docs (specs, plans, roadmap, decisions, conductor, research, launch drafts) are not linked. VitePress docs site and Starlight/Docusaurus considered and not chosen |
+| D8 | Website | **Single non-technical landing page** on GitHub Pages (2026-11-20), direction per `docs/assets/landing-mockup-v2.html`; docs stay in the repo; internal docs (specs, plans, roadmap, decisions, conductor, research, launch drafts) are not linked. VitePress docs site and Starlight/Docusaurus considered and not chosen |
 | D7 | Replay diff ignores JSON Schema contents inside tool and output-format definitions | **Ignore** (2026-11-20). New tools, content blocks, input item types, event types and top-level keys still fail |
 
 **Owner actions:** review the canonical change (Task 4) and launch material (Task 16); apply workflow
