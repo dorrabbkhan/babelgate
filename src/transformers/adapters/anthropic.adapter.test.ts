@@ -3211,6 +3211,83 @@ describe('Anthropic Adapter', () => {
     });
   });
 
+  // `thinking: {type:"between_tools"}` — Claude Sonnet 5.5's lowest
+  // thinking setting ("respond without thinking first"), accepted at
+  // effort high or below:
+  // https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5
+  describe('between_tools thinking (v1.6 spec §3.6)', () => {
+    function betweenTools(outputConfig?: { effort?: string }) {
+      return {
+        model: 'claude-sonnet-5-5',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1024,
+        thinking: { type: 'between_tools' },
+        ...(outputConfig !== undefined && { output_config: outputConfig }),
+      } as unknown as MessageCreateParams;
+    }
+
+    it('between_tools maps to output_config effort', () => {
+      const canonical = toCanonicalRequest(betweenTools({ effort: 'high' }));
+
+      expect(canonical.config?.reasoning).toEqual({ effort: 'high' });
+    });
+
+    it('between_tools without effort maps to low', () => {
+      const canonical = toCanonicalRequest(betweenTools());
+
+      expect(canonical.config?.reasoning).toEqual({ effort: 'low' });
+    });
+
+    it('between_tools max lowers to xhigh', () => {
+      let canonical: ReturnType<typeof toCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        canonical = toCanonicalRequest(betweenTools({ effort: 'max' }));
+      });
+
+      expect(canonical?.config?.reasoning).toEqual({ effort: 'xhigh' });
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'reasoning_effort_lowered',
+        path: 'output_config.effort',
+      });
+    });
+
+    it('between_tools records thinking_mode_mapped', () => {
+      const trace = traced(() =>
+        toCanonicalRequest(betweenTools({ effort: 'medium' })),
+      );
+
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'thinking_mode_mapped',
+        path: 'thinking.type',
+      });
+      // A mapped mode is not a drop — no thinking_dropped.
+      expect(trace.notes.map((n) => n.code)).not.toContain(
+        'thinking_dropped',
+      );
+    });
+
+    it('between_tools to gemini target sets thinking level from effort', () => {
+      const canonical = toCanonicalRequest(betweenTools({ effort: 'high' }));
+
+      // A level-capable Gemini model gets the decoded effort as its
+      // thinkingLevel (no adapter-pair special case — canonical
+      // reasoning carries it).
+      expect(
+        geminiFromCanonical({ ...canonical, model: 'gemini-3-flash-preview' }),
+      ).toEqual({
+        contents: [{ role: 'user', parts: [{ text: 'hi' }] }],
+        generationConfig: {
+          maxOutputTokens: 1024,
+          thinkingConfig: { thinkingLevel: 'high' },
+        },
+      });
+    });
+  });
+
   describe('response format (v1.4 spec §3.5)', () => {
     const SCHEMA = {
       type: 'object',

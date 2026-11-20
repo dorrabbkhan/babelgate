@@ -141,19 +141,54 @@ type CanonicalReasoning = NonNullable<
 >;
 
 /**
+ * `output_config.effort` → canonical reasoning (Anthropic's level
+ * field per the SDK's OutputConfig — `"max"` lowers to the
+ * canonical ceiling `xhigh`, the Responses decoder's convention).
+ */
+function wireEffort(
+  request: MessageCreateParams,
+): CanonicalReasoning | undefined {
+  const effort = request.output_config?.effort;
+  if (typeof effort !== "string") return undefined;
+  if ((EFFORT_LADDER as readonly string[]).includes(effort)) {
+    return { effort: effort as Effort };
+  }
+  if (effort === "max") {
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "reasoning_effort_lowered",
+        path: "output_config.effort",
+      },
+      'Lowering reasoning effort "max" to "xhigh" (canonical maximum)',
+    );
+    return { effort: "xhigh" };
+  }
+  return undefined;
+}
+
+/**
  * `thinking` + `output_config.effort` → `config.reasoning` (v1.5
- * spec §3.1; field shapes per
+ * spec §3.1, v1.6 spec §3.6; field shapes per
  * https://platform.claude.com/docs/en/build-with-claude/extended-thinking
  * and
  * https://platform.claude.com/docs/en/build-with-claude/effort).
  * `{type:"enabled", budget_tokens}` maps the budget to the nearest
  * lower ladder level and keeps it; `{type:"adaptive"}` maps
- * `output_config.effort` (Anthropic's level field per the SDK's
- * OutputConfig — `"max"` lowers to the canonical ceiling `xhigh`,
- * the Responses decoder's convention); `{type:"disabled"}` maps to
- * `none`. Every other shape — an unknown `type`, `enabled` without
- * a numeric budget, `adaptive` without a level, `null` and other
- * non-object values — keeps the v1.4 `thinking_dropped` note.
+ * `output_config.effort`; `{type:"disabled"}` maps to `none`.
+ * `{type:"between_tools"}` — Claude Sonnet 5.5's lowest thinking
+ * setting, "respond without thinking first" at effort `high` or
+ * below (https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5
+ * and the per-model table on
+ * https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting)
+ * — maps to the request's effort, `"low"` when none is set, with a
+ * `thinking_mode_mapped` note; it carries no other field (the
+ * SDK's `ThinkingConfigBetweenTools` is `{type}` only) and the
+ * encoder never re-emits it — canonical effort encodes per model
+ * as before. Every other shape — an unknown `type`, `enabled`
+ * without a numeric budget, `adaptive` without a level, `null` and
+ * other non-object values — keeps the v1.4 `thinking_dropped` note.
  */
 function toCanonicalReasoning(
   request: MessageCreateParams,
@@ -172,24 +207,20 @@ function toCanonicalReasoning(
     };
   }
   if (t.type === "adaptive") {
-    const effort = request.output_config?.effort;
-    if (typeof effort === "string") {
-      if ((EFFORT_LADDER as readonly string[]).includes(effort)) {
-        return { effort: effort as Effort };
-      }
-      if (effort === "max") {
-        recordNote(
-          {
-            stage: "decode",
-            adapter: "anthropic",
-            code: "reasoning_effort_lowered",
-            path: "output_config.effort",
-          },
-          'Lowering reasoning effort "max" to "xhigh" (canonical maximum)',
-        );
-        return { effort: "xhigh" };
-      }
-    }
+    const mapped = wireEffort(request);
+    if (mapped !== undefined) return mapped;
+  }
+  if (t.type === "between_tools") {
+    recordNote(
+      {
+        stage: "decode",
+        adapter: "anthropic",
+        code: "thinking_mode_mapped",
+        path: "thinking.type",
+      },
+      'Mapping thinking "between_tools" to canonical reasoning effort',
+    );
+    return wireEffort(request) ?? { effort: "low" };
   }
   recordNote(
     {

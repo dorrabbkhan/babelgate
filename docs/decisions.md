@@ -8205,3 +8205,42 @@ the changed files are listed here by full path:
   replacement goes in a follow-up commit if the diff reports an
   addition). Issue closes (#148, #99) are plan step 4, after merge
   and a green scheduled replay.
+
+## v1.6 Task 3 — `between_tools` thinking mapped (spec §3.6, E9, conductor's call b) · D6
+
+- **Doc evidence.**
+  https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting:
+  "Only Claude Sonnet 5.5 accepts `\"between_tools\"`, and it takes
+  that value in place of `\"disabled\"`" — accepted "at effort
+  `high` or below"; `xhigh`/`max` and a differing per-message
+  effort 400.
+  https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5:
+  "To run Claude Sonnet 5.5 without up-front thinking, send
+  `thinking: {\"type\": \"between_tools\"}`. It's the lowest
+  thinking setting on this model" — the model may still write
+  thinking blocks between tool calls. The SDK's
+  `ThinkingConfigBetweenTools` is `{type}` only: no budget or
+  other field the mapping could drop.
+- **Mapping.** `thinking.type: "between_tools"` decodes to
+  `config.reasoning` with the request's `output_config.effort`
+  when it names a canonical ladder level (`"max"` lowers to
+  `xhigh` with `reasoning_effort_lowered`, as for `adaptive`), else
+  `"low"`, and always records
+  `{stage:"decode", adapter:"anthropic", code:"thinking_mode_mapped", path:"thinking.type"}`
+  (new note code). The shared `output_config.effort` decode moved
+  into `wireEffort()`, used by both `adaptive` and `between_tools`.
+  Encoding is unchanged: canonical effort encodes per target model
+  as before — an Anthropic target gets `adaptive` + `output_config.effort`,
+  never `between_tools` (conductor's call b); same-format
+  `passthrough` keeps the client's bytes.
+- **Files outside the Files block:**
+  - `tests/integration/claude-code.test.ts` — the named test
+    `"anthropic pass-through keeps between_tools bytes"` can only
+    live in the pass-through suite: pass-through is a service-layer
+    relay (`passthrough: true` provider), unreachable from the
+    adapter unit test.
+- **Files changed:** `src/transformers/adapters/anthropic.adapter.ts`,
+  `src/transformers/adapters/anthropic.adapter.test.ts`,
+  `tests/integration/claude-code.test.ts`, `docs/decisions.md`. No
+  test pinned `between_tools` → `thinking_dropped`, so D6's
+  replacement clause did not fire.
