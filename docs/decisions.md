@@ -8225,7 +8225,7 @@ the changed files are listed here by full path:
   `config.reasoning` with the request's `output_config.effort`
   when it names a canonical ladder level (`"max"` lowers to
   `xhigh` with `reasoning_effort_lowered`, as for `adaptive`), else
-  `"low"`, and always records
+  `"high"`, and always records
   `{stage:"decode", adapter:"anthropic", code:"thinking_mode_mapped", path:"thinking.type"}`
   (new note code). The shared `output_config.effort` decode moved
   into `wireEffort()`, used by both `adaptive` and `between_tools`.
@@ -8233,6 +8233,8 @@ the changed files are listed here by full path:
   as before — an Anthropic target gets `adaptive` + `output_config.effort`,
   never `between_tools` (conductor's call b); same-format
   `passthrough` keeps the client's bytes.
+  Owner decision 2026-11-21: no-effort default is `high` (Anthropic's
+  documented default), replacing the plan's `low`.
 - **Files outside the Files block:**
   - `tests/integration/claude-code.test.ts` — the named test
     `"anthropic pass-through keeps between_tools bytes"` can only

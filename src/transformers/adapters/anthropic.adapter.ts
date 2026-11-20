@@ -182,8 +182,11 @@ function wireEffort(
  * below (https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5
  * and the per-model table on
  * https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting)
- * — maps to the request's effort, `"low"` when none is set, with a
- * `thinking_mode_mapped` note; it carries no other field (the
+ * — maps to the request's effort, `"high"` when none is set or the
+ * wire value is off the ladder (Anthropic's documented default on
+ * Claude Sonnet 5.5,
+ * https://platform.claude.com/docs/en/build-with-claude/effort), with
+ * a `thinking_mode_mapped` note; it carries no other field (the
  * SDK's `ThinkingConfigBetweenTools` is `{type}` only) and the
  * encoder never re-emits it — canonical effort encodes per model
  * as before. Every other shape — an unknown `type`, `enabled`
@@ -220,7 +223,7 @@ function toCanonicalReasoning(
       },
       'Mapping thinking "between_tools" to canonical reasoning effort',
     );
-    return wireEffort(request) ?? { effort: "low" };
+    return wireEffort(request) ?? { effort: "high" };
   }
   recordNote(
     {

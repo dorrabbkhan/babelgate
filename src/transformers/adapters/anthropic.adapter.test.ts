@@ -3232,10 +3232,25 @@ describe('Anthropic Adapter', () => {
       expect(canonical.config?.reasoning).toEqual({ effort: 'high' });
     });
 
-    it('between_tools without effort maps to low', () => {
+    it('between_tools without effort maps to high', () => {
       const canonical = toCanonicalRequest(betweenTools());
 
-      expect(canonical.config?.reasoning).toEqual({ effort: 'low' });
+      expect(canonical.config?.reasoning).toEqual({ effort: 'high' });
+    });
+
+    it('between_tools with an off-ladder effort maps to high', () => {
+      let canonical: ReturnType<typeof toCanonicalRequest> | undefined;
+      const trace = traced(() => {
+        canonical = toCanonicalRequest(betweenTools({ effort: 'bogus' }));
+      });
+
+      expect(canonical?.config?.reasoning).toEqual({ effort: 'high' });
+      expect(trace.notes).toContainEqual({
+        stage: 'decode',
+        adapter: 'anthropic',
+        code: 'thinking_mode_mapped',
+        path: 'thinking.type',
+      });
     });
 
     it('between_tools max lowers to xhigh', () => {
