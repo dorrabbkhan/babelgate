@@ -7917,3 +7917,51 @@ the changed files are listed here by full path:
   system/env proxy routes before connecting; see also
   openai/codex#56919, a loopback custom-provider routing regression
   in this version range).
+
+## v1.5 fixture update — claude-code recording gains `ReportFindings` `findings[].severity` (2.1.328) (2026-11-19)
+
+- **Owner-approved fixture change (the "task says so" exception to the
+  fixture stop rule), scoped to exactly one file.** Claude Code 2.1.328
+  adds a `severity` property to the built-in `ReportFindings` tool's
+  `input_schema.properties.findings.items.properties`, between the
+  existing `category` and `verdict`. The weekly replay (Live run
+  44549011473, artifact `client-replay-44549011473`) shape-diffed
+  2.1.328 against the fixture: `added request key: body
+  tools[].input_schema.properties.findings.items.properties.severity`
+  plus `.description`, `.enum` and `.type` (4 added, 17 removed; the
+  removed keys are informational and stay). The owner approved the
+  update in the v1.5 Task 17 escalation on PR #147 ("follow your
+  recos") — exactly as PR #142 did for 2.1.327, and nothing else — and
+  will set `ALLOW_FIXTURE_CHANGE` for the PR; CI showing "FIXTURE
+  GUARD FAILED … all other checks passed" and nothing else red is the
+  expected state.
+- **What changed.** In every request line of
+  `tests/fixtures/recordings/claude-code-thinking.jsonl` whose
+  `bodyShape.tools[]` contains `ReportFindings` (7 lines: 4–10),
+  `properties` gains
+  `"severity":{"description":"<string:166>","type":"string","enum":["<string:9>","<string:12>","<string:3>"]}`
+  after `category` and before `verdict` — the same shape and position
+  as the fresh 2.1.328 recording in `tmp/replay-328/claude.jsonl`. No
+  other line or key was touched; the fixture was not replaced by the
+  fresh recording because that recording takes a shorter path and
+  would drop the `thinking`/`signature` blocks and other keys the
+  fixture exists to pin.
+- **`git diff` verification** (each of the 7 changed lines differs only
+  by the single inserted `severity` fragment; verified by comparing
+  every line to its original and confirming
+  `added.replace(severity_fragment, "") == removed` and valid JSON):
+  `tests/fixtures/recordings/claude-code-thinking.jsonl | 14 +++++++-------
+  1 file changed, 7 insertions(+), 7 deletions(-)`
+- **shape-diff verification.**
+  `./node_modules/.bin/ts-node scripts/gates/shape-diff.ts
+  tmp/replay-328/claude.jsonl
+  tests/fixtures/recordings/claude-code-thinking.jsonl` reports only
+  removed keys (the fresh recording takes a shorter path) and
+  `SHAPE DIFF: 0 added, 17 removed` — 0 added keys.
+- **No test changes needed.** Nothing under `tests/` reads
+  `tests/fixtures/recordings/`; the recording is only consumed by the
+  live `scripts/gates/client-replay.sh` + `shape-diff.ts` gate (a
+  conductor-run step), so no test pins the fixture's exact bytes or
+  tool-property list.
+- **Files changed:** `tests/fixtures/recordings/claude-code-thinking.jsonl`,
+  `docs/decisions.md`. No files outside the Files block.
