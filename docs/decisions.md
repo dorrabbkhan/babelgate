@@ -8093,7 +8093,7 @@ the changed files are listed here by full path:
   file: tasks 6, 10, 16 have no attributed session (run under another
   project slug or unlogged); 16 sessions are `unattributed`
   ($17.049); task 17 is the outlier at $13.410.
-- **Files outside the Files block:** none — all six modified files
+- **Files outside the Files block:** none — all seven modified files
   (`CHANGELOG.md`, `package.json`, `package-lock.json`,
   `docs/roadmap.md`, `src/cost/prices.json`,
   `docs/conductor/model-report-v1.5.md`, `docs/decisions.md`) are
@@ -8103,3 +8103,24 @@ the changed files are listed here by full path:
   `npm audit signatures`, `cosign verify`, SBOM attached (the Task 13
   supply-chain patch is already applied, PR #139). Gates A–C passed
   per Task 17 (PR #153).
+- **Gate D results (2026-11-20, run by the owner after the Task 18 merge):**
+  - Tag `v1.5.0` on `241ffd8` (merge of PR #154); `release.yml` built,
+    pushed and signed `ghcr.io/dorrabbkhan/babelgate:1.5.0`
+    (digest `sha256:ba42b706f43b611a71267a7deaeca5dc626d1dc8b8cf6237a89110a35f4ee447`).
+  - **`cosign verify`: PASS** against the `release.yml@refs/tags/v*`
+    identity and the GitHub Actions OIDC issuer (claims validated,
+    transparency-log entry verified offline, certificate chain verified).
+  - **`npm audit signatures`: PASS** on a clean install of
+    `babelgate@1.5.0`: 99 packages with verified registry signatures,
+    22 with verified attestations. `npx -y babelgate@1.5.0 --help`
+    starts. npm published by hand, so no provenance bundle for
+    `babelgate` itself (owner decision 2026-11-18, see Task 13).
+  - **SBOM:** `babelgate-1.5.0.cdx.json` generated with `npm sbom
+    --sbom-format cyclonedx --omit dev`; 106 runtime dependencies
+    (`npm ls --omit=dev --all --parseable`).
+  - **Known after release:** `npm audit --omit=dev` on the published
+    lockfile reports 5 advisories (1 critical `proxy-addr` 1.1.0–2.0.7,
+    3 high `body-parser` 2.0.0–2.3.0, `path-to-regexp` 8.0.0–8.3.0,
+    `zod` <4.6.6, 1 moderate `qs` 6.7.0–6.16.0). All have a fix
+    through `npm audit fix` (lockfile bump); to be handled in a
+    follow-up patch, not part of 1.5.0.
