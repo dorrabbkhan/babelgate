@@ -242,7 +242,16 @@ function fetchHop(
       headers: { Accept: "*/*", "Accept-Encoding": "identity" },
       // Pin the checked address — the guard's DNS answer is the one
       // connected to, so no second lookup can rebind (§3.2.2).
-      lookup: (_h, _o, cb) => cb(null, address, isIPv4(address) ? 4 : 6),
+      // Node ≥ 20 defaults net.autoSelectFamily to true, so this is
+      // called with {all:true} and must answer with an array of
+      // {address, family}; the single-address callback shape then
+      // throws ERR_INVALID_IP_ADDRESS, surfacing as "request failed"
+      // (https://nodejs.org/api/net.html#socketconnectoptions-connectlistener,
+      // https://nodejs.org/api/dns.html#dnslookuphostname-options-callback).
+      lookup: (_h, options, cb) =>
+        options.all
+          ? cb(null, [{ address, family: isIPv4(address) ? 4 : 6 }])
+          : cb(null, address, isIPv4(address) ? 4 : 6),
     });
     // Once headers arrived the response stream carries the abort:
     // destroying it tears down the connection without leaving the

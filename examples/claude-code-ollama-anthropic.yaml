@@ -1,0 +1,40 @@
+# Claude Code through Ollama's native Anthropic endpoint — release
+# gate B (v1.5 spec §4, D8). The `ollama-anthropic` preset fills the
+# provider's type, base_url and its measured gaps (count_tokens,
+# url_images, documents — Task 1's probe, E16) and implies
+# `passthrough: true`: Anthropic-format bodies relay to
+# /v1/messages without the canonical round trip, each declared gap's
+# fix applied to the body first, and the usage row is marked
+# "pass-through · ollama-anthropic".
+#
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo claude-code-ollama-anthropic.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/claude-code-ollama-anthropic.yaml
+#   npx babelgate --config claude-code-ollama-anthropic.yaml --preset claude-code
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
+#
+# Gate B (owner): OBSERVE_CHECK="--expect-passthrough --expect-preset ollama-anthropic" \
+#   scripts/gates/claude-code-edit.sh config examples/claude-code-ollama-anthropic.yaml
+default: ollama
+providers:
+  ollama:
+    preset: ollama-anthropic
+    # The preset fills: type anthropic, base_url http://localhost:11434
+    # (set base_url here when Ollama listens elsewhere), no
+    # api_key_env (keyless), gaps count_tokens + url_images +
+    # documents, and passthrough.
+    # Pass-through cannot set num_ctx: the Anthropic body relays to
+    # /v1/messages unchanged and that format has no context-window
+    # field — `context_window` only feeds the native /api/chat
+    # adapter's options.num_ctx. Ollama's default window truncates
+    # Claude Code's prompt, so start the server with a larger one
+    # (https://docs.ollama.com/faq — OLLAMA_CONTEXT_LENGTH):
+    #   OLLAMA_CONTEXT_LENGTH=32768 ollama serve               # native
+    #   docker run -e OLLAMA_CONTEXT_LENGTH=32768 ollama/ollama  # docker
+    timeout_ms: 600000      # local models are slow; same value the CLI preset uses
+routes:
+  - match: claude-*
+    # Any tool-capable local model — the gate proves tools relay
+    # through the shim. qwen3-coder:30b is the gate script's usual
+    # Ollama model; pick whatever is pulled (`ollama list`).
+    to: ollama/qwen3-coder:30b
