@@ -8124,3 +8124,49 @@ the changed files are listed here by full path:
     `zod` <4.6.6, 1 moderate `qs` 6.7.0–6.16.0). All have a fix
     through `npm audit fix` (lockfile bump); to be handled in a
     follow-up patch, not part of 1.5.0.
+
+## v1.6 Task 1 — shape-diff ignores JSON Schema subtrees (spec §3.1, D7) · OWNER REVIEW
+
+- **D7 rule.** `scripts/gates/shape-diff.ts` exports
+  `SCHEMA_SUBTREES: readonly string[]`; `walkBody` still records the
+  subtree root key itself (e.g. `body tools[].input_schema`) but does
+  not descend below it, so schema *contents* are no longer shape.
+  Every other rule is unchanged: tool `name`/`type` enums, input item
+  types, SSE event types, new top-level keys and new keys inside a
+  known block still exit 1, and removals stay informational (exit 0)
+  — including a removed schema root, which is reported as its root
+  key.
+- **Subtree list** (per the plan's Interfaces block):
+  `tools[].input_schema` (Anthropic), `tools[].function.parameters`
+  (Chat), `tools[].parameters` (Responses),
+  `tools[].functionDeclarations[].parameters` (Gemini),
+  `output_config.format.schema`, `response_format.json_schema.schema`,
+  `text.format.schema` (structured outputs), and Gemini
+  `generationConfig.responseSchema` /
+  `generationConfig.responseJsonSchema`.
+- **Matching.** A body path matches a subtree when it equals the
+  pattern or ends with it preceded only by `name[]` array segments —
+  the plan's "any `[]` nesting prefix" — so a namespaced tool's schema
+  (`tools[].tools[].input_schema`) is covered while a schema-looking
+  path under a non-array key is not.
+- **Why (PRs #142, #149).** Claude Code 2.1.327 added `cursor` to the
+  built-in `ListAgents` tool's `input_schema.properties` and 2.1.328
+  added `severity` to `ReportFindings`'s
+  `input_schema.properties.findings.items.properties`; each addition
+  failed the weekly replay and cost an owner-approved fixture PR
+  (issue #148, spec E7). The fixtures keep the full schemas — they are
+  evidence of what the client sent; D7 only changes what the diff
+  compares.
+- **Seeded repro files** (new, under `scripts/gates/fixtures/`, not
+  `tests/fixtures/` — the fixture guard does not cover them and
+  `vitest.config.ts` already excludes the directory):
+  `scripts/gates/fixtures/shape-diff/pr142-{old,new}.jsonl` and
+  `pr149-{old,new}.jsonl` hold one minimal shape line each
+  reproducing the two diffs (verified: `cursor` under
+  `tools[].input_schema.properties`, `severity` under
+  `tools[].input_schema.properties.findings.items.properties`; each
+  reported 4 added request keys before the change, 0 after).
+- **Files changed:** `scripts/gates/shape-diff.ts`,
+  `scripts/gates/shape-diff.test.ts`, `docs/decisions.md`; new
+  `scripts/gates/fixtures/shape-diff/*.jsonl`. No files outside the
+  Files block.
