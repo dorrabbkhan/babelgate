@@ -7706,8 +7706,36 @@ the changed files are listed here by full path:
     local model → GATE PASS + OBSERVE PASS expected.
   - **C:** latest scheduled `client-replay` run green on the current
     Claude Code and Codex; `npm run matrix -- --check` passes on main.
-  - Results: _pending — the owner runs `npm run test:live` and the
-    gates and appends the summary here._
+  - **Results (2026-11-19/20):**
+    - Live suite (`npm run test:live`, owner, on PR #147 after fix
+      round 2): 7/7 live files pass.
+    - **A: PASS** — GATE PASS + OBSERVE PASS, 28 s, 8 requests,
+      `examples/claude-code-gemini-thinking.yaml`
+      (`gemini/gemini-3.8-flash`). Cost: not recorded.
+    - **B: PASS** — GATE PASS + OBSERVE PASS (7 rows, all marked
+      pass-through · `ollama-anthropic`), 17 s, 7 requests, Claude
+      Code 2.1.322, Docker Ollama via its Anthropic endpoint, model
+      `kimi-k2.7-code:cloud` (an Ollama cloud model served through
+      the local server; the gate config was the example with that
+      route). Cost: not recorded (Ollama account usage). Not a local
+      model: the owner's laptop has no GPU, and on CPU `qwen3:8b` /
+      `qwen3:4b` runs (40–65 min) failed the edit task (prose
+      answers, no Edit call) while Claude Code abandoned queued
+      requests. Those abandoned requests exposed a trace bug: a
+      pass-through attempt aborted by the client before the upstream
+      answered records no hop, so its row is not marked pass-through
+      (follow-up branch `v1.5/passthrough-abort-trace`; failed
+      upstream hops were fixed in PR #150).
+    - **C: PASS** — `live.yml` run 44744362690 on main `8c02ed8`
+      (after PRs #147, #150, #151, #149): `live` and `client-replay`
+      green; Claude Code 2.1.329 gate PASS / recorded PASS / shape
+      diff 0 added (17 removed, informational); Codex CLI 0.171.0
+      gate PASS / recorded PASS / shape diff 0 added, 0 removed.
+      `npm run matrix -- --check` on `8c02ed8`: docs/compatibility.md
+      is up to date. The earlier dispatch 44743951806 (main
+      `d65a6dc`, before #149/#151) failed on the 2.1.328
+      `findings[].severity` key and an empty Codex recording, which
+      those two PRs addressed.
 - **Fix round 1 (PR #147) — required fixes from the owner's live
   run:**
   - **Files outside the Files block:**
