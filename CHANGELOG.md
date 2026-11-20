@@ -7,6 +7,140 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-20
+
+"Correct everywhere": reasoning and media now travel in every client
+format — Claude Code, Chat, Gemini, Ollama and Codex clients send and
+receive thinking — and URL images, PDFs and tool-result images cross
+every boundary. Where a provider already speaks the client's format,
+babelgate passes the request through and fixes the gaps that endpoint
+leaves. The evidence is public: a compatibility matrix generated from
+the tests, a weekly replay of each new Claude Code and Codex release,
+and signed releases.
+
+### Added
+
+- **Reasoning for every client format.** Anthropic `thinking`
+  (`enabled`/`adaptive`/`disabled`, `budget_tokens`,
+  `output_config.effort`), Chat `reasoning_effort`, Gemini
+  `thinkingConfig` (`thinkingLevel`/`thinkingBudget`,
+  `includeThoughts`) and Ollama `think` decode into canonical
+  `config.reasoning`, so a client's thinking request now reaches the
+  provider instead of being dropped. Replies carry reasoning back in
+  the client's own shape: Anthropic `thinking`/`redacted_thinking`
+  blocks (streamed as `thinking_delta`/`signature_delta`), Gemini
+  `{text, thought: true}` parts, Chat `reasoning_content`, Ollama
+  `message.thinking`. Foreign signatures travel inside the `bg1.`
+  envelope — now a shared module — packed into Anthropic `signature`
+  or Gemini `thoughtSignature`; Chat and Ollama clients get reasoning
+  text only. Reasoning still never crosses origins: a signature
+  belongs to the provider and model that issued it; anything else is
+  dropped with a `reasoning_dropped` note, and the continuity guard
+  keeps Anthropic tool loops valid.
+- **`reasoning: false`** on a provider entry restores the exact 1.4
+  behaviour for requests routed to it (same notes, byte-identical
+  upstream bodies).
+- **Media across all five formats.** URL images (OpenAI `image_url`,
+  Anthropic `source.type: "url"`, Responses `input_image`, Gemini
+  `fileData.fileUri`) stay URLs on URL-capable targets and are fetched
+  and inlined where bytes are needed; documents (`application/pdf`,
+  `text/plain` — Anthropic `document`, OpenAI `file`, Responses
+  `input_file`, Gemini `inlineData`) map the same way, and images in
+  tool results (`tool_result.content`, `function_call_output`,
+  `functionResponse`) survive. Fetching is guarded: `http:`/`https:`
+  only; every resolved address — and every redirect hop, max 3 — is
+  checked against private, loopback, link-local, CGNAT, ULA and
+  metadata ranges; 20 MB and 15 s caps; `media:` YAML section or
+  `MEDIA_FETCH`/`MEDIA_ALLOW_PRIVATE` env. Media bytes never reach
+  logs, `/metrics`, OTel, the Inspector or the requests store — URLs
+  may be logged. A target that can't take a part refuses with a 400 in
+  the source's dialect naming the field, never a silent drop; the
+  Inspector shows media as type, size and URL host only.
+- **Same-format pass-through for Anthropic and Chat** (`type:
+  anthropic` / `type: openai`): when the routed provider speaks the
+  client's format the request is forwarded without the canonical
+  round trip — still routed, traced, priced and shown in the
+  Inspector marked pass-through, streams relayed byte for byte,
+  client aborts propagated upstream. Automatic for providers on a
+  shim `preset`; any other provider opts in with `passthrough: true`.
+  `type: responses` is unchanged.
+- **Provider presets and declared gaps.** `preset:` fills `type`,
+  `base_url` and `gaps` for native Anthropic endpoints —
+  `ollama-anthropic`, `lmstudio-anthropic`, `deepseek-anthropic`,
+  `glm-anthropic`, `kimi-anthropic` — each gap list verified against
+  the provider's docs (Ollama's measured by probe, not just doc-read).
+  A provider may also declare `gaps:` directly from the fixed
+  vocabulary `tool_choice`, `count_tokens`, `prompt_cache`,
+  `url_images`, `documents`, `stream_usage`; each gap has exactly one
+  fix applied to the body before forwarding (or to the reply), with a
+  note — e.g. `count_tokens` is answered locally with a flagged
+  estimate, `url_images` are fetched and inlined, `documents` are
+  refused in the client's dialect.
+- **Embeddings, minimal.** `POST /v1/embeddings` (and `/embeddings`)
+  in OpenAI format routes by model with aliases and fallbacks:
+  OpenAI-compatible targets get the body as-is, Gemini maps to
+  `batchEmbedContents` (`outputDimensionality`), Ollama to
+  `/api/embed`; Anthropic and Responses targets get a 501 in OpenAI's
+  error envelope. `dimensions` maps where the target supports it;
+  `encoding_format: "base64"` is produced by babelgate (float32
+  little-endian). Usage and cost are recorded.
+- **Published compatibility matrix.** `docs/compatibility.md` is
+  rendered from the pair-test results (`npm run matrix`) — source ×
+  target per feature (plain, stream, tools, stream × tools,
+  structured output, reasoning, URL image, document, tool-result
+  image, pass-through) — and CI fails when the committed cells go
+  stale.
+- **Weekly client-release replay.** A scheduled `live.yml` job
+  installs the latest Claude Code and Codex, runs the edit-task gates
+  through babelgate, diffs each client's request shape against the
+  committed fixtures and opens a `client-replay` issue on a failure
+  or a new shape. First green run on release candidates: Claude Code
+  2.1.329, Codex CLI 0.171.0 (gate C).
+- **Signed releases.** `release.yml` signs the GHCR image keyless
+  with cosign; npm registry signatures verify with `npm audit
+  signatures`; a CycloneDX SBOM of the runtime dependencies is
+  attached to each GitHub release. Verification steps are in
+  `SECURITY.md`.
+
+### Changed
+
+- **Reasoning requests from Claude Code, Chat, Gemini and Ollama
+  clients now reach the provider** — Anthropic `thinking`, Chat
+  `reasoning_effort`, Gemini `thinkingConfig` and Ollama `think` were
+  dropped with a note in 1.4; they now map to `config.reasoning` and
+  the target's thinking controls. Set `reasoning: false` on a provider
+  to keep 1.4 behaviour.
+
+### Known limitations
+
+- **Embeddings is OpenAI-format inbound only** — no Gemini or Ollama
+  embedding dialects; no audio or image generation (spec §2.2).
+- **No same-format pass-through for Gemini and Ollama sources** —
+  `type: gemini`/`ollama` traffic always takes the canonical path;
+  revisit on user demand.
+- **No PDF text extraction** — a document for a target that can't
+  read documents is refused (400 in the source's dialect), never
+  flattened to text.
+- **Foreign reasoning travels in `bg1.` envelope signatures** —
+  Anthropic and Gemini clients see foreign reasoning inside
+  `signature`/`thoughtSignature` fields (raw provider signatures only
+  survive on pass-through); a client that does not return those fields
+  verbatim loses the reasoning, dropped with `reasoning_dropped`.
+  Chat and Ollama clients carry reasoning as plain text with no
+  signature — `reasoning_content`/`thinking` sent back on an
+  assistant message is dropped with `reasoning_dropped` (no origin,
+  so no encoder could send it on).
+- **Tool-result images refused on Chat and Ollama targets** — those
+  dialects carry no image in tool results; refused with a 400 naming
+  the field and target.
+- **Stateless Responses only** — as 1.4: `previous_response_id`,
+  `store: true` and `conversation` get a 400 naming the field;
+  `GET`/`DELETE /v1/responses/{id}` and `POST /v1/responses/compact`
+  get a 404.
+- **Reasoning never translates across providers** by design: a part
+  from another provider or model is dropped with `reasoning_dropped`,
+  never reinterpreted.
+
 ## [1.4.0] - 2026-11-16
 
 "Codex on any model": the OpenAI Responses API becomes the fifth client
@@ -516,7 +650,8 @@ gets the repository ready for outside contributors.
 - **Ollama `thinking` output is dropped** by the proxy (the canonical
   format has no field for it); planned for v1.1.
 
-[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.1.2...v1.2.0

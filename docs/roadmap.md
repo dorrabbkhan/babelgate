@@ -1,10 +1,10 @@
 # babelgate roadmap
 
-**Status:** v1.4 released — Codex on any model: the OpenAI Responses API as a fifth client and
-provider format, Codex CLI on Gemini, Claude and Chat-only backends with custom tools, reasoning
-carried between turns and structured output across all five formats; byte-preserving pass-through
-to Responses-native upstreams.
-**Next:** v1.5 ("Correct everywhere"). Last revised 2026-11-16. Reasoning behind this roadmap: the
+**Status:** v1.5 released — Correct everywhere: reasoning and media carried across all five client
+formats, a same-format shim with provider presets and declared gaps for native Anthropic endpoints,
+minimal OpenAI-format embeddings, and published proof — a generated compatibility matrix, a weekly
+client-release replay and cosign-signed releases with SBOMs.
+**Next:** v1.6 ("One command, free to start"). Last revised 2026-11-16. Reasoning behind this roadmap: the
 2026-10-26 roadmap design spec and the 2026-11-04 and 2026-11-16 revision specs in `docs/superpowers/specs/`;
 market evidence in `docs/research/2026-11-16-market-analysis.md`.
 
