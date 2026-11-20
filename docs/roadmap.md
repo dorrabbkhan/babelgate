@@ -31,8 +31,10 @@ keeps working, but it is out of the headline.
 Team governance ships later as a separate commercial package on a public plugin API. The paid tier is
 built only after 3 teams commit.
 
-Each version is one spec → plan → agent cycle. Size, for part-time agent-driven work: **S** ≈ 2–3 weeks,
-**M** ≈ 4–6 weeks, **L** ≈ 2–3 months. Every version ships with recipes for the clients it affects and the
+Each version is one spec → plan → agent cycle. Size, for part-time agent-driven work, as
+measured from git history on 2026-11-20 (spec → release): **S** ≈ 1–3 days, **M** ≈ 3–6 days, **L** ≈ 3–10
+days (v1.2 took 5 days, v1.3 9, v1.4 3, v1.5 4). The original estimates (S 2–3 weeks, M 4–6 weeks, L 2–3
+months) were roughly ten times too long. Every version ships with recipes for the clients it affects and the
 same validation discipline: adapter contract tests, fixture corpora recorded from real SDKs, pair tests
 across every source × target, and a live smoke run against real upstreams before release.
 
@@ -168,6 +170,8 @@ Detail in `docs/superpowers/specs/2026-11-20-babelgate-v1.6-design.md`.
 - **Response cache.** Exact-match, opt-in, in memory — for CI and test suites.
 - **Reasoning fixes.** Anthropic `between_tools` thinking mapped; Gemini text-part `thoughtSignature` kept
   (#99, canonical change).
+- **Landing page.** One plain-language page on GitHub Pages (install, free first run, demo, why trust it);
+  docs stay in the repo; specs, plans, roadmap and decisions are not linked from it.
 - **Launch ready.** README rebuilt around install → free first run → proof; one launch post with per-channel
   variants; demo re-recorded on the binary; listing texts prepared; GitHub Sponsors and support page.
   Posting is the owner's act after the release.
@@ -285,7 +289,8 @@ Public is not the same as announced: the repo is public now; the announcement, f
 | Monthly and before every version spec | Scripted competitor check (`scripts/research/competitor-check.sh` from v1.6; the 2026-11-20 check was by hand) (repo metadata, releases, changelog links) of LiteLLM, Bifrost, claude-code-router, OmniRoute, free-claude-code, agentgateway, Agent Router, Kong, Cloudflare and Vercel AI Gateway, OpenRouter, Anthropic's Claude Code gateway, Antigravity CLI, and the native Anthropic/Responses endpoints (Ollama, LM Studio, vLLM, DeepSeek, GLM, Kimi): copy what's table stakes, don't race on breadth, and move any pair a provider now serves natively from "bridge" to "shim" |
 | Before v2.1 | **3 committed teams, or don't build the paid tier** |
 
-Overall horizon (from 2026-10-26, revised 2026-11-04): v1.1 launch in roughly 2.5–3.5 months, v1.6
-(powerhouse) in roughly 9–12.5 months — one M version later than v1.5 was, for the Codex entry point —
-v2.1 no earlier than about 13 months and only behind its gate. **Re-plan after every
+Overall horizon (revised 2026-11-20 from measured pace): v1.0.1 to v1.5 took 25 days (2026-10-26 →
+2026-11-20). v1.6 and the launch: about 7–12 days after its plan is approved, i.e. early December 2026.
+Phase 3 timing no longer follows a calendar: v2.0 can start right after the launch, and v2.1 waits only for
+its 3-team gate. **Re-plan after every
 release:** real users' issues outrank this list.

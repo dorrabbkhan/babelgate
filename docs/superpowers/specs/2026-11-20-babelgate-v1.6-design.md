@@ -226,6 +226,20 @@ carries it in `textIndex`, other targets ignore it.
   supersedes the v1.4 and v1.5 drafts (they become source material), plus short per-channel variants.
   Rules from the v1.5 comparison page apply: no naming-and-shaming, every claim links its evidence.
 - **Demo:** the VHS tapes re-recorded on the binary with the free first run.
+- **Landing page (owner, 2026-11-20: a single page, not a docs site).** One static page on GitHub Pages
+  (`dorrabbkhan.github.io/babelgate` until the owner picks a domain), written for people who are not gateway
+  experts: what babelgate does in plain words ("use the AI model you want with the tools you already have"),
+  who it is for, the free first run as three steps, the demo GIF, why it can be trusted (tested every way,
+  checked against each new Claude Code and Codex release, signed releases) without jargon, and install
+  commands per OS. Technical depth is one click away, not on the page. Plain HTML/CSS in `site/`, no
+  framework and no new dependencies; no trackers or third-party scripts. A Pages workflow patch for the
+  owner to apply (the app has no Workflows permission); enabling Pages is the owner's act. The look is
+  reviewed by the owner as a mockup before it is built.
+- **What the site links to:** user-facing docs only — install, recipes, `docs/compatibility.md`, release
+  verification (`SECURITY.md`), `docs/comparison.md`, the GitHub repo. Not linked: `docs/superpowers/`
+  (specs, plans), `docs/roadmap.md`, `docs/decisions.md`, `docs/conductor/`, `docs/research/`,
+  `docs/launch/`. They stay public in the repo, as the roadmap's visibility table says, but are not part of
+  the product's front door.
 - **Listings prepared, not submitted:** text for Ollama's community integrations, Open WebUI docs and the
   Claude Code community docs, ready for the owner to submit.
 - **Repo hygiene for visitors:** topics, description, social preview image, a pinned "start here" issue,
@@ -273,6 +287,7 @@ hand monthly and before every version spec; no scheduled workflow (keeps the app
 | 14 | Competitor-check script (§3.9) | | Sonnet |
 | 15 | UI: breaker state, cache hits, free-tier cost label | | Sonnet |
 | 16 | Launch readiness: README, launch post + variants, listings text, repo hygiene, Sponsors/support docs, demo tapes | OWNER REVIEW | Sonnet |
+| 16b | Landing page in `site/` + Pages workflow patch (mockup approved by the owner first) | OWNER REVIEW | Sonnet |
 | 17 | Live-suite cases; gates E and F | OWNER REVIEW | Opus |
 | 18 | CHANGELOG, `1.6.0`; gate G at publish | OWNER GATE | Sonnet |
 
@@ -280,6 +295,13 @@ Tasks 1–2 go first so the proof stays green without owner fixture PRs while th
 High; the Conductor column follows the v1.5 model report rule (Opus where an interface, wire format or
 owner-gate judgment is involved; Sonnet otherwise), and `docs/conductor/model-report-v1.6.md` records the
 breakdown and the measured usage.
+
+### 5.2 Time estimate
+Measured pace (git history, spec date → release commit): v1.2 5 days (15 PRs), v1.3 9 days (21), v1.4 3 days
+(11), v1.5 4 days (28). v1.6 is about v1.5's size in code (19 tasks) but waits more on the outside world:
+five-platform CI builds, Windows, live checks per free provider, the owner's reviews, gate F on three
+machines, tap and winget. **Estimate: 7–12 days from plan approval to `1.6.0`**, Windows being the most
+likely overrun.
 
 ## 6. Owner decisions
 | # | Decision | Chosen / status |
@@ -290,10 +312,11 @@ breakdown and the measured usage.
 | D4 | winget submission | **Prepared by Task 7, submitted by the owner** (2026-11-20) to `microsoft/winget-pkgs` at release time |
 | D5 | Launch scope | v1.6 = the roadmap's v1.6 + launch ready + open issues (#148, #99) (2026-11-20); posting is the owner's act after release |
 | D6 | Pre-approved test/fixture changes | *To list in the plan:* the Codex recording re-recorded on the new pin in Task 2; any test pinning `between_tools` → `thinking_dropped` in Task 3; the #99 drop assertions in Gemini decoder tests in Task 4. Each replacement asserts the new behaviour at least as exactly |
+| D8 | Website | **Single non-technical landing page** on GitHub Pages (2026-11-20); docs stay in the repo; internal docs (specs, plans, roadmap, decisions, conductor, research, launch drafts) are not linked. VitePress docs site and Starlight/Docusaurus considered and not chosen |
 | D7 | Replay diff ignores JSON Schema contents inside tool and output-format definitions | **Ignore** (2026-11-20). New tools, content blocks, input item types, event types and top-level keys still fail |
 
 **Owner actions:** review the canonical change (Task 4) and launch material (Task 16); apply workflow
-patches (Task 6); create `dorrabbkhan/homebrew-babelgate` (D3) and submit the winget manifest (D4); have free keys for OpenRouter
+patches (Tasks 6, 16b) and enable GitHub Pages; create `dorrabbkhan/homebrew-babelgate` (D3) and submit the winget manifest (D4); have free keys for OpenRouter
 and Gemini (and any other preset tested live); run gate F on a Mac and a Windows machine or VM; tag
 `v1.6.0` and publish; post the launch.
 
