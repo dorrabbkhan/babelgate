@@ -132,7 +132,14 @@ write_config_toml() {
     echo ""
     echo "[model_providers.rec]"
     echo "name = \"Recorded upstream\""
-    echo "base_url = \"http://localhost:$port/v1\""
+    # 127.0.0.1, not localhost: record-shapes binds the IPv4 loopback
+    # only, while babelgate listens on :: (dual-stack). On a runner
+    # where localhost resolves to ::1 (nss-myhostname orders it first
+    # on some images) the edit-task gate still works — Codex reaches
+    # babelgate over IPv6 — but this recorder's socket sees nothing
+    # (live run 44549011473: task completed, zero requests recorded).
+    # A literal IP takes name resolution out of this hop entirely.
+    echo "base_url = \"http://127.0.0.1:$port/v1\""
     echo "wire_api = \"responses\""
     echo "env_key = \"OPENROUTER_API_KEY\""
     echo "requires_openai_auth = false"
@@ -212,7 +219,7 @@ cp -R "$FIXTURE"/. "$work/edit-task/"
 port="$(node -e 'const s=require("net").createServer();s.listen(0,()=>{console.log(s.address().port);s.close()})')"
 
 # record-shapes joins <forwardBase> + the request path, and Codex's
-# base_url below is fixed at http://localhost:<port>/v1 so it POSTs
+# base_url below is fixed at http://127.0.0.1:<port>/v1 so it POSTs
 # /v1/responses. Forwarding to <upstream> verbatim would double the
 # /v1 (/api/v1/v1/responses), so the forward base is --upstream minus
 # its trailing /v1 segment — Codex's /v1 then lands at
