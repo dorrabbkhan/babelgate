@@ -7813,3 +7813,47 @@ the changed files are listed here by full path:
   ollama serve` for a native install or `docker run -e
   OLLAMA_CONTEXT_LENGTH=32768 ollama/ollama` under Docker
   (https://docs.ollama.com/faq).
+
+## v1.5 follow-up: pass-through error traces (branch v1.5/passthrough-error-trace)
+
+- **Cause:** Gate B (v1.5 Task 17, PR #147) — Claude Code through the
+  `ollama-anthropic` preset in pass-through — hit upstream timeouts,
+  and `observe-check.ts --expect-passthrough` reported "a row is not
+  marked pass-through": `markPassthrough` ran only on the success
+  paths (`finishPassthroughUnary`, `finishPassthroughTrace`). When the
+  attempt loop threw, the catch in `src/services/chat.service.ts` /
+  `src/services/chat-stream.service.ts` finished the trace with
+  `errorTraceFields` alone, so a failed or timed-out shim request
+  showed in `/ui/api/requests` and the inspector as a translated
+  request — no `passthrough`, no `preset`, a stale `canonical` body
+  stage.
+- **Rule:** the last attempted hop decides. The attempt loop's `hops`
+  record carries the provider name of every hop that reached an
+  upstream; the new `markFailedPassthroughHop` (in
+  `src/services/passthrough-trace.ts`, calling the now-exported
+  `markPassthrough` — the same marking the success path applies)
+  looks up the last hop's entry and marks the trace only when
+  `isPassthrough(source, entry)` holds. A fallback that died on a
+  canonical entry keeps its translated row; no recorded hop means
+  nothing reached an upstream. Aborted requests keep today's single
+  `status: "aborted"` trace — marked when the last hop was
+  pass-through.
+- **Files changed:**
+  - `src/services/passthrough-trace.ts` — `markPassthrough` exported;
+    `markFailedPassthroughHop(source, hops, registry)` added.
+  - `src/services/chat.service.ts` — the attempt-loop catch marks the
+    failed trace before `finishTrace` (unary).
+  - `src/services/chat-stream.service.ts` — the same in the streaming
+    catch.
+  - `tests/integration/observe.test.ts` — three tests (failed unary
+    hop marked with preset, failed stream marked, failed canonical
+    fallback unmarked); the test yaml gained a `shimpreset` provider
+    (`preset: ollama-anthropic`, mock `base_url`) and a `preset-*`
+    route.
+  - `docs/decisions.md` — this entry.
+- **Responses path checked:** there is no `responses*.service.ts` —
+  the v1.4 responses pass-through runs through the same two services
+  (`isPassthrough` covers `type: responses` entries unconditionally),
+  so both dialects share the fix. `passthroughCountTokens` emits no
+  request trace and canonical-stream (the /ui playground) has no
+  source dialect, so no other catch path needed the change.

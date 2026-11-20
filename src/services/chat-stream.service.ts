@@ -22,7 +22,10 @@ import {
   passthroughStreamAttempt,
   type PassthroughStreamAttempt,
 } from "./passthrough";
-import { finishPassthroughTrace } from "./passthrough-trace";
+import {
+  finishPassthroughTrace,
+  markFailedPassthroughHop,
+} from "./passthrough-trace";
 import {
   relayResponseHeaders,
   type PassthroughObservation,
@@ -101,6 +104,9 @@ export async function proxyChatStream(
       { requestId, signal: opts?.signal, hops },
     );
   } catch (err) {
+    // v1.5 follow-up: same marking as chat.service — a failed
+    // pass-through attempt is not a translated request.
+    markFailedPassthroughHop(source, hops, config.registry);
     await finishTrace({
       reason: plan.reason,
       requestedModel,
