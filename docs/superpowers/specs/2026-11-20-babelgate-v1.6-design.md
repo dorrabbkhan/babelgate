@@ -39,7 +39,7 @@ Antigravity CLI) stays, kept small.
 | E7 | Replay #148 failed on 11-18, 11-19 and 11-20 (dispatch) on two causes, both since fixed: Claude Code 2.1.327 and 2.1.328 each added a property inside the built-in `ReportFindings` tool's `input_schema` (`shape-diff.ts` exits 1 on any *added* path; removed paths are already informational), fixed by owner-approved fixture PRs #142 and #149; and the Codex recorder bypass (E8). The dispatch run 44744362690 at `8c02ed8` (11-20 13:26) is **green** on Claude Code 2.1.329 and codex 0.171.0 | issue #148, runs 44549011473 / 44744362690 `summary.md`, PRs #142 #149 | Proof is green today, but every Claude Code release that edits a tool schema costs an owner fixture PR. §3.1 stops that churn (D7) |
 | E8 | Codex recorder saw zero requests on codex 0.170: `localhost` resolved to `::1` while the recorder listens on IPv4. Fixed on main in `0192cad` (pin `127.0.0.1`); `CODEX_VERSION` pin is still 0.169.0 | `scripts/gates/record-codex.sh`, `docs/decisions.md` | Not a transport change. Only the version pin and closing #148 remain |
 | E9 | `between_tools` thinking falls to `thinking_dropped`; `enabled`, `disabled`, `adaptive` are mapped | `anthropic.adapter.ts` `toCanonicalReasoning` | Map it (§3.6) |
-| E10 | #99: Gemini text-part `thoughtSignature` is dropped on decode; the canonical stream has no event for it | issue #99 | Canonical change (§3.7, OWNER REVIEW) |
+| E10 | #99 (Gemini text-part `thoughtSignature`) is **already done**: v1.4 Task 7a added the canonical `text_signature` stream event, both Gemini decoders and the envelope's `textIndex` (PRs #100, #101); the issue was never closed | `canonical.types.ts` `text_signature`, `git log` adfdd8f | Close #99 with a pointer to #101 (Task 2); no canonical change in v1.6 |
 | E11 | Claude Code 2.1.329 dropped its retry at a gateway model's `max_tokens` limit and asks gateway users to set `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; babelgate's per-target `max_output_tokens` already clamps | Claude Code release notes 2026-11-19 | Recipes and presets set it; no product change |
 | E12 | The scripted competitor check decided on 2026-11-16 does not exist; the 11-20 check was done by hand | `scripts/`, roadmap "Running alongside" | Add it (§3.9) |
 
@@ -76,9 +76,11 @@ Antigravity CLI) stays, kept small.
   Ollama-only apps on cloud models; Antigravity CLI moves into the README's client list.
 - **Minimal health** (§3.5): passive circuit breaker on the existing fallback chains.
 - **Response cache, small** (§3.5).
-- **Reasoning fixes** (§3.6): `between_tools`; (§3.7) #99 Gemini text-part signatures.
+- **Reasoning fix** (§3.6): `between_tools`. (#99 was done in v1.4; Task 2 closes the issue.)
 - **Launch readiness** (§3.8).
 - **Scripted competitor check** (§3.9).
+- **Competitor conformance run** (§3.10): our scenarios against claude-code-router and free-claude-code on
+  the bug classes they have open.
 
 ### 2.2 Not in v1.6
 - Tray or desktop app (D1 rejected it for v1.6). Revisit only on user demand after launch.
@@ -132,7 +134,7 @@ release that edits a built-in tool's JSON Schema fails the diff and needs an own
 - **Targets:** `linux-x64`, `linux-arm64`, `darwin-arm64`, `darwin-x64`, `win-x64`. Built in CI on native
   runners (no cross-injection), one archive each plus `SHA256SUMS`, all cosign-signed (keyless, same as the
   v1.5 image signing) and listed in the CycloneDX SBOM. `win-x64` has never run the suites (`node:sqlite`,
-  data-folder paths): it ships only if they pass on Windows; if they don't, Task 6 escalates with the
+  data-folder paths): it ships only if they pass on Windows; if they don't, Task 5 escalates with the
   failures instead of shipping a binary that wasn't tested.
 - **Tested binary:** CI runs the pair suite's HTTP-level tests and `test:live` (smoke subset) against the
   built binary on each runner (a `BABELGATE_BIN` switch in the test harness). If a test can only run in
@@ -177,8 +179,8 @@ release that edits a built-in tool's JSON Schema fails the diff and needs an own
   one block. Success criterion 2 counts that paste as part of the first run.
 - **`babelgate presets`** lists every preset with tier, key env var, suggested models and docs date.
 - **Cost honesty.** The `/ui` cost view already shows $0 for local; routes whose preset has `tier: free`
-  show "$0 (free tier, per <provider> docs on <date>)" — the label comes from the preset, so Task 15
-  follows Task 8. Prices for cheap presets come from the existing price table.
+  show "$0 (free tier, per <provider> docs on <date>)" — the label comes from the preset, so Task 14
+  follows Task 7. Prices for cheap presets come from the existing price table.
 
 ### 3.4 Client recipes
 One page per client under `docs/recipes/`, each with: the client's config (verified on a named client
@@ -212,11 +214,9 @@ reads Anthropic's docs for the exact semantics and picks the canonical effort it
 for Anthropic targets on models that accept it; other targets get the mapped effort. Verified against the
 docs, not our mocks; a live check on an Anthropic route if a key is available.
 
-### 3.7 #99 — Gemini text-part `thoughtSignature` (OWNER REVIEW: canonical change)
-As proposed in #99: an optional `signature` on canonical `text_delta` (or a `text_signature` event — the
-task picks one and justifies it), in `canonical.types.ts` and `canonical.schema.ts` together, logged in
-`docs/decisions.md`. Both Gemini decoders keep it (twin contract: stream == non-stream), the envelope
-carries it in `textIndex`, other targets ignore it.
+### 3.7 #99 — already done
+v1.4 Task 7a (#100, #101) shipped the canonical `text_signature` event, both Gemini decoders and the
+envelope's `textIndex`. Task 2 closes the issue with that pointer. No canonical change in v1.6.
 
 ### 3.8 Launch readiness
 - **README** restructured: one-line pitch ("the translator you can check"), one-command install per OS, the
@@ -242,7 +242,7 @@ carries it in `textIndex`, other targets ignore it.
   CSS and inline SVG only (no animation libraries, no trackers), and `prefers-reduced-motion` gets a still page.
   **Honesty rule:** every table cell and the "last checked" versions come from the generated matrix and the
   latest replay run at build time, never typed by hand; clients that are recipe-only (e.g. Cursor, Open WebUI)
-  are marked "verified by hand on <version>" or left out. The owner reviews the built page (Task 16b).
+  are marked "verified by hand on <version>" or left out. The owner reviews the built page (Task 16).
 - **What the site links to:** user-facing docs only — install, recipes, `docs/compatibility.md`, release
   verification (`SECURITY.md`), `docs/comparison.md`, the GitHub repo. Not linked: `docs/superpowers/`
   (specs, plans), `docs/roadmap.md`, `docs/decisions.md`, `docs/conductor/`, `docs/research/`,
@@ -259,6 +259,30 @@ carries it in `textIndex`, other targets ignore it.
 `scripts/research/competitor-check.sh` (+ a tracked repo list file): GitHub API metadata, latest release,
 open-issue counts for keyword searches, written as a dated Markdown table under `docs/research/`. Run by
 hand monthly and before every version spec; no scheduled workflow (keeps the app's permissions unchanged).
+
+### 3.10 Competitor conformance run (added 2026-11-20, owner)
+Turn "competitors don't publish conformance" into evidence. Run babelgate's scenarios against
+**claude-code-router** and **free-claude-code** on the bug classes where they have open issues (11-16
+analysis §1.11; their trackers): **thinking after a tool call**, **streamed tool-call arguments**, and
+**multi-turn reasoning carried across turns**, with Anthropic-format (Claude Code) and Responses (Codex)
+clients against Chat-only and Gemini upstreams.
+- **Harness.** The process-level harness built for the binary (§3.2) is generalized: a *gateway under test*
+  is a start command, a config written for a given upstream base URL, and a client base URL. babelgate (as
+  a binary), CCR and free-claude-code are three adapters of that harness. Upstreams are a local mock HTTP
+  server that **replays recorded real-provider responses** from `tests/fixtures/` (no hand-written events),
+  so runs are deterministic and cost nothing.
+- **Pinned and reproducible.** Each competitor is installed at a pinned version from its own published
+  package or tag, into a temp dir; nothing of theirs is vendored (free-claude-code is AGPL). The run writes
+  a report: scenario × gateway × pass/fail, the failing request/response pair (shapes only, no prompt
+  text), and the exact commands to reproduce.
+- **Confirm before claiming.** A competitor failure counts only if the same scenario fails once against
+  the live provider too (our mock could share our misunderstanding — the v1.0 Ollama lesson). babelgate
+  failures found here are fixed or escalated like any other bug.
+- **Use of results (D9).** The report is private to the PR (`docs/research/<date>-conformance-run.md`,
+  marked draft). What goes public, and whether bugs are filed upstream first, is decided by the owner at
+  review. If competitors pass, that is recorded too, and the launch copy does not claim otherwise.
+- **Cadence.** `scripts/research/conformance-run.sh` is re-runnable beside the competitor check (§3.9);
+  not scheduled.
 
 ## 4. Testing and gates
 - **Unit/integration:** shape-diff rules (seeded), SEA asset serving (both sources), preset schema and
@@ -280,22 +304,22 @@ hand monthly and before every version spec; no scheduled workflow (keeps the app
 | # | Task | Gate | Conductor |
 |---|---|---|---|
 | 1 | Shape-diff tolerance (D7) with seeded tests | OWNER REVIEW (changes a check) | Sonnet |
-| 2 | Codex pin to current release; Codex recipe re-verified from the request log; close #148 after a green scheduled replay | | Sonnet |
+| 2 | Codex pin to current release; Codex recipe re-verified from the request log; close #148 and #99 | | Sonnet |
 | 3 | `between_tools` thinking mapping (§3.6) | | Opus |
-| 4 | Canonical change for text-part signatures + Gemini decoders + envelope (#99) | OWNER REVIEW (interface change) | Opus |
-| 5 | SEA build: bundle, SEA config, UI from memory, logging in binary; local build script | | Opus |
-| 6 | Binary in CI: build per platform, run suites against it, archives, SHA256SUMS, cosign, SBOM (workflow patch) | OWNER GATE (publishing config) | Sonnet |
-| 7 | Installers: `install.sh`, `install.ps1`, Homebrew formula, winget manifest (prepared) | OWNER GATE (publishing) | Sonnet |
-| 8 | Preset type widened; free/cheap presets verified against provider docs; `babelgate presets` | | Sonnet |
-| 9 | First run: `--provider`, `--preset codex`, missing-key guidance, suggested models proven on the edit task | | Opus |
-| 10 | Circuit breaker (§3.5) | | Sonnet |
-| 11 | Response cache (§3.5) | | Opus |
-| 12 | Recipes: Cursor, Continue, Aider, Open WebUI (§3.4) | | Sonnet |
-| 13 | Recipes + examples: LangChain, LlamaIndex, Vercel AI SDK, Ollama-only apps | | Sonnet |
-| 14 | Competitor-check script (§3.9) | | Sonnet |
-| 15 | UI: breaker state, cache hits, free-tier cost label | | Sonnet |
-| 16 | Launch readiness: README, launch post + variants, listings text, repo hygiene, Sponsors/support docs, demo tapes | OWNER REVIEW | Sonnet |
-| 16b | Landing page in `site/` from the approved mockup; table and versions generated from the matrix and replay; Pages workflow patch | OWNER REVIEW | Sonnet |
+| 4 | SEA build: bundle, SEA config, UI from memory, logging in binary; local build script | | Opus |
+| 5 | Binary in CI: Node 24 leg, build per platform, run suites against it, archives, SHA256SUMS, cosign, SBOM (workflow patch) | OWNER GATE (publishing config) | Sonnet |
+| 6 | Installers: `install.sh`, `install.ps1`, Homebrew formula, winget manifest (prepared) | OWNER GATE (publishing) | Sonnet |
+| 7 | Preset type widened; free/cheap presets verified against provider docs; `babelgate presets` | | Sonnet |
+| 8 | First run: `--provider`, `--preset codex`, missing-key guidance, suggested models proven on the edit task | | Opus |
+| 9 | Circuit breaker (§3.5) | | Sonnet |
+| 10 | Response cache (§3.5) | | Opus |
+| 11 | Recipes: Cursor, Continue, Aider, Open WebUI (§3.4) | | Sonnet |
+| 12 | Recipes + examples: LangChain, LlamaIndex, Vercel AI SDK, Ollama-only apps | | Sonnet |
+| 13 | Competitor-check script (§3.9) | | Sonnet |
+| 13b | Competitor conformance run (§3.10): harness adapters for CCR and free-claude-code, replay-backed scenarios, live confirmation, draft report | OWNER REVIEW (claims about other projects) | Opus |
+| 14 | UI: breaker state, cache hits, free-tier cost label | | Sonnet |
+| 15 | Launch readiness: README, launch post + variants, listings text, repo hygiene, Sponsors/support docs, demo tapes | OWNER REVIEW | Sonnet |
+| 16 | Landing page in `site/` from the approved mockup; table and versions generated from the matrix and replay; Pages workflow patch | OWNER REVIEW | Sonnet |
 | 17 | Live-suite cases; gates E and F | OWNER REVIEW | Opus |
 | 18 | CHANGELOG, `1.6.0`; gate G at publish | OWNER GATE | Sonnet |
 
@@ -306,7 +330,7 @@ breakdown and the measured usage.
 
 ### 5.2 Time estimate
 Measured pace (git history, spec date → release commit): v1.2 5 days (15 PRs), v1.3 9 days (21), v1.4 3 days
-(11), v1.5 4 days (28). v1.6 is about v1.5's size in code (19 tasks) but waits more on the outside world:
+(11), v1.5 4 days (28). v1.6 is about v1.5's size in code (19 tasks, including the conformance run) but waits more on the outside world:
 five-platform CI builds, Windows, live checks per free provider, the owner's reviews, gate F on three
 machines, tap and winget. **Estimate: 7–12 days from plan approval to `1.6.0`**, Windows being the most
 likely overrun.
@@ -319,12 +343,13 @@ likely overrun.
 | D3 | Homebrew tap repo | **`dorrabbkhan/homebrew-babelgate`** (2026-11-20): the owner creates the empty public repo; Task 7 prepares the formula; the owner pushes it or grants the app access. Install: `brew install dorrabbkhan/babelgate/babelgate` |
 | D4 | winget submission | **Prepared by Task 7, submitted by the owner** (2026-11-20) to `microsoft/winget-pkgs` at release time |
 | D5 | Launch scope | v1.6 = the roadmap's v1.6 + launch ready + open issues (#148, #99) (2026-11-20); posting is the owner's act after release |
-| D6 | Pre-approved test/fixture changes | *To list in the plan:* the Codex recording re-recorded on the new pin in Task 2; any test pinning `between_tools` → `thinking_dropped` in Task 3; the #99 drop assertions in Gemini decoder tests in Task 4. Each replacement asserts the new behaviour at least as exactly |
+| D6 | Pre-approved test/fixture changes | *To list in the plan:* the Codex recording re-recorded on the new pin in Task 2; any test pinning `between_tools` → `thinking_dropped` in Task 3. Each replacement asserts the new behaviour at least as exactly |
 | D8 | Website | **Single non-technical landing page** on GitHub Pages (2026-11-20), direction per `docs/assets/landing-mockup-v2.html`; docs stay in the repo; internal docs (specs, plans, roadmap, decisions, conductor, research, launch drafts) are not linked. VitePress docs site and Starlight/Docusaurus considered and not chosen |
+| D9 | Publishing competitor results | *Decided at Task 13b's review.* Conductor's recommendation: file each live-confirmed bug upstream with the repro before launch; state results factually (versions, date, repro link) on `docs/comparison.md` and in the launch post; no adjectives |
 | D7 | Replay diff ignores JSON Schema contents inside tool and output-format definitions | **Ignore** (2026-11-20). New tools, content blocks, input item types, event types and top-level keys still fail |
 
-**Owner actions:** review the canonical change (Task 4) and launch material (Task 16); apply workflow
-patches (Tasks 6, 16b) and enable GitHub Pages; create `dorrabbkhan/homebrew-babelgate` (D3) and submit the winget manifest (D4); have free keys for OpenRouter
+**Owner actions:** review the shape-diff change (Task 1), launch material (Task 15) and the landing page (Task 16); apply workflow
+patches (Tasks 5, 16) and enable GitHub Pages; create `dorrabbkhan/homebrew-babelgate` (D3) and submit the winget manifest (D4); have free keys for OpenRouter
 and Gemini (and any other preset tested live); run gate F on a Mac and a Windows machine or VM; tag
 `v1.6.0` and publish; post the launch.
 
@@ -337,4 +362,4 @@ and Gemini (and any other preset tested live); run gate F on a Mac and a Windows
 | Free models fail Claude Code tool loops | A suggested model must pass the edit task; otherwise no suggestion for that client |
 | Unsigned macOS/Windows binaries scare users | Homebrew formula and install scripts avoid the quarantine path; cosign + SHA-256 documented; D2 can add signing |
 | Launch lands while the replay is red again | Gate E on release day; the badge links the run so a red result shows its cause |
-| Scope is M-plus with launch work | Recipes and launch docs are Sonnet/Devin work in parallel with Tasks 5–11; cache (Task 11) is the first thing to cut if the owner wants a smaller v1.6 |
+| Scope is M-plus with launch work | Recipes and launch docs are Sonnet/Devin work in parallel with Tasks 4–10; cache (Task 10) is the first thing to cut if the owner wants a smaller v1.6 |

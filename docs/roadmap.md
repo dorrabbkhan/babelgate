@@ -168,14 +168,16 @@ Detail in `docs/superpowers/specs/2026-11-20-babelgate-v1.6-design.md`.
   (adopted in v1.5: recipe, `thinkingBudget` fix and record script in PR #140; API-key mode only).
 - **Minimal health.** A passive circuit breaker on the existing fallback chains; no active probes.
 - **Response cache.** Exact-match, opt-in, in memory — for CI and test suites.
-- **Reasoning fixes.** Anthropic `between_tools` thinking mapped; Gemini text-part `thoughtSignature` kept
-  (#99, canonical change).
+- **Reasoning fix.** Anthropic `between_tools` thinking mapped (#99 turned out to be done in v1.4; closed).
 - **Landing page.** One plain-language page on GitHub Pages (install, free first run, demo, why trust it);
   docs stay in the repo; specs, plans, roadmap and decisions are not linked from it.
 - **Launch ready.** README rebuilt around install → free first run → proof; one launch post with per-channel
   variants; demo re-recorded on the binary; listing texts prepared; GitHub Sponsors and support page.
   Posting is the owner's act after the release.
 - **Scripted competitor check** (decided 2026-11-16, built here).
+- **Competitor conformance run.** Our scenarios (thinking after a tool call, streamed tool arguments,
+  multi-turn reasoning) run against claude-code-router and free-claude-code on replayed real-provider
+  responses; failures confirmed live; what is published is the owner's call.
 - **Moved to v2.0 unless users ask earlier:** key load balancing, rate limiting per client key.
 
 > **🟢 POWERHOUSE: after v1.6.** Any client in any of 5 formats reaches any of ~20 providers through

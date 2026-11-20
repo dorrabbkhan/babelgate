@@ -52,7 +52,7 @@ No new entrant, acquisition or shutdown. The landscape in the 11-16 analysis sta
   codex 0.170 because `localhost` resolved to `::1` (fixed in `0192cad`). The 11-20 13:26 dispatch run is
   green on Claude Code 2.1.329 and codex 0.171. Both edit-task gates passed throughout: the product never
   broke. The lesson is the cost: a client release that edits a tool schema should not need an owner PR.
-- **Issue #99** (Gemini text-part `thoughtSignature` dropped) is still open; it needs a canonical change.
+- **Issue #99** (Gemini text-part `thoughtSignature`) is still open, but the work shipped in v1.4 (PRs #100, #101: canonical `text_signature` event); only closing it remains.
 - **Not launched.** 0 stars, 0 forks, 0 watchers. The launch posts in `docs/launch/` are drafts. The owner
   is holding the launch for v1.6 on purpose (decided 2026-11-20).
 
@@ -65,7 +65,7 @@ No new entrant, acquisition or shutdown. The landscape in the 11-16 analysis sta
 | Is the product the bottleneck? | No. Distribution is: 0 stars against 10k–150k for the category. v1.6 is the launch version, so install friction, a free first run and launch material are the product work that matters most. |
 | Do POWERHOUSE targets still make sense? | They are attention targets (2k stars, community-doc listings, 10+ outside contributors). They are only reachable after a launch, so they move to "v1.6 + launch" and are measured 60 days after the posts go out. |
 | Anything to drop? | Nothing new. Key load balancing and per-client rate limits stay in v2.0. Gemini CLI stays frozen. |
-| Anything to add to v1.6? | (a) make the replay ignore tool-schema text so harmless client releases stop needing owner fixture PRs, and close #148; (b) move the Codex recorder pin to current; (c) map `between_tools` thinking; (d) #99; (e) the scripted competitor check that was decided on 11-16 and never built; (f) launch readiness: first run on a free provider in under a minute, README rewritten around it, launch posts and demo refreshed. |
+| Anything to add to v1.6? | (a) make the replay ignore tool-schema text so harmless client releases stop needing owner fixture PRs, and close #148; (b) move the Codex recorder pin to current; (c) map `between_tools` thinking; (d) close #99 (done in v1.4); (e) the scripted competitor check that was decided on 11-16 and never built; (f) launch readiness: first run on a free provider in under a minute, README rewritten around it, launch posts and demo refreshed. |
 | Phase 3? | Unchanged. Agent Router's quota policies and Bifrost OSS budgets keep "keys and budgets" commoditised; the cross-client wedge and the 3-team gate stand. |
 
 ## Sources (accessed 2026-11-20)
