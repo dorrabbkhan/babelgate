@@ -160,16 +160,34 @@ export function markPassthrough(entry: ProviderEntry): void {
  * canonical body stage — so a 500ing or timed-out shim call never
  * shows as a translated request. The last hop in the route record
  * decides: a fallback that died on a canonical entry keeps its
- * translated row, and an empty record means nothing reached an
- * upstream.
+ * translated row.
+ *
+ * `abortedInFlight` covers the one case an empty record lies: a
+ * client abort rethrows the attempt loop before the hop is recorded,
+ * so the route record stays empty even though the request DID reach
+ * an upstream. The services pass the attempt ctx's `inFlight` entry —
+ * only when the abort signal actually fired (a pre-upstream failure
+ * on a pass-through entry still means nothing reached it). With the
+ * record empty and no abort, the original rule stands: nothing
+ * reached an upstream.
  */
 export function markFailedPassthroughHop(
   source: Provider,
   hops: Hop[],
   registry: ProviderRegistry,
+  abortedInFlight?: ProviderEntry,
 ): void {
   const last = hops[hops.length - 1];
-  if (last === undefined || !registry.has(last.provider)) return;
+  if (last === undefined) {
+    if (
+      abortedInFlight !== undefined &&
+      isPassthrough(source, abortedInFlight)
+    ) {
+      markPassthrough(abortedInFlight);
+    }
+    return;
+  }
+  if (!registry.has(last.provider)) return;
   const entry = registry.get(last.provider);
   if (isPassthrough(source, entry)) markPassthrough(entry);
 }

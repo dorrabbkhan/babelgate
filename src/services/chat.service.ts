@@ -32,6 +32,7 @@ import {
   errorTraceFields,
   maxTokensClampOf,
   toClientFacing,
+  type AttemptCtx,
 } from "./attempt-targets";
 import {
   assertBridgeableBody,
@@ -90,6 +91,11 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     input;
 
   const hops: Hop[] = [];
+  const attemptCtx: AttemptCtx = {
+    requestId,
+    signal: input.opts?.signal,
+    hops,
+  };
   let result;
   try {
     result = await attemptTargets(
@@ -171,13 +177,21 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
             return upstream;
           },
         ),
-      { requestId, signal: input.opts?.signal, hops },
+      attemptCtx,
     );
   } catch (err) {
     // v1.5 follow-up: a failed attempt whose last hop was a
     // pass-through relay is marked like a won one — a failed shim
-    // call is not a translated request.
-    markFailedPassthroughHop(source, hops, config.registry);
+    // call is not a translated request. A client abort records no
+    // hop; the in-flight entry answers instead.
+    markFailedPassthroughHop(
+      source,
+      hops,
+      config.registry,
+      input.opts?.signal?.aborted === true
+        ? attemptCtx.inFlight
+        : undefined,
+    );
     await finishTrace({
       reason: plan.reason,
       requestedModel,

@@ -290,6 +290,21 @@ export function maxTokensClampOf(
 }
 
 /**
+ * The mutable context attemptTargets shares with its caller. `hops`,
+ * when given, collects the route record (ok and failed hops).
+ * `inFlight` is set before each attempt() call — it names the entry
+ * the loop is currently inside, so the failure path can still see
+ * which attempt died when a client abort rethrew before its hop was
+ * recorded (passthrough-trace's markFailedPassthroughHop).
+ */
+export interface AttemptCtx {
+  requestId: string;
+  signal?: AbortSignal;
+  hops?: Hop[];
+  inFlight?: ProviderEntry;
+}
+
+/**
  * The fallback loop shared by both chat services (spec §3.4): try each
  * of plan's targets in order. A client abort rethrows immediately —
  * no further target is tried. A fallback-eligible failure with targets
@@ -303,12 +318,13 @@ export async function attemptTargets<T>(
   plan: RoutePlan,
   registry: ProviderRegistry,
   attempt: (entry: ProviderEntry, target: RouteTarget) => Promise<T>,
-  ctx: { requestId: string; signal?: AbortSignal; hops?: Hop[] },
+  ctx: AttemptCtx,
 ): Promise<AttemptResult<T>> {
   const hops = ctx.hops ?? [];
 
   for (const [index, target] of plan.targets.entries()) {
     const entry = registry.get(target.provider);
+    ctx.inFlight = entry;
     const start = Date.now();
     try {
       const value = await attempt(entry, target);

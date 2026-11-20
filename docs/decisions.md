@@ -7965,3 +7965,51 @@ the changed files are listed here by full path:
   tool-property list.
 - **Files changed:** `tests/fixtures/recordings/claude-code-thinking.jsonl`,
   `docs/decisions.md`. No files outside the Files block.
+## v1.5 follow-up: pass-through abort traces (branch v1.5/passthrough-abort-trace)
+
+- **Cause:** Gate B (v1.5 Task 17) — Claude Code through the
+  `ollama-anthropic` preset in pass-through against a slow Ollama —
+  abandons requests that wait too long, and `observe-check.ts
+  --expect-passthrough` reported "a row is not marked pass-through"
+  again. In `src/services/attempt-targets.ts` the catch rethrows on
+  `ctx.signal?.aborted` BEFORE recording a hop, so when the client
+  disconnects while a pass-through attempt still waits on the
+  upstream's response headers the hops array stays empty and
+  `markFailedPassthroughHop` (#150) returns early: its "an empty
+  record means nothing reached an upstream" is false here — the
+  request DID reach the upstream. The aborted trace was recorded as a
+  translated request (no `passthrough`, no `preset`, a stale
+  `canonical` body stage).
+- **Rule:** the route record decides when it has a hop; when it is
+  empty AND the client aborted mid-attempt, the attempt ctx's
+  `inFlight` entry (set by `attemptTargets` before every `attempt()`
+  call) decides instead — `markPassthrough` applies when
+  `isPassthrough(source, entry)` holds on it. The services pass
+  `inFlight` only when the abort signal actually fired, so a
+  pre-upstream failure on a pass-through entry keeps the old verdict
+  (nothing reached it). No hop is added for the aborted attempt:
+  route record, `x-babelgate-attempts`, fallback behaviour and the
+  routing summary counts are unchanged, and no provider-specific
+  branch exists — `isPassthrough` is the generic check. Aborts during
+  a canonical attempt or before any attempt started stay unmarked.
+- **Files changed:**
+  - `src/services/attempt-targets.ts` — new exported `AttemptCtx`
+    interface (the previously inline ctx type) gains `inFlight?:
+    ProviderEntry`, set at the top of each loop iteration.
+  - `src/services/passthrough-trace.ts` — `markFailedPassthroughHop`
+    gains an optional `abortedInFlight` entry, consulted only when
+    the hop record is empty.
+  - `src/services/chat.service.ts` — the attempt ctx is held in a
+    typed variable; the catch passes `inFlight` when the client
+    signal aborted (unary).
+  - `src/services/chat-stream.service.ts` — the same (streaming).
+  - `tests/integration/observe.test.ts` — three tests (aborted
+    pass-through stream marked, aborted unary marked, aborted
+    canonical attempt unmarked); the test yaml's `shimpreset` gained
+    `timeout_ms: 1000` — the unary `postJson` is not tied to the
+    client signal, so the hung upstream ends on the entry's own
+    timeout after the client went away (the same no-hop path).
+  - `src/services/attempt-targets.test.ts` — unit case: a client
+    abort mid-attempt leaves `ctx.inFlight` naming the entry and the
+    hop record empty.
+  - `docs/decisions.md` — this entry.
