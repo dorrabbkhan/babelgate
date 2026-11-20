@@ -3,6 +3,7 @@ import {
   attemptTargets,
   canonicalForTarget,
   maxTokensClampOf,
+  type AttemptCtx,
   type Hop,
 } from "./attempt-targets";
 import { createRegistry } from "../routing/registry";
@@ -138,6 +139,32 @@ describe("attemptTargets", () => {
 
     expect(err).toBe(timeout);
     expect(attempt).toHaveBeenCalledTimes(1);
+  });
+
+  // v1.5 follow-up: a client abort mid-attempt rethrows before the
+  // hop is recorded — ctx.inFlight names the entry the loop died on
+  // so the failure path's pass-through marking can still see it.
+  it("client abort names the in-flight entry", async () => {
+    const ac = new AbortController();
+    const plan: RoutePlan = {
+      targets: [{ provider: "ollama", model: "llama3" }],
+      reason: "default",
+    };
+    const boom = new Error("aborted mid-flight");
+    const attempt = vi.fn().mockImplementation(async () => {
+      ac.abort();
+      throw boom;
+    });
+    const hops: Hop[] = [];
+    const ctx: AttemptCtx = { requestId: "r1", signal: ac.signal, hops };
+
+    const err = await attemptTargets(plan, registry(), attempt, ctx).catch(
+      (e) => e,
+    );
+
+    expect(err).toBe(boom);
+    expect(hops).toHaveLength(0);
+    expect(ctx.inFlight?.name).toBe("ollama");
   });
 
   it("last error carries x-babelgate-attempts", async () => {

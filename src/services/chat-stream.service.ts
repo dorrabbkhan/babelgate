@@ -6,6 +6,7 @@ import { runStreamPipeline } from "./stream-pipeline";
 import {
   attemptTargets,
   errorTraceFields,
+  type AttemptCtx,
   type AttemptResult,
 } from "./attempt-targets";
 import {
@@ -57,6 +58,11 @@ export async function proxyChatStream(
   } = input;
 
   const hops: Hop[] = [];
+  const attemptCtx: AttemptCtx = {
+    requestId,
+    signal: opts?.signal,
+    hops,
+  };
   let encoder: StreamEncoder;
   let result;
   try {
@@ -101,12 +107,18 @@ export async function proxyChatStream(
         }
         return bridgedAttempt(entry, target);
       },
-      { requestId, signal: opts?.signal, hops },
+      attemptCtx,
     );
   } catch (err) {
     // v1.5 follow-up: same marking as chat.service — a failed
-    // pass-through attempt is not a translated request.
-    markFailedPassthroughHop(source, hops, config.registry);
+    // pass-through attempt is not a translated request. A client
+    // abort records no hop; the in-flight entry answers instead.
+    markFailedPassthroughHop(
+      source,
+      hops,
+      config.registry,
+      opts?.signal?.aborted === true ? attemptCtx.inFlight : undefined,
+    );
     await finishTrace({
       reason: plan.reason,
       requestedModel,

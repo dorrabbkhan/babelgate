@@ -1841,6 +1841,7 @@ providers:
   shimpreset:
     preset: ollama-anthropic
     base_url: ${MOCK_BASE_URLS.anthropic}
+    timeout_ms: 1000
 routes:
   - match: "dead-*"
     to: dead/gone
@@ -2366,5 +2367,199 @@ routes:
         status: 500,
       }),
     ]);
+  });
+
+  // v1.5 follow-up: Gate B's shape — the client disconnects while the
+  // pass-through attempt still waits on the upstream's headers. The
+  // abort rethrow records no hop, but the request DID reach an
+  // upstream, so the aborted trace keeps the pass-through mark.
+  it("pass-through aborted before the upstream answers keeps the pass-through mark", async () => {
+    usePassthroughConfig();
+    const ring = createBodyRing(50);
+    registerSink(ring);
+    let upstreamSeen = false;
+    let upstreamAborted = false;
+    server.use(
+      http.post(
+        `${MOCK_BASE_URLS.anthropic}/v1/messages`,
+        ({ request }) => {
+          upstreamSeen = true;
+          request.signal.addEventListener("abort", () => {
+            upstreamAborted = true;
+          });
+          // never sends headers — the client goes away first
+          return new Promise<Response>(() => {});
+        },
+      ),
+    );
+
+    const listener = app.listen(0);
+    try {
+      const port = (listener.address() as AddressInfo).port;
+      const ac = new AbortController();
+      const resPromise = fetch(`http://127.0.0.1:${port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "preset-anything",
+          max_tokens: 16,
+          stream: true,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+        signal: ac.signal,
+      });
+      // The pass-through attempt is in flight, waiting on headers.
+      const seenDeadline = Date.now() + 3000;
+      while (!upstreamSeen && Date.now() < seenDeadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(upstreamSeen).toBe(true);
+      ac.abort();
+      await resPromise.catch(() => {});
+
+      await waitForTraces(1);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        sourceApi: "anthropic",
+        stream: true,
+        status: "aborted",
+        httpStatus: 499,
+        passthrough: true,
+        preset: "ollama-anthropic",
+      });
+      expect(traces[0].winner).toBeUndefined();
+      // The aborted attempt is not a hop — the route record stays
+      // empty (v1.5 follow-up: hops and counts unchanged).
+      expect(traces[0].hops).toEqual([]);
+      const bodies = ring.get(traces[0].requestId);
+      expect(bodies).toBeDefined();
+      expect(bodies?.canonical).toBeUndefined();
+
+      const deadline = Date.now() + 3000;
+      while (!upstreamAborted && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(upstreamAborted).toBe(true);
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      await new Promise<void>((r) => listener.close(() => r()));
+    }
+  });
+
+  // The unary twin: postJson is not tied to the client signal, so the
+  // hung upstream dies on the entry's own timeout_ms — still after
+  // the client went away, so the same no-hop marking applies.
+  it("pass-through unary aborted before the upstream answers keeps the pass-through mark", async () => {
+    usePassthroughConfig();
+    const ring = createBodyRing(50);
+    registerSink(ring);
+    let upstreamSeen = false;
+    server.use(
+      http.post(`${MOCK_BASE_URLS.anthropic}/v1/messages`, () => {
+        upstreamSeen = true;
+        // never sends headers — shimpreset's timeout_ms ends it
+        return new Promise<Response>(() => {});
+      }),
+    );
+
+    const listener = app.listen(0);
+    try {
+      const port = (listener.address() as AddressInfo).port;
+      const ac = new AbortController();
+      const resPromise = fetch(`http://127.0.0.1:${port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "preset-anything",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+        signal: ac.signal,
+      });
+      const seenDeadline = Date.now() + 3000;
+      while (!upstreamSeen && Date.now() < seenDeadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(upstreamSeen).toBe(true);
+      ac.abort();
+      await resPromise.catch(() => {});
+
+      await waitForTraces(1, 5000);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        sourceApi: "anthropic",
+        stream: false,
+        status: "aborted",
+        httpStatus: 499,
+        passthrough: true,
+        preset: "ollama-anthropic",
+      });
+      expect(traces[0].winner).toBeUndefined();
+      expect(traces[0].hops).toEqual([]);
+      const bodies = ring.get(traces[0].requestId);
+      expect(bodies).toBeDefined();
+      expect(bodies?.canonical).toBeUndefined();
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      await new Promise<void>((r) => listener.close(() => r()));
+    }
+  });
+
+  // The canonical twin: a bridged attempt aborted in flight is not a
+  // pass-through row — the in-flight entry's isPassthrough is false.
+  it("canonical attempt aborted before the upstream answers is not marked", async () => {
+    usePassthroughConfig();
+    let upstreamSeen = false;
+    server.use(
+      http.post(`${MOCK_BASE_URLS.openai}/v1/chat/completions`, () => {
+        upstreamSeen = true;
+        return new Promise<Response>(() => {});
+      }),
+    );
+
+    const listener = app.listen(0);
+    try {
+      const port = (listener.address() as AddressInfo).port;
+      const ac = new AbortController();
+      const resPromise = fetch(`http://127.0.0.1:${port}/v1/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "chat-anything",
+          max_tokens: 16,
+          stream: true,
+          messages: [{ role: "user", content: "hi" }],
+        }),
+        signal: ac.signal,
+      });
+      const seenDeadline = Date.now() + 3000;
+      while (!upstreamSeen && Date.now() < seenDeadline) {
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      expect(upstreamSeen).toBe(true);
+      ac.abort();
+      await resPromise.catch(() => {});
+
+      await waitForTraces(1);
+      expect(traces).toHaveLength(1);
+      expect(traces[0]).toMatchObject({
+        sourceApi: "anthropic",
+        stream: true,
+        status: "aborted",
+        httpStatus: 499,
+      });
+      expect(traces[0].passthrough).toBeUndefined();
+      expect(traces[0].preset).toBeUndefined();
+      expect(traces[0].hops).toEqual([]);
+
+      await new Promise((r) => setTimeout(r, 200));
+      expect(traces).toHaveLength(1);
+    } finally {
+      await new Promise<void>((r) => listener.close(() => r()));
+    }
   });
 });
