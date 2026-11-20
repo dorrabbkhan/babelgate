@@ -4,9 +4,11 @@
 formats, a same-format shim with provider presets and declared gaps for native Anthropic endpoints,
 minimal OpenAI-format embeddings, and published proof — a generated compatibility matrix, a weekly
 client-release replay and cosign-signed releases with SBOMs.
-**Next:** v1.6 ("One command, free to start"). Last revised 2026-11-16. Reasoning behind this roadmap: the
-2026-10-26 roadmap design spec and the 2026-11-04 and 2026-11-16 revision specs in `docs/superpowers/specs/`;
-market evidence in `docs/research/2026-11-16-market-analysis.md`.
+**Next:** v1.6 ("One command, free to start"), **the launch version**: the public launch was held for it
+on purpose. Last revised 2026-11-20. Reasoning behind this roadmap: the 2026-10-26 roadmap design spec and
+the 2026-11-04 and 2026-11-16 revision specs in `docs/superpowers/specs/`; market evidence in
+`docs/research/2026-11-16-market-analysis.md` and the 2026-11-20 market and vision check in
+`docs/research/2026-11-20-market-check.md`.
 
 **Positioning:** **the translator you can check.** A small, typed gateway that translates any client format to
 any provider, with every format pair contract-tested **and published**, each new Claude Code and Codex release
@@ -29,14 +31,16 @@ keeps working, but it is out of the headline.
 Team governance ships later as a separate commercial package on a public plugin API. The paid tier is
 built only after 3 teams commit.
 
-Each version is one spec → plan → agent cycle. Size, for part-time agent-driven work: **S** ≈ 2–3 weeks,
-**M** ≈ 4–6 weeks, **L** ≈ 2–3 months. Every version ships with recipes for the clients it affects and the
+Each version is one spec → plan → agent cycle. Size, for part-time agent-driven work, as
+measured from git history on 2026-11-20 (spec → release): **S** ≈ 1–3 days, **M** ≈ 3–6 days, **L** ≈ 3–10
+days (v1.2 took 5 days, v1.3 9, v1.4 3, v1.5 4). The original estimates (S 2–3 weeks, M 4–6 weeks, L 2–3
+months) were roughly ten times too long. Every version ships with recipes for the clients it affects and the
 same validation discipline: adapter contract tests, fixture corpora recorded from real SDKs, pair tests
 across every source × target, and a live smoke run against real upstreams before release.
 
 | Milestone | After | Meaning |
 |---|---|---|
-| 🚀 Public launch | **v1.1** | Claude Code and OpenAI apps work against any backend, streaming and tools included |
+| 🚀 Public launch | **v1.6** | Planned after v1.1; held by the owner until install, free first run and published proof were ready (2026-11-20) |
 | 🟢 **POWERHOUSE** | **v1.6** | One endpoint, ~20 providers, 5 formats, Claude Code / Codex on any model, every pair tested and published, client releases replayed, signed releases, one-command install |
 | 💰 Paid tier | **v2.1** | Only after 3 teams commit (LOI, pre-order or design-partner agreement) |
 | ☁️ Hosted control plane | **v3.0** | Only if the paid tier shows demand for it |
@@ -147,25 +151,52 @@ across every source × target, and a live smoke run against real upstreams befor
 - **Embeddings, minimal.** OpenAI-format inbound; OpenAI-compatible, Gemini and Ollama targets.
 - **Gemini CLI frozen; Antigravity CLI spike** (one day, report only).
 
-### v1.6 One command, free to start (M)
-- **Distribution first.** Single binary (Node SEA or Bun compile) with `brew`/`winget`, or a tray app — chosen
-  in the v1.6 spec.
-- **Free and cheap provider presets.** Curated list (OpenRouter free models, NVIDIA NIM, Groq, DeepSeek) — cost
-  is what drives attention in this market.
-- **Presets and recipes.** Cursor, Continue, Aider, Open WebUI, LangChain, LlamaIndex, Vercel AI SDK, and
-  Ollama-only apps on cloud models — each a tested recipe page.
-- **Minimal health.** Provider health checks and a circuit breaker, kept small.
-- **Response cache.** Exact-match, opt-in, small — for CI and test suites.
+### v1.6 One command, free to start (M) · 🚀 launch version
+Detail in `docs/superpowers/specs/2026-11-20-babelgate-v1.6-design.md`.
+- **Replay hardening first.** The shape diff ignores JSON Schema text inside tool definitions, so a Claude Code
+  release that edits a built-in tool no longer needs an owner fixture PR; the Codex recorder pin moves to
+  current; #148 closes.
+- **Single binary.** Node SEA binaries for Linux, macOS and Windows (x64/arm64), tested by the same suites,
+  cosign-signed; `install.sh` / `install.ps1`, a Homebrew formula and a winget manifest. `npx` and Docker stay.
+  Bun compile and a tray app were considered and rejected (2026-11-20).
+- **Free to start.** Free and cheap provider presets (OpenRouter free models, Gemini free tier, Groq, NVIDIA
+  NIM, Cerebras, DeepSeek), each verified against the provider's docs with a date; a suggested model only if
+  it passes the Claude Code edit task. `--provider <preset>` and a new `--preset codex` make the first run
+  one command plus printed config.
+- **Recipes.** Cursor, Continue, Aider, Open WebUI, LangChain, LlamaIndex, Vercel AI SDK, and Ollama-only
+  apps on cloud models — each a tested or dated recipe page. Antigravity CLI joins the README client list
+  (adopted in v1.5: recipe, `thinkingBudget` fix and record script in PR #140; API-key mode only).
+- **Minimal health.** A passive circuit breaker on the existing fallback chains; no active probes.
+- **Response cache.** Exact-match, opt-in, in memory — for CI and test suites.
+- **Reasoning fix.** Anthropic `between_tools` thinking mapped (#99 turned out to be done in v1.4; closed).
+- **Landing page.** One plain-language page on GitHub Pages (install, free first run, demo, why trust it);
+  docs stay in the repo; specs, plans, roadmap and decisions are not linked from it.
+- **Launch ready.** README rebuilt around install → free first run → proof; one launch post with per-channel
+  variants; demo re-recorded on the binary; listing texts prepared; GitHub Sponsors and support page.
+  Posting is the owner's act after the release.
+- **Scripted competitor check** (decided 2026-11-16, built here).
+- **Competitor conformance run.** Our scenarios (thinking after a tool call, streamed tool arguments,
+  multi-turn reasoning) run against claude-code-router and free-claude-code on replayed real-provider
+  responses; failures confirmed live; what is published is the owner's call.
 - **Moved to v2.0 unless users ask earlier:** key load balancing, rate limiting per client key.
-- **Antigravity CLI adopted as an entry point** (v1.5 Task 14 spike, 2026-11-18; recipe, `thinkingBudget` fix and record script landed in PR #140; API-key mode only; terms read 2026-11-18 (see docs/decisions.md)).
 
 > **🟢 POWERHOUSE: after v1.6.** Any client in any of 5 formats reaches any of ~20 providers through
 > one endpoint — Claude Code and Codex included — with streaming, tools, reasoning, media, structured output,
 > embeddings, fallbacks, a cost dashboard and a translation inspector. It installs in one command; every pair is
 > contract-tested and the results are published; each new Claude Code and Codex release is replayed; releases
-> are signed. Targets: 2k GitHub
-> stars; listed in Ollama, Open WebUI and Claude Code community docs; 10+ outside contributors; **the
-> first teams asking for shared keys and budgets** — the signal for Phase 3.
+> are signed. Targets, measured 60 days after the launch posts go out (tiered 2026-11-20; a single 2k-star
+> target needed a breakout launch):
+>
+> | | Stars | Community-doc listings (Ollama, Open WebUI, Claude Code) | Outside contributors |
+> |---|---|---|---|
+> | Floor | 300 | 1 | — |
+> | Goal | 1k | 2 | 5 |
+> | Stretch | 2k | 3 | 10+ |
+>
+> Usage signals beside stars: weekly installs (release binaries, npm, Homebrew), issues from people other than
+> the maintainers, and the first "we use this at work" contact. **The first teams asking for shared keys and
+> budgets** remain the signal for Phase 3. Missing the floor means the pitch or the channel is rethought
+> before more product work.
 
 ---
 
@@ -242,7 +273,7 @@ coding agents. Reasons in the 2026-11-04 revision spec.
 | Hosted control plane | Private | Only if Phase 4 happens |
 | Specs, plans, decisions for open features | Public, in `docs/` | Always. Pricing details and customer notes live in the private repo |
 
-Public is not the same as announced: the repo is public now; the announcement waits for v1.1.
+Public is not the same as announced: the repo is public now; the announcement, first planned for v1.1, waits for v1.6 (owner, 2026-11-20).
 
 ---
 
@@ -251,16 +282,17 @@ Public is not the same as announced: the repo is public now; the announcement wa
 | When | Track |
 |---|---|
 | v1.0.1 | Public-repo hygiene: Apache-2.0, CLA, CI, issue templates |
-| v1.1 | Launch: HN, r/LocalLLaMA, r/ClaudeAI, Ollama integrations list, demo video |
+| v1.1 → v1.6 | Launch (held until v1.6 by the owner): HN, r/LocalLLaMA, r/ClaudeAI, Ollama integrations list, demo video |
 | From v1.1 | One recipe page per client tool; triage issues within 48h; a "good first issue" queue |
 | Launch copy | Lead with cheap cloud models (OpenRouter, DeepSeek, Qwen, Gemini) before local CPU. Answer "how is this different from LiteLLM?" up front: any format in, every pair contract-tested, one command. Name the native Anthropic endpoints (Ollama, DeepSeek, GLM) and say what babelgate adds |
 | v1.3 | Second Show HN with the translation inspector and the Gemini CLI entry point; a write-up of the canonical-format design |
 | v1.4 | Codex entry-point launch: HN, r/OpenAI, Codex community docs |
-| v1.6 | GitHub Sponsors; paid support contracts; team waitlist page |
-| Monthly and before every version spec | Scripted competitor check (repo metadata, releases, changelog links) of LiteLLM, Bifrost, claude-code-router, OmniRoute, free-claude-code, agentgateway, Agent Router, Kong, Cloudflare and Vercel AI Gateway, OpenRouter, Anthropic's Claude Code gateway, Antigravity CLI, and the native Anthropic/Responses endpoints (Ollama, LM Studio, vLLM, DeepSeek, GLM, Kimi): copy what's table stakes, don't race on breadth, and move any pair a provider now serves natively from "bridge" to "shim" |
+| v1.6 | The launch; GitHub Sponsors; paid support contracts; team waitlist page |
+| Monthly and before every version spec | Scripted competitor check (`scripts/research/competitor-check.sh` from v1.6; the 2026-11-20 check was by hand) (repo metadata, releases, changelog links) of LiteLLM, Bifrost, claude-code-router, OmniRoute, free-claude-code, agentgateway, Agent Router, Kong, Cloudflare and Vercel AI Gateway, OpenRouter, Anthropic's Claude Code gateway, Antigravity CLI, and the native Anthropic/Responses endpoints (Ollama, LM Studio, vLLM, DeepSeek, GLM, Kimi): copy what's table stakes, don't race on breadth, and move any pair a provider now serves natively from "bridge" to "shim" |
 | Before v2.1 | **3 committed teams, or don't build the paid tier** |
 
-Overall horizon (from 2026-10-26, revised 2026-11-04): v1.1 launch in roughly 2.5–3.5 months, v1.6
-(powerhouse) in roughly 9–12.5 months — one M version later than v1.5 was, for the Codex entry point —
-v2.1 no earlier than about 13 months and only behind its gate. **Re-plan after every
+Overall horizon (revised 2026-11-20 from measured pace): v1.0.1 to v1.5 took 25 days (2026-10-26 →
+2026-11-20). v1.6 and the launch: about 7–12 days after its plan is approved, i.e. early December 2026.
+Phase 3 timing no longer follows a calendar: v2.0 can start right after the launch, and v2.1 waits only for
+its 3-team gate. **Re-plan after every
 release:** real users' issues outrank this list.
