@@ -40,7 +40,7 @@
 #
 # Codex binary: CODEX_BIN, then `codex` on PATH, then
 # `npx -y @openai/codex@$CODEX_VERSION` — the recordings and spec
-# E12–E19 are for codex-cli 0.169.0 (CODEX_VERSION, default 0.169.0);
+# E12–E19 are for codex-cli 0.171.0 (CODEX_VERSION, default 0.171.0);
 # a CODEX_BIN/PATH codex reporting another version gets a GATE WARN
 # but still runs. CODEX_TIMEOUT_S is a hard cap on the `codex exec`
 # run (default 900 — Codex retries a dead upstream forever).
@@ -83,7 +83,7 @@ fi
 
 # codex binary: CODEX_BIN, then PATH, then npx pinned to
 # CODEX_VERSION — see the header note on the version pin.
-CODEX_VERSION="${CODEX_VERSION:-0.169.0}"
+CODEX_VERSION="${CODEX_VERSION:-0.171.0}"
 if [ -n "${CODEX_BIN:-}" ]; then
   codex_cmd=("$CODEX_BIN")
 elif command -v codex >/dev/null 2>&1; then

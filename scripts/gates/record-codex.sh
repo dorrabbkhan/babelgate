@@ -19,7 +19,7 @@
 # is exactly what the recording is meant to show.
 #
 # --catalog writes `model_catalog_json` (a JSON model-catalog file per
-# codex-rs/config/src/config_toml.rs at rust-v0.169.0 — the
+# codex-rs/config/src/config_toml.rs at rust-v0.171.0 — the
 # ModelInfo struct is in codex-rs/protocol/src/openai_models.rs) and
 # --effort writes `model_reasoning_effort` into the scratch
 # config.toml, so one recording can prove a catalog entry gives Codex
@@ -47,7 +47,7 @@
 # Env overrides: CODEX_BIN (path to a codex binary, default: `codex`
 # on PATH or `npx -y @openai/codex@$CODEX_VERSION`), CODEX_VERSION
 # (the codex-cli release the recordings and spec E12–E19 are for,
-# default 0.169.0 — the npx fallback installs exactly it; a
+# default 0.171.0 — the npx fallback installs exactly it; a
 # CODEX_BIN/PATH codex whose `codex --version` reports another
 # version gets a RECORD WARN on stderr and in the summary but still
 # runs), RECORD_OUT (JSONL path, default tmp/ under the repo),
@@ -175,8 +175,8 @@ fi
 
 # codex binary: CODEX_BIN, then PATH, then npx pinned to
 # CODEX_VERSION — the recordings and spec E12–E19 are for codex-cli
-# 0.169.0. ~/.npm can be read-only, so npx gets a throwaway cache.
-CODEX_VERSION="${CODEX_VERSION:-0.169.0}"
+# 0.171.0. ~/.npm can be read-only, so npx gets a throwaway cache.
+CODEX_VERSION="${CODEX_VERSION:-0.171.0}"
 if [ -n "${CODEX_BIN:-}" ]; then
   codex_cmd=("$CODEX_BIN")
 elif command -v codex >/dev/null 2>&1; then

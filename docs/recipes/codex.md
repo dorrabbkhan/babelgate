@@ -7,7 +7,7 @@ whatever provider you configured — Gemini, Claude, or any OpenAI-compatible
 backend — with streaming, tool calls and reasoning intact.
 
 You need: Node ≥ 20 (for `npx`), the `codex` CLI (tested: codex-cli
-0.169.0), and a reachable target.
+0.171.0), and a reachable target.
 
 ## Point Codex at babelgate
 
@@ -118,7 +118,7 @@ providers:
     reasoning_passback: true   # resend reasoning_content on later turns
 ```
 
-## What Codex calls (recorded: codex-cli 0.169.0)
+## What Codex calls (recorded: codex-cli 0.171.0)
 
 Recorded against a native Responses endpoint with the shape recorder
 (`scripts/gates/record-codex.sh`, evidence E12–E19): every request was
