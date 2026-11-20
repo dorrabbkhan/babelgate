@@ -8170,3 +8170,38 @@ the changed files are listed here by full path:
   `scripts/gates/shape-diff.test.ts`, `docs/decisions.md`; new
   `scripts/gates/fixtures/shape-diff/*.jsonl`. No files outside the
   Files block.
+
+## v1.6 Task 2 — Codex pin to 0.171.0; recipe re-verified (spec §3.1, E8, E10) · D6
+
+- **Pin.** `CODEX_VERSION` default is **0.171.0** in
+  `scripts/gates/record-codex.sh` (and `scripts/gates/codex-edit.sh`,
+  see below). 0.171.0 is the current `@openai/codex` release
+  (npm `dist-tags.latest`, published 2026-11-20T00:51:29Z;
+  `docs/research/2026-11-20-market-check.md` agrees —
+  `rust-v0.171.0`).
+- **Evidence (2026-11-20).** Live `client-replay` run 44744362690 on
+  main `8c02ed8` already exercised codex-cli 0.171.0 (`@latest` via
+  `CODEX_BIN`): gate PASS, recorded PASS, shape diff 0 added /
+  0 removed against `tests/fixtures/codex/recording.jsonl` (spec E7).
+  The source citation in `record-codex.sh`'s `--catalog` comment was
+  re-verified at tag `rust-v0.171.0`: `model_catalog_json` is
+  `codex-rs/config/src/config_toml.rs:422` and `ModelInfo` stays in
+  `codex-rs/protocol/src/openai_models.rs`. The recipe re-verification
+  and a fresh `record-codex.sh` run + `shape-diff.ts` on this branch
+  are the conductor's network steps (plan steps 1–2); a shape
+  addition is the only thing that changes the fixture (D6).
+- **Files outside the Files block:**
+  - `scripts/gates/codex-edit.sh` — carries the same `CODEX_VERSION`
+    default and the same "recordings and spec E12–E19 are for
+    codex-cli <v>" provenance comment; the task's step 2 recipe
+    verification runs this script, so a stale 0.169.0 default would
+    verify the recipe on the old release (or GATE WARN on every run
+    with a newer codex). The pin is one logical value in both gate
+    scripts, so both move together.
+- **Files changed:** `scripts/gates/record-codex.sh`,
+  `scripts/gates/codex-edit.sh`, `docs/recipes/codex.md`,
+  `docs/decisions.md`. `tests/fixtures/codex/recording.jsonl`
+  unchanged (fresh-recording diff pending the conductor's run; a D6
+  replacement goes in a follow-up commit if the diff reports an
+  addition). Issue closes (#148, #99) are plan step 4, after merge
+  and a green scheduled replay.
