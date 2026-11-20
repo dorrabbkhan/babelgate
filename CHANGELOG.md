@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-11-20
+
+Dependency security patch. No code or behaviour changes.
+
+### Security
+
+- **Runtime dependencies updated** to clear every advisory that
+  `npm audit --omit=dev` reported on 1.5.0, all within the existing
+  version ranges: `proxy-addr` 2.0.7 → 2.0.8 (critical, IP spoofing via
+  an IPv4-mapped IPv6 trust subnet; only matters with Express
+  `trust proxy`, which babelgate does not enable), `body-parser` 2.2.0 → 2.4.0 and
+  `path-to-regexp` 8.2.0 → 8.4.2 (high, denial of service), `zod`
+  4.6.5 → 4.6.7 (high, memory exhaustion on oversized collections),
+  `qs` 6.16.0 → 6.17.1 (moderate, denial of service). Upgrading from
+  1.5.0 needs no config change.
+
 ## [1.5.0] - 2026-11-20
 
 "Correct everywhere": reasoning and media now travel in every client
@@ -650,7 +666,8 @@ gets the repository ready for outside contributors.
 - **Ollama `thinking` output is dropped** by the proxy (the canonical
   format has no field for it); planned for v1.1.
 
-[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/dorrabbkhan/babelgate/compare/v1.5.1...HEAD
+[1.5.1]: https://github.com/dorrabbkhan/babelgate/compare/v1.5.0...v1.5.1
 [1.5.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/dorrabbkhan/babelgate/compare/v1.2.0...v1.3.0
