@@ -8041,3 +8041,65 @@ the changed files are listed here by full path:
     abort mid-attempt leaves `ctx.inFlight` naming the entry and the
     hop record empty.
   - `docs/decisions.md` — this entry.
+
+## v1.5 Task 18 — CHANGELOG, roadmap, model report, 1.5.0 (2026-11-20) · OWNER GATE
+
+- **Bundled prices refreshed** (`src/cost/prices.json`, committed
+  separately as `chore: refresh bundled prices`): LiteLLM
+  `model_prices_and_context_window.json` at commit
+  `9a1e3bde9453f9b1316790fc51e6c098d9447d7b` (3 430 chat models,
+  bundled 2026-11-16, v1.4 Task 15) → `dccecb97aed70c35be758e69fdebbbfdf9fb6e4d`
+  (4 258 chat models, BerriAI/litellm `main` HEAD on 2026-11-20).
+  Diff: 830 models added, 2 removed (both
+  `bedrock/us-gov-{east,west}-1/claude-sonnet-4-5-20250929-v1:0`),
+  19 price rows changed among the 3 428 models present in both. As in
+  v1.4, the fetch needed `NODE_USE_ENV_PROXY=1` — the script's plain
+  `fetch` does not read proxy env vars in this sandbox; the script
+  itself is unchanged.
+- **Version `1.5.0`** set via `npm version 1.5.0 --no-git-tag-version`:
+  `package.json` and the two root `"version"` entries of
+  `package-lock.json` only; nothing else in the lockfile moved
+  (verified with `git diff`).
+- **CHANGELOG `## [1.5.0] - 2026-11-20`** with the plan's sections —
+  a "Correct everywhere" summary paragraph, then Added (reasoning for
+  every client format incl. the shared `bg1.` envelope in Anthropic
+  `signature` / Gemini `thoughtSignature`; `reasoning: false`; media —
+  URL images, documents, tool-result images — behind the fetch guard;
+  Anthropic/Chat pass-through; presets + gaps; embeddings; generated
+  compatibility matrix; weekly client replay; signed releases),
+  Changed (the plan's bolded line: reasoning requests from Claude
+  Code, Chat, Gemini and Ollama clients now reach the provider —
+  `reasoning: false` keeps 1.4 behaviour), Known limitations (spec
+  §2.2: OpenAI-format embeddings inbound only, no pass-through for
+  Gemini/Ollama sources, no PDF text extraction; envelope signatures;
+  tool-result images refused on Chat/Ollama targets; stateless
+  Responses carried over from 1.4; reasoning never crosses
+  providers). Compare links: `[Unreleased]` → `v1.5.0...HEAD`,
+  `[1.5.0]` → `v1.4.0...v1.5.0`. One correction made while drafting:
+  returned Chat `reasoning_content` / Ollama `thinking` is dropped on
+  decode for **every** target (conductor's call (b) — no origin), not
+  only for signature-requiring ones as spec §3.1's older wording
+  suggests; the entry says what the code does
+  (`openai.adapter.ts:326`).
+- **Roadmap** per the plan: status "v1.5 released — …" and
+  "Next: v1.6 ("One command, free to start")"; "Last revised
+  2026-11-16" unchanged (that is the revision spec's date, not the
+  release date).
+- **Model report measured** (`docs/conductor/model-report-v1.5.md`)
+  from `usage-report.sh --version v1.5` (2026-11-20): $43.265 across
+  17 sessions / 17 tasks ($26.215 Opus), median $1.829/task vs the
+  ≈ $10 baseline (≈ 82% below, ≥ 40% target met); first-turn context
+  median 26.5k (≤ 30k target met, was 48.9k). Caveats recorded in the
+  file: tasks 6, 10, 16 have no attributed session (run under another
+  project slug or unlogged); 16 sessions are `unattributed`
+  ($17.049); task 17 is the outlier at $13.410.
+- **Files outside the Files block:** none — all six modified files
+  (`CHANGELOG.md`, `package.json`, `package-lock.json`,
+  `docs/roadmap.md`, `src/cost/prices.json`,
+  `docs/conductor/model-report-v1.5.md`, `docs/decisions.md`) are
+  named in the task's Files block.
+- **Owner steps after merge** (in the PR body, not done here): tag
+  `v1.5.0`, `npm publish`, the GHCR image via the tag, gate D —
+  `npm audit signatures`, `cosign verify`, SBOM attached (the Task 13
+  supply-chain patch is already applied, PR #139). Gates A–C passed
+  per Task 17 (PR #153).
