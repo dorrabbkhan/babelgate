@@ -38,7 +38,10 @@ import {
   isPassthrough,
   passthroughUnaryAttempt,
 } from "./passthrough";
-import { finishPassthroughUnary } from "./passthrough-trace";
+import {
+  finishPassthroughUnary,
+  markFailedPassthroughHop,
+} from "./passthrough-trace";
 import type {
   ProxyRequestOptions,
   ProxyResult,
@@ -171,6 +174,10 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
       { requestId, signal: input.opts?.signal, hops },
     );
   } catch (err) {
+    // v1.5 follow-up: a failed attempt whose last hop was a
+    // pass-through relay is marked like a won one — a failed shim
+    // call is not a translated request.
+    markFailedPassthroughHop(source, hops, config.registry);
     await finishTrace({
       reason: plan.reason,
       requestedModel,

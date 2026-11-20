@@ -1,0 +1,29 @@
+# Claude Code on Google Gemini with thinking carried — release gate A
+# (v1.5 spec §4). Claude Code's `thinking` request field decodes to the
+# canonical reasoning config, the Gemini encoder turns it into
+# thinkingConfig for the upstream, and signed reasoning comes back to
+# the client inside `bg1.` envelopes on thinking blocks — Claude Code
+# returns them unchanged on the next turn, the decoder unpacks them,
+# and the real signatures reach Gemini again.
+#
+# The npm package doesn't ship examples/ — download this file first:
+#   curl -fsSLo claude-code-gemini-thinking.yaml \
+#     https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/examples/claude-code-gemini-thinking.yaml
+#   GEMINI_API_KEY=<key> \
+#     npx babelgate --config claude-code-gemini-thinking.yaml --preset claude-code
+# (Saving it as ./babelgate.yaml also works: that path is auto-discovered.)
+#
+# Gate A (owner): OBSERVE_CHECK="--expect-cost --expect-no-note reasoning_dropped" \
+#   scripts/gates/claude-code-edit.sh config examples/claude-code-gemini-thinking.yaml
+default: gemini
+providers:
+  gemini:
+    type: gemini
+    base_url: https://generativelanguage.googleapis.com
+    api_key_env: GEMINI_API_KEY
+routes:
+  - match: claude-*
+    # Any thinking-capable Gemini model works; gemini-3.8-flash is in
+    # the bundled price table, which is what the gate's --expect-cost
+    # asserts on the usage rows.
+    to: gemini/gemini-3.8-flash

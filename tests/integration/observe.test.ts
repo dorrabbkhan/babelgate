@@ -1838,10 +1838,15 @@ providers:
     base_url: ${DEAD_BASE_URL}
     api_key_env: ANTHROPIC_API_KEY
     passthrough: true
+  shimpreset:
+    preset: ollama-anthropic
+    base_url: ${MOCK_BASE_URLS.anthropic}
 routes:
   - match: "dead-*"
     to: dead/gone
     fallback: [chatshim/fallback-model]
+  - match: "preset-*"
+    to: shimpreset/upstream-claude
   - match: "chat-*"
     to: chatshim/gpt-shim
   - match: "*"
@@ -2231,5 +2236,135 @@ routes:
       provider: "chatshim",
       outcome: "ok",
     });
+  });
+
+  // v1.5 follow-up: an upstream failure on a pass-through hop is
+  // marked like a won one — passthrough: true, the entry's preset,
+  // no canonical stage — never masquerading as a translated request.
+  it("failed pass-through hop keeps the pass-through mark", async () => {
+    usePassthroughConfig();
+    const ring = createBodyRing(50);
+    registerSink(ring);
+    responseOverrides.anthropic = {
+      status: 500,
+      body: {
+        type: "error",
+        error: { type: "api_error", message: "upstream exploded" },
+      },
+    };
+
+    const res = await request(app)
+      .post("/v1/messages")
+      .send({
+        ...(anthropicFixtures.requests.basic as Record<string, unknown>),
+        model: "preset-anything",
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(502);
+
+    await waitForTraces(1);
+    expect(traces).toHaveLength(1);
+    expect(traces[0]).toMatchObject({
+      sourceApi: "anthropic",
+      stream: false,
+      status: "error",
+      httpStatus: 502,
+      errorType: "upstream",
+      passthrough: true,
+      preset: "ollama-anthropic",
+    });
+    expect(traces[0].winner).toBeUndefined();
+    expect(traces[0].hops).toEqual([
+      expect.objectContaining({
+        provider: "shimpreset",
+        outcome: "http_error",
+        status: 500,
+      }),
+    ]);
+    const bodies = ring.get(traces[0].requestId);
+    expect(bodies).toBeDefined();
+    expect(bodies?.canonical).toBeUndefined();
+    expect(bodies?.source).toBeDefined();
+  });
+
+  it("failed pass-through stream keeps the pass-through mark", async () => {
+    usePassthroughConfig();
+    const ring = createBodyRing(50);
+    registerSink(ring);
+    responseOverrides.anthropic = {
+      status: 500,
+      body: {
+        type: "error",
+        error: { type: "api_error", message: "upstream exploded" },
+      },
+    };
+
+    const res = await postStream("/v1/messages", {
+      ...(anthropicFixtures.requests.basic as Record<string, unknown>),
+      model: "preset-stream",
+      stream: true,
+    });
+    expect(res.status, res.body as string).toBe(502);
+
+    await waitForTraces(1);
+    expect(traces).toHaveLength(1);
+    expect(traces[0]).toMatchObject({
+      sourceApi: "anthropic",
+      stream: true,
+      status: "error",
+      httpStatus: 502,
+      errorType: "upstream",
+      passthrough: true,
+      preset: "ollama-anthropic",
+    });
+    expect(traces[0].winner).toBeUndefined();
+    expect(traces[0].hops).toEqual([
+      expect.objectContaining({
+        provider: "shimpreset",
+        outcome: "http_error",
+        status: 500,
+      }),
+    ]);
+    const bodies = ring.get(traces[0].requestId);
+    expect(bodies).toBeDefined();
+    expect(bodies?.canonical).toBeUndefined();
+  });
+
+  // The last attempted hop decides: dead's pass-through relay failed
+  // first, but the request died on the canonical chatshim hop — the
+  // row is the translated request it was.
+  it("fallback from pass-through to canonical that fails is not marked", async () => {
+    usePassthroughConfig();
+    responseOverrides.openai = {
+      status: 500,
+      body: { error: { message: "upstream exploded" } },
+    };
+
+    const res = await request(app)
+      .post("/v1/messages")
+      .send({
+        ...(anthropicFixtures.requests.basic as Record<string, unknown>),
+        model: "dead-anything",
+      });
+    expect(res.status, JSON.stringify(res.body)).toBe(502);
+
+    await waitForTraces(1);
+    expect(traces).toHaveLength(1);
+    expect(traces[0]).toMatchObject({
+      sourceApi: "anthropic",
+      stream: false,
+      status: "error",
+      httpStatus: 502,
+    });
+    expect(traces[0].winner).toBeUndefined();
+    expect(traces[0].passthrough).toBeUndefined();
+    expect(traces[0].preset).toBeUndefined();
+    expect(traces[0].hops).toEqual([
+      expect.objectContaining({ provider: "dead", outcome: "transport" }),
+      expect.objectContaining({
+        provider: "chatshim",
+        outcome: "http_error",
+        status: 500,
+      }),
+    ]);
   });
 });
