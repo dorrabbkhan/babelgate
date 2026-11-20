@@ -9,14 +9,18 @@
  *   ts-node scripts/gates/shape-diff.ts <new.jsonl> <fixture.jsonl>
  *
  * Prints one line per added/removed shape element in four categories —
- * request keys (method+path, query keys and every bodyShape key path),
- * tool types (`type`/`name` values of `tools[]` elements, including
- * nested namespace `tools[]`), input item types (`type` values of
- * `input[]`, `content[]` and `system[]` elements — Anthropic blocks,
- * Responses items and Codex parts alike) and SSE event types — then a
- * totals line. Exit 1 when anything was ADDED (a new client field,
- * tool or event the fixtures never saw); removals are reported but
- * never fail — a leaner release is not a break.
+ * request keys (method+path, query keys and every bodyShape key path —
+ * except that the diff never descends below a JSON Schema subtree:
+ * SCHEMA_SUBTREES names the roots, the root key itself is still
+ * compared, and a release that edits a tool or response-format schema
+ * is not a shape change — D7, v1.6 spec §3.1), tool types
+ * (`type`/`name` values of `tools[]` elements, including nested
+ * namespace `tools[]`), input item types (`type` values of `input[]`,
+ * `content[]` and `system[]` elements — Anthropic blocks, Responses
+ * items and Codex parts alike) and SSE event types — then a totals
+ * line. Exit 1 when anything was ADDED (a new client field, tool or
+ * event the fixtures never saw); removals are reported but never fail
+ * — a leaner release is not a break.
  *
  * Deliberately NOT diffed: `headerNames` (conditional headers like
  * `x-stainless-retry-count` only appear on retried requests — a flaky
@@ -59,6 +63,45 @@ const isEnum = (v: unknown): v is string =>
 /** Array-valued body keys whose elements' `type` is an item type. */
 const ITEM_ARRAY_KEYS = new Set(["input", "content", "system"]);
 
+/**
+ * Body paths whose subtree is JSON Schema content (D7, v1.6 spec
+ * §3.1): the subtree root key itself is still recorded and compared,
+ * but the walk stops there — a client release that edits a tool's
+ * `input_schema`/`parameters` or a response-format schema (Claude Code
+ * 2.1.327/2.1.328, owner fixture PRs #142/#149) is not a shape change.
+ * Covers Anthropic `input_schema`, Chat `function.parameters`,
+ * Responses `parameters`, Gemini `functionDeclarations[].parameters`
+ * and the structured-output `schema`/`responseSchema` roots of each
+ * provider. Matched against the body path (after `body `); any `[]`
+ * nesting prefix is allowed so a namespaced tool
+ * (`tools[].tools[].input_schema`) is covered too.
+ */
+export const SCHEMA_SUBTREES: readonly string[] = [
+  "tools[].input_schema",
+  "tools[].function.parameters",
+  "tools[].parameters",
+  "tools[].functionDeclarations[].parameters",
+  "output_config.format.schema",
+  "response_format.json_schema.schema",
+  "text.format.schema",
+  "generationConfig.responseSchema",
+  "generationConfig.responseJsonSchema",
+];
+
+/**
+ * True when `bodyPath` (no `body ` prefix) is exactly a SCHEMA_SUBTREES
+ * root or ends with one preceded only by `name[]` array segments.
+ */
+function isSchemaSubtree(bodyPath: string): boolean {
+  for (const subtree of SCHEMA_SUBTREES) {
+    if (bodyPath === subtree) return true;
+    if (!bodyPath.endsWith(`.${subtree}`)) continue;
+    const prefix = bodyPath.slice(0, bodyPath.length - subtree.length - 1);
+    if (prefix.split(".").every((seg) => seg.endsWith("[]"))) return true;
+  }
+  return false;
+}
+
 function walkBody(value: unknown, path: string, sets: ShapeSets): void {
   if (Array.isArray(value)) {
     for (const el of value) walkBody(el, `${path}[]`, sets);
@@ -68,6 +111,8 @@ function walkBody(value: unknown, path: string, sets: ShapeSets): void {
   for (const [key, child] of Object.entries(value)) {
     const childPath = path ? `${path}.${key}` : key;
     sets.requestKeys.add(`body ${childPath}`);
+    // The schema root key itself is shape; its contents are not (D7).
+    if (isSchemaSubtree(childPath)) continue;
     if (key === "tools" && Array.isArray(child)) {
       // Anthropic `tools[]` entries name tools by `name`; Responses and
       // Codex discriminate by `type` (and namespace entries carry their
