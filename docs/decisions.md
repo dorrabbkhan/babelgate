@@ -8401,3 +8401,61 @@ the changed files are listed here by full path:
   `docs/decisions.md`, `scripts/build-binary.ts`. `.github/` stays
   untouched (workflow files are only ever changed by the owner
   applying a patch).
+
+## v1.6 Task 5 follow-up — process harness on Windows; release matrix fail-fast off · OWNER REVIEW
+
+Follow-up to the Task 5 entry above (PR #163, merged). Not a plan task:
+the owner's dry run of the release matrix (run 44898806859 on a scratch
+branch) passed linux-x64, linux-arm64, darwin-arm64 and darwin-x64 9/9,
+but win-x64 (Node 24) failed 2/9 on the first run and 1/9 after the
+owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
+
+- **Cause 1 — `os.homedir()` reads `USERPROFILE` on Windows, not
+  `HOME`.** The suite only set `HOME`, so the binary under test wrote
+  its data under the runner's real profile instead of the test workDir.
+  `USERPROFILE` is now set to the same value wherever the suite sets
+  `HOME` for a gateway: the shared spawn env in
+  `tests/process/gateways/babelgate.ts` and the inline spawn in the
+  "binary writes nothing to cwd" test in
+  `tests/process/binary.process.test.ts`.
+- **Cause 2 — Windows `SIGTERM` is a hard kill; the shutdown flush
+  never runs.** `stop()` in `tests/process/gateways/babelgate.ts` sends
+  `child.kill("SIGTERM")`, which on Windows terminates the process
+  unconditionally, so the SIGTERM shutdown flush in `src/index.ts`
+  (which calls `resetUsageStore()` → `flush()`) never executes. The
+  usage store also flushes on a 250 ms timer (`FLUSH_MS` in
+  `src/observe/sinks/usage-store.ts`), but the test stopped the gateway
+  right after the 200 response, before the timer fired — the queued row
+  was lost (`expected 0 to be greater than 0`). Fix in the test only:
+  after the 200 response and before `s.gw.stop()`, the "usage row
+  written under HOME/.babelgate" test now polls `COUNT(*) FROM
+  requests` with a fresh read-only `DatabaseSync` per attempt, every
+  100 ms up to 5 s, catching errors while the file or table does not
+  exist yet, and fails with a clear message if no row appears. Every
+  existing assertion is unchanged — the `existsSync` check and the
+  `n > 0` check after `stop()` still run.
+
+- **Release matrix `fail-fast: false`.** The regenerated
+  `docs/conductor/patches/v1.6-task5-binaries.patch` adds
+  `fail-fast: false` as the first key under the `binaries` job's
+  `strategy:` so one failing platform no longer cancels the other legs —
+  a release run shows every leg's result. `release-files` still
+  `needs: binaries`, so a failing leg still blocks the publish. The
+  patch was regenerated mechanically (scratch copies in the gitignored
+  `tmp/` + `git diff`), not hand-edited; `git apply --check` passes
+  against `main` and both patched workflows parse as YAML with
+  `fail-fast` under `binaries`.
+- **Windows proof:** this session runs Linux only and cannot execute
+  workflows or a Windows runner — the proof is the owner's re-run of
+  the release-matrix dry run on this branch.
+- **Known consequence (accepted, not fixed here):** on Windows a hard
+  kill of the process (e.g. `child.kill`, Task Manager) can lose up to
+  250 ms of queued usage rows, because the shutdown flush never runs;
+  Ctrl+C (SIGINT) still flushes via the normal shutdown path. No
+  product code changed.
+- **Files changed (all outside any plan Files block, named in full):**
+  `tests/process/gateways/babelgate.ts`,
+  `tests/process/binary.process.test.ts`,
+  `docs/conductor/patches/v1.6-task5-binaries.patch`,
+  `docs/decisions.md`. `.github/workflows/*` stay untouched — the
+  owner applies the patch.

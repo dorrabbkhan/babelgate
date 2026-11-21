@@ -66,8 +66,12 @@ export const babelgateGateway: GatewayUnderTest = {
       env: {
         ...process.env,
         // HOME is the data root (~/.babelgate); the suite always gives
-        // it a space in the path (Review Focus 5).
+        // it a space in the path (Review Focus 5). USERPROFILE must be
+        // the same directory: on Windows os.homedir() reads USERPROFILE,
+        // not HOME, so without it the binary writes under the runner's
+        // real profile.
         HOME: workDir,
+        USERPROFILE: workDir,
         PORT: String(port),
         BABELGATE_MOCK_KEY: "mock-key",
         NODE_ENV: "production",
