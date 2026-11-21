@@ -240,6 +240,18 @@ function namedInDecisions(decText: string, path: string, files: DiffFile[]): boo
   return new RegExp(`(^|[^\\w./-])${reEscape(base)}(?![\\w/-]|\\.\\w)`).test(decText);
 }
 
+/**
+ * Appends the shell-style expansion of every `prefix{a,b}suffix` path token, so
+ * `tests/process/replays/openai/{text,tool_call}.json` names both files (v1.6 Task 4:
+ * a false FLAG). One brace group per token, no nesting; the original text is kept.
+ */
+export function expandBraces(text: string): string {
+  const extra: string[] = [];
+  for (const m of text.matchAll(/([\w./-]*)\{([\w.-]+(?:,[\w.-]+)+)\}([\w./-]*)/g))
+    for (const alt of m[2].split(",")) extra.push(m[1] + alt + m[3]);
+  return extra.length ? `${text}\n${extra.join("\n")}` : text;
+}
+
 export function checkFilesBlock(
   files: DiffFile[],
   planText: string | null,
@@ -252,7 +264,7 @@ export function checkFilesBlock(
     (f) => f.path !== "docs/decisions.md" && !matchesPat(pats, f.path),
   );
   if (!extras.length) return pass("files-block", "every diff file is in the task's Files block");
-  const decText = decisionsAdditions(files);
+  const decText = expandBraces(decisionsAdditions(files));
   const unnamed = extras.filter((e) => !namedInDecisions(decText, e.path, files));
   return unnamed.length
     ? flag(

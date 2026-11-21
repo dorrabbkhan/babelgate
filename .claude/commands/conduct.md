@@ -1,8 +1,13 @@
 ---
 description: Run one plan task end to end (task → review ∥ CI → judge → fixes → status), never merging.
-argument-hint: <version> <task-number>   e.g. v1.2 1
+argument-hint: <version> <task-number> | <version> | next   e.g. v1.2 1
 ---
 Arguments as typed: $ARGUMENTS
+0. Resolve the task first. If the arguments are `next` (or a version with no task number), run
+   `scripts/conductor/next-task.sh` (with that version, if given) and use the `<version> <task>` it prints
+   in place of $0 and $1 below; say which task you resolved to. On exit 3 (that task already has an open PR)
+   or exit 1 (every task merged), report its message and stop: don't start a run, don't append `RESULT:`.
+   If the Task Index's Conductor column names a different model than yours, say so in the first line.
 Run the conductor loop from CLAUDE.md for plan version $0, task $1.
 1. Read the plan file for $0 (mapping in .devin/skills/babelgate-task/SKILL.md), its Global Constraints, its
    Review Focus and Task $1; the spec sections it names; docs/conductor/standing-notes.md; and
