@@ -8459,3 +8459,87 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `docs/conductor/patches/v1.6-task5-binaries.patch`,
   `docs/decisions.md`. `.github/workflows/*` stay untouched — the
   owner applies the patch.
+
+## v1.6 Task 6 — installers, Homebrew formula, winget manifests (spec §3.2, D2–D4, Review Focus 4) · OWNER GATE
+
+- **Signatures are Sigstore bundles.** Both installers verify with
+  `cosign verify-blob --bundle <file>.sigstore.json
+  --certificate-identity-regexp
+  '^https://github\.com/dorrabbkhan/babelgate/\.github/workflows/release\.yml@refs/tags/v.*$'
+  --certificate-oidc-issuer
+  https://token.actions.githubusercontent.com` — the exact command
+  SECURITY.md documents — for `SHA256SUMS` first and then the archive,
+  when `cosign` is on PATH. A cosign failure aborts (no "unsigned is
+  fine" fallback). With no cosign the install proceeds after the
+  SHA-256 check and prints one line saying the signature was not
+  checked and how to check it.
+- **SHA-256 is checked against the archive's own SHA256SUMS line
+  only.** SHA256SUMS lists every release file (all five archives plus
+  the CycloneDX SBOM), so a whole-file `sha256sum --check` /
+  `shasum -a 256 -c` would fail on the files that were not downloaded
+  (`shasum` has no `--ignore-missing`). install.sh extracts the one
+  line for `babelgate-<v>-<target>.tar.gz` with awk and compares
+  hashes itself; install.ps1 matches the line with a regex and
+  compares `Get-FileHash -Algorithm SHA256`. A missing line or a
+  mismatch aborts.
+- **Archive layout.** `babelgate-<v>-<target>.tar.gz` holds a single
+  `babelgate` at the archive root; the win-x64 zip holds
+  `babelgate.exe` — matching release.yml's `tar -czf … -C dist-bin
+  babelgate` / `Compress-Archive`. `<v>` carries no leading `v` in
+  file names; the release tag and URL directory do (`v<v>`).
+- **Failure safety (Review Focus 4).** Everything downloads into a
+  temp dir created inside the install dir
+  (`mktemp -d "$dir/.babelgate-install.XXXXXX"` /
+  `New-Item $Dir\.babelgate-install.<random>`), so the final `mv` /
+  `Move-Item` is a same-filesystem rename; the temp dir is removed on
+  any exit (`trap` on EXIT plus HUP/INT/TERM → exit in sh,
+  `try/finally` in ps1). A mismatch leaves no partial or replaced
+  file and an existing binary byte-identical — the tests assert the
+  install dir's listing and the old binary's bytes.
+- **Tests are hermetic.** install.test.ts binds `127.0.0.1` (IPv4
+  explicitly), serves a fake tar.gz plus a SHA256SUMS computed in the
+  test, and points the script at it via `BABELGATE_INSTALL_BASE_URL`.
+  `PATH=/usr/bin:/bin` keeps cosign off PATH; one test prepends a
+  stub `cosign` that exits non-zero to prove a verification failure
+  aborts. `spawn` is async — a `spawnSync` would freeze the event
+  loop while the script's curl waits on the in-process server.
+- **shellcheck without `.skip`.** The shellcheck test probes
+  `command -v shellcheck` at runtime: absent locally it prints a
+  warning and returns; absent with `process.env.CI` set it fails
+  (GitHub's ubuntu runners carry shellcheck). No `it.skipIf`/`.skip`.
+- **install.ps1 is untested here** — no `pwsh` in the sandbox or CI.
+  It mirrors install.sh (`Set-StrictMode`,
+  `$ErrorActionPreference = 'Stop'`, `Invoke-WebRequest`,
+  `Get-FileHash`, `Expand-Archive`, same temp-then-move rule, default
+  dir `%LOCALAPPDATA%\babelgate\bin`); the tests assert the
+  essentials of its text. The owner/Windows leg verifies it end to
+  end.
+- **render.ts → `dist-packaging/`** (gitignored; rendered output is
+  never committed). It reads archive hashes from the given
+  SHA256SUMS by exact archive name and exits non-zero naming the
+  missing target. The formula carries the four tarball URLs + sha256
+  (`on_macos`/`on_linux` × arm/intel) and `test do` asserts
+  `babelgate --version` prints the package version. The winget
+  manifests use schema 1.9.0, `InstallerType: zip` +
+  `NestedInstallerType: portable` +
+  `PortableCommandAlias: babelgate`, and the win-x64 zip's
+  `InstallerSha256` in upper-case hex (winget convention). Output
+  lands at `winget/manifests/d/dorrabbkhan/babelgate/<v>/`, the exact
+  winget-pkgs fork layout. `winget validate` was not run (no winget
+  in the sandbox); the test pins required fields and value shapes
+  instead.
+- **Latest-version lookup.** Without `--version`, install.sh resolves
+  `releases/latest` through the GitHub API (overridable via
+  `BABELGATE_INSTALL_API_URL`); all tests pass `--version`
+  explicitly, so the path is exercised only manually.
+- **Files outside the Files block:** `.gitignore` — added
+  `/dist-packaging/` so `render.ts`'s default output directory can
+  never be committed.
+- **Files changed:** created `install/install.sh`,
+  `install/install.ps1`, `install/test/install.test.ts`,
+  `packaging/homebrew/babelgate.rb.tmpl`,
+  `packaging/winget/dorrabbkhan.babelgate.installer.yaml.tmpl`,
+  `packaging/winget/dorrabbkhan.babelgate.locale.en-US.yaml.tmpl`,
+  `packaging/winget/dorrabbkhan.babelgate.version.yaml.tmpl`,
+  `scripts/packaging/render.ts`, `scripts/packaging/render.test.ts`;
+  modified `.gitignore`, `docs/decisions.md`.

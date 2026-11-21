@@ -1,0 +1,42 @@
+# frozen_string_literal: true
+
+# Rendered by scripts/packaging/render.ts from a release's SHA256SUMS
+# (v1.6 spec §3.2, Task 6) — do not hand-edit the urls or hashes.
+# Lives at Formula/babelgate.rb in the dorrabbkhan/homebrew-babelgate
+# tap (D3). Installs avoid the unsigned-binary Gatekeeper prompt (D2).
+class Babelgate < Formula
+  desc "Proxy that translates between LLM API formats — run Claude Code, Codex or Gemini CLI on any model"
+  homepage "https://github.com/dorrabbkhan/babelgate"
+  version "{{VERSION}}"
+  license "Apache-2.0"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/dorrabbkhan/babelgate/releases/download/v{{VERSION}}/babelgate-{{VERSION}}-darwin-arm64.tar.gz"
+      sha256 "{{SHA256_DARWIN_ARM64}}"
+    end
+    on_intel do
+      url "https://github.com/dorrabbkhan/babelgate/releases/download/v{{VERSION}}/babelgate-{{VERSION}}-darwin-x64.tar.gz"
+      sha256 "{{SHA256_DARWIN_X64}}"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "https://github.com/dorrabbkhan/babelgate/releases/download/v{{VERSION}}/babelgate-{{VERSION}}-linux-x64.tar.gz"
+      sha256 "{{SHA256_LINUX_X64}}"
+    end
+    on_arm do
+      url "https://github.com/dorrabbkhan/babelgate/releases/download/v{{VERSION}}/babelgate-{{VERSION}}-linux-arm64.tar.gz"
+      sha256 "{{SHA256_LINUX_ARM64}}"
+    end
+  end
+
+  def install
+    bin.install "babelgate"
+  end
+
+  test do
+    assert_equal "babelgate #{version}", shell_output("#{bin}/babelgate --version").strip
+  end
+end
