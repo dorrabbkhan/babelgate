@@ -24,10 +24,10 @@ index 64ba7c9..d2d0751 100644
        - run: npm ci
        - run: ./scripts/check.sh
 diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
-index a1d7059..fec3237 100644
+index a1d7059..6e6b934 100644
 --- a/.github/workflows/release.yml
 +++ b/.github/workflows/release.yml
-@@ -69,3 +69,106 @@ jobs:
+@@ -69,3 +69,109 @@ jobs:
        # command is in SECURITY.md.
        - name: Sign the pushed image (keyless)
          run: cosign sign --yes ghcr.io/dorrabbkhan/babelgate@${{ steps.build.outputs.digest }}
@@ -45,6 +45,9 @@ index a1d7059..fec3237 100644
 +    permissions:
 +      contents: read
 +    strategy:
++      # One failing platform must not cancel the others — a release run
++      # shows every leg's result.
++      fail-fast: false
 +      matrix:
 +        include:
 +          - { target: linux-x64, os: ubuntu-latest, bin: babelgate }

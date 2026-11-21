@@ -299,13 +299,46 @@ describe("babelgate binary", () => {
         }),
       });
       expect(res.status).toBe(200);
-      // SIGTERM flushes the queued rows once on shutdown.
-      await s.gw.stop();
       const dbPath = join(s.workDir, ".babelgate", "usage.db");
-      expect(existsSync(dbPath)).toBe(true);
       const { DatabaseSync: Db } = require("node:sqlite") as {
         DatabaseSync: typeof DatabaseSync;
       };
+      // A queued row reaches disk on the 250 ms flush timer
+      // (usage-store.ts FLUSH_MS) or on the SIGTERM shutdown flush. On
+      // Windows child.kill("SIGTERM") is a hard kill — the shutdown
+      // flush never runs — so the row must already be on disk before
+      // stop(): poll read-only until it is visible.
+      const deadline = Date.now() + 5_000;
+      let found = false;
+      while (!found && Date.now() < deadline) {
+        try {
+          const probe = new Db(dbPath, { readOnly: true });
+          try {
+            found =
+              (
+                probe
+                  .prepare("SELECT COUNT(*) AS n FROM requests")
+                  .get() as { n: number }
+              ).n > 0;
+          } finally {
+            probe.close();
+          }
+        } catch {
+          // usage.db or the requests table does not exist yet, or the
+          // file is busy — retry until the deadline.
+        }
+        if (!found) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+      }
+      if (!found) {
+        throw new Error(
+          `no usage row in ${dbPath} within 5s of the 200 response`,
+        );
+      }
+      // SIGTERM flushes the queued rows once on shutdown.
+      await s.gw.stop();
+      expect(existsSync(dbPath)).toBe(true);
       const db = new Db(dbPath);
       try {
         const row = db
@@ -320,6 +353,8 @@ describe("babelgate binary", () => {
 
   it("binary writes nothing to cwd", async () => {
     // cwd is a read-only directory; HOME (the data root) stays writable.
+    // USERPROFILE is set to the same directory because on Windows
+    // os.homedir() reads USERPROFILE, not HOME.
     const cwd = mkdtempSync(join(TMP, "ro-cwd-"));
     const home = workDir();
     const upstream = await startMockUpstream([
@@ -337,6 +372,7 @@ describe("babelgate binary", () => {
         env: {
           ...process.env,
           HOME: home,
+          USERPROFILE: home,
           PORT: String(port),
           BABELGATE_MOCK_KEY: "mock-key",
           NODE_ENV: "production",
