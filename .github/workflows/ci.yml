@@ -14,6 +14,11 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      # Node 24 is the SEA binary's runtime (v1.6 spec §3.2): the shipped
+      # runtime is tested on every PR, not only at release.
+      matrix:
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,7 +26,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: ./scripts/check.sh
