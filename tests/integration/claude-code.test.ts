@@ -671,6 +671,25 @@ routes:
     });
   });
 
+  // v1.6 spec §3.6: the `between_tools` decode never fires on the
+  // pass-through path — the client's thinking bytes relay unchanged.
+  it("anthropic pass-through keeps between_tools bytes", async () => {
+    useYaml(PT_YAML);
+
+    const body = {
+      ...PT_BODY,
+      thinking: { type: "between_tools" },
+      output_config: { effort: "low" },
+    };
+    const res = await request(app).post("/v1/messages").send(body);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    expect(capturedRequests.anthropic).toHaveLength(1);
+    expect(JSON.stringify(capturedRequests.anthropic[0])).toBe(
+      JSON.stringify({ ...body, model: "claude-upstream" }),
+    );
+  });
+
   it("passthrough:true opts in", async () => {
     // The flag alone selects the relay — same provider shape as the
     // bridge case below, only this one key differs.
