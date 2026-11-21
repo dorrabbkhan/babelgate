@@ -157,6 +157,15 @@ describe("judge.ts (spec §3.0.1)", () => {
     expect(line(r, "files-block")).toMatch(/^PASS files-block extra files named in decisions\.md$/);
   });
 
+  it("brace-notation paths in decisions count as named, each alternative only", () => {
+    // v1.6 Task 4: `tests/process/replays/openai/{text,tool_call}.json` named two files.
+    const r = judge("extra-file-braces.diff");
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "files-block")).toBe(
+      "FLAG files-block tests/process/replays/openai/other.json outside Files block and not named in a decisions.md hunk",
+    );
+  });
+
   it("basename shared by two diff files does not count as named", () => {
     const r = judge("extra-file-basename-ambiguous.diff");
     expect(r.exitCode).toBe(1);

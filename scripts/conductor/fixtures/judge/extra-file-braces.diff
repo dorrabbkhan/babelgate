@@ -1,0 +1,31 @@
+diff --git a/tests/process/replays/openai/text.json b/tests/process/replays/openai/text.json
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/tests/process/replays/openai/text.json
+@@ -0,0 +1 @@
++{}
+diff --git a/tests/process/replays/openai/tool_call.json b/tests/process/replays/openai/tool_call.json
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/tests/process/replays/openai/tool_call.json
+@@ -0,0 +1 @@
++{}
+diff --git a/tests/process/replays/openai/other.json b/tests/process/replays/openai/other.json
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/tests/process/replays/openai/other.json
+@@ -0,0 +1 @@
++{}
+diff --git a/docs/decisions.md b/docs/decisions.md
+index 1111111..2222222 100644
+--- a/docs/decisions.md
++++ b/docs/decisions.md
+@@ -100,3 +100,6 @@
+ ## v1.5 Task 0a: conductor tooling
+ 
++- Files outside the Files block: `tests/process/replays/openai/{text,tool_call}.json` — replay bodies.
++
+ ## older entry
