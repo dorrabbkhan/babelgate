@@ -50,7 +50,7 @@ index a1d7059..fec3237 100644
 +          - { target: linux-x64, os: ubuntu-latest, bin: babelgate }
 +          - { target: linux-arm64, os: ubuntu-24.04-arm, bin: babelgate }
 +          - { target: darwin-arm64, os: macos-latest, bin: babelgate }
-+          - { target: darwin-x64, os: macos-13, bin: babelgate }
++          - { target: darwin-x64, os: macos-15-intel, bin: babelgate }
 +          - { target: win-x64, os: windows-latest, bin: babelgate.exe }
 +    steps:
 +      - uses: actions/checkout@v4

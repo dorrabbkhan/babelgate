@@ -8335,8 +8335,8 @@ the changed files are listed here by full path:
   guard run on both legs.
 - **Release matrix, native runners only** (spec §3.2, no
   cross-injection): `{linux-x64: ubuntu-latest, linux-arm64:
-  ubuntu-24.04-arm, darwin-arm64: macos-latest, darwin-x64: macos-13,
-  win-x64: windows-latest}`, each `npm ci` → `npm run build:binary` →
+  ubuntu-24.04-arm, darwin-arm64: macos-latest, darwin-x64:
+  macos-15-intel, win-x64: windows-latest}`, each `npm ci` → `npm run build:binary` →
   `BABELGATE_BIN=dist-bin/babelgate[.exe] npm run test:process` →
   archive `babelgate-<v>-<target>.tar.gz` (`Compress-Archive` zip on
   Windows; `<v>` is the tag minus the leading `v`) →
@@ -8372,6 +8372,14 @@ the changed files are listed here by full path:
   "listed in the CycloneDX SBOM" is read as *attached alongside*,
   since `npm sbom` describes npm packages and cannot list binary
   files.
+- **Interface deviation 3 — `darwin-x64` on `macos-15-intel`, not
+  `macos-13`.** The plan's Task 5 interface literally names
+  `darwin-x64: macos-13`, but GitHub retired the `macos-13` runner
+  image on 2025-12-04
+  (https://github.blog/changelog/2025-09-19-github-actions-macos-13-runner-image-is-closing-down/),
+  so a `macos-13` leg would never start and every release tag
+  would fail. `macos-15-intel` is the Intel replacement the notice
+  names; GitHub supports it until about August 2027.
 - **Files outside the Files block:** `scripts/build-binary.ts` —
   the owner-approved fix carried from Task 4
   (docs/conductor/notes/v1.6/task5.md): `npm` resolves to `npm.cmd`
