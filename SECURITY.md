@@ -30,9 +30,10 @@ made public.
 ## Verifying releases
 
 Every `v*` tag triggers `.github/workflows/release.yml`, which builds,
-pushes and signs the GHCR image automatically. Publishing to npm and
-creating the GitHub release are done by the maintainer by hand, so the
-container image is the only artifact with a CI-generated attestation:
+pushes and signs the GHCR image and builds, tests and signs the release
+binaries automatically. Publishing to npm and creating the GitHub
+release are done by the maintainer by hand; the container image and the
+release binaries are the artifacts with a CI-generated attestation:
 
 - **Signed container image.** The GHCR image is signed keyless by cosign
   in the same workflow run. Verify a tag (or a digest,
@@ -43,6 +44,32 @@ container image is the only artifact with a CI-generated attestation:
     --certificate-identity-regexp '^https://github\.com/dorrabbkhan/babelgate/\.github/workflows/release\.yml@refs/tags/v.*$' \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com
   ```
+
+- **Signed release binaries.** Each platform archive
+  (`babelgate-<version>-<target>.tar.gz`, or `.zip` on Windows) is
+  built and tested on its native release runner and signed keyless by
+  cosign. The release carries a `SHA256SUMS` file (GNU `sha256sum`
+  format, sorted by file name) and one Sigstore bundle
+  (`<file>.sigstore.json`) per signed file — every archive and
+  `SHA256SUMS` itself. Verify both before installing:
+
+  ```sh
+  # integrity — the archive's hash must match SHA256SUMS
+  sha256sum --check --ignore-missing SHA256SUMS   # macOS: shasum -a 256 -c
+
+  # provenance — signed by release.yml on a v* tag
+  cosign verify-blob \
+    --bundle babelgate-<version>-<target>.tar.gz.sigstore.json \
+    --certificate-identity-regexp '^https://github\.com/dorrabbkhan/babelgate/\.github/workflows/release\.yml@refs/tags/v.*$' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    babelgate-<version>-<target>.tar.gz
+  ```
+
+  The binaries are unsigned by the OS vendors for now (no Apple
+  notarization or Windows code signing in v1.6, spec decision D2), so
+  macOS Gatekeeper and Windows SmartScreen warn on direct downloads —
+  cosign verification above is the trust path; Homebrew avoids the
+  quarantine prompt entirely.
 
 - **npm registry signatures.** The npm tarball is published by hand, so
   it carries no provenance bundle (provenance can only be minted by a
