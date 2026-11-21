@@ -89,6 +89,31 @@ function uiAssets(uiDir: string): Record<string, string> {
   return assets;
 }
 
+/**
+ * Spawn npm without a shell on every platform. Windows resolves `npm`
+ * to npm.cmd and Node ≥ 18.20.2 refuses to spawn .cmd/.bat without
+ * `shell: true` (the CVE-2024-27980 fix, so every Node 24), so prefer
+ * the npm-cli.js that `npm_execpath` points to — it is set whenever
+ * this script runs under `npm run build:binary`. The plain-`npm`
+ * fallback uses a shell on win32 only; the arguments are fixed and
+ * nothing user-controlled reaches it.
+ */
+function runNpm(args: string[]): void {
+  const npmCli = process.env.npm_execpath;
+  if (npmCli?.endsWith(".js")) {
+    execFileSync(process.execPath, [npmCli, ...args], {
+      cwd: REPO,
+      stdio: "inherit",
+    });
+    return;
+  }
+  execFileSync("npm", args, {
+    cwd: REPO,
+    stdio: "inherit",
+    shell: process.platform === "win32",
+  });
+}
+
 async function main(): Promise<void> {
   const { out, node } = parseCli(process.argv.slice(2));
   if (nodeMajor(process.execPath) !== 24 || nodeMajor(node) !== 24) {
@@ -103,7 +128,7 @@ async function main(): Promise<void> {
   const tmp = mkdtempSync(join(REPO, "tmp", "sea-"));
 
   console.log("[build-binary] npm run build");
-  execFileSync("npm", ["run", "build"], { cwd: REPO, stdio: "inherit" });
+  runNpm(["run", "build"]);
 
   const bundle = join(out, "babelgate.cjs");
   console.log(`[build-binary] esbuild → ${bundle}`);

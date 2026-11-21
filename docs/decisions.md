@@ -8326,3 +8326,70 @@ the changed files are listed here by full path:
   `package.json`, `package-lock.json`, `.gitignore`,
   `vitest.config.ts`, `src/app.ts`, `src/cli.ts`,
   `docs/architecture.md`, `docs/decisions.md`.
+
+## v1.6 Task 5 — binaries in CI (spec §3.2, D2) · OWNER GATE
+
+- **CI gains a Node 24 leg** — `check` becomes
+  `matrix: node-version: [22, 24]` so the runtime the binary ships on
+  is tested on every PR (spec §3.2); `docker build .` and the fixture
+  guard run on both legs.
+- **Release matrix, native runners only** (spec §3.2, no
+  cross-injection): `{linux-x64: ubuntu-latest, linux-arm64:
+  ubuntu-24.04-arm, darwin-arm64: macos-latest, darwin-x64: macos-13,
+  win-x64: windows-latest}`, each `npm ci` → `npm run build:binary` →
+  `BABELGATE_BIN=dist-bin/babelgate[.exe] npm run test:process` →
+  archive `babelgate-<v>-<target>.tar.gz` (`Compress-Archive` zip on
+  Windows; `<v>` is the tag minus the leading `v`) →
+  `upload-artifact`. Matrix fail-fast plus `release-files`
+  `needs: binaries` means a failing target fails the release: no
+  partial publish. win-x64's suite has never run; spec §3.2 makes its
+  failure an escalation, not a silent drop.
+- **Join job `release-files`** downloads every archive, then:
+  `npm sbom --sbom-format cyclonedx --omit dev` →
+  `babelgate-<v>.cdx.json`, `ts-node scripts/packaging/checksums.ts
+  release` → `SHA256SUMS`, `cosign sign-blob --yes --bundle
+  <f>.sigstore.json <f>` for every archive and `SHA256SUMS`, and
+  uploads one `release-files` artifact.
+- **Interface deviation 1 — bundle files, not `.sig` + `.pem`.**
+  `sigstore/cosign-installer@756fe2d2… # v4.1.3` (the pin the docker
+  job already uses) installs cosign **v3.1.4**, whose `sign-blob`
+  dropped `--output-signature`/`--output-certificate`; its only
+  verification-material output is `--bundle`. One
+  `<file>.sigstore.json` carries signature + certificate + Rekor
+  proof, and `cosign verify-blob --bundle` (documented in
+  SECURITY.md) verifies it. Pinning cosign v2 to keep two files was
+  rejected: installing an older major to preserve a filename layout
+  buys nothing.
+- **Interface deviation 2 — `release-files` artifact, owner
+  attaches.** The interface's "attaches all to the GitHub release"
+  collides with the standing owner decision (v1.5 Task 13):
+  releases are created by hand, `gh release create`/`upload` never
+  run in CI. So the join job stages everything into one workflow
+  artifact; the owner attaches `release/*` to the hand-created
+  release — the same mechanism the v1.5 SBOM already uses. The
+  `cdx.json` is now generated inside the job (CI-verified `npm
+  ci` tree) rather than on the maintainer's machine; spec §3.2's
+  "listed in the CycloneDX SBOM" is read as *attached alongside*,
+  since `npm sbom` describes npm packages and cannot list binary
+  files.
+- **Files outside the Files block:** `scripts/build-binary.ts` —
+  the owner-approved fix carried from Task 4
+  (docs/conductor/notes/v1.6/task5.md): `npm` resolves to `npm.cmd`
+  on the win-x64 runner and Node ≥ 18.20.2 refuses to spawn
+  `.cmd`/`.bat` without a shell (CVE-2024-27980). `runNpm` prefers
+  `process.execPath <npm_execpath>` — the `npm-cli.js` npm itself
+  exports — so no shell runs even on Windows; the plain-`npm`
+  fallback adds `shell: true` on win32 only, with fixed arguments.
+- **`scripts/packaging/checksums.ts`** is a real module (exported
+  `sha256sums(dir)`/`writeSha256sums(dir)` behind a
+  `require.main === module` guard) so the tests exercise the same
+  code the join job runs; output verified against
+  `sha256sum --check`.
+- **Files changed:** created
+  `docs/conductor/patches/v1.6-task5-binaries.patch` (real
+  `git diff`; `git apply --check` passes on origin/main and the
+  patched files parse as YAML), `scripts/packaging/checksums.ts`,
+  `scripts/packaging/checksums.test.ts`; modified `SECURITY.md`,
+  `docs/decisions.md`, `scripts/build-binary.ts`. `.github/` stays
+  untouched (workflow files are only ever changed by the owner
+  applying a patch).
