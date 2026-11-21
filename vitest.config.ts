@@ -15,6 +15,11 @@ export default defineConfig({
     exclude: [
       ...configDefaults.exclude,
       'tests/live/**',
+      // the process suite spawns real processes; it runs only via
+      // `npm run test:process` (vitest.process.config.ts)
+      'tests/process/**',
+      // SEA build artifacts are not a suite
+      'dist-bin/**',
       'scripts/gates/fixtures/**',
       // the UI suite runs via ui/vitest.config.ts (happy-dom), part of
       // `npm test` as a second vitest invocation

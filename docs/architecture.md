@@ -176,7 +176,25 @@ a CORS preflight) and a `Host` that is loopback or in
 `UI_ALLOWED_HOSTS`. Keys and key env names are never returned.
 
 `ui/` is a Preact + Vite SPA built to `dist/ui` and served at `/ui`
-with an SPA fallback — hand-written SVG charts, no chart library.
+with an SPA fallback — hand-written SVG charts, no chart library. In
+the SEA binary (v1.6 spec §3.2) `uiStatic` takes a second source —
+the `dist/ui` files embedded as `ui/…` `node:sea` assets
+(`src/utils/sea.ts`) — and serves the same paths, content types and
+index.html fallback from memory; disk serving is unchanged
+otherwise.
+
+## The single binary (v1.6)
+
+`npm run build:binary` (`scripts/build-binary.ts`, Node 24 only):
+esbuild bundles `dist/cli.js` and its runtime dependencies into one
+CommonJS file, `node --experimental-sea-config` plus postject inject
+it into a copy of the Node binary, and every `dist/ui` file rides
+along as a `ui/…` SEA asset. The result is `dist-bin/babelgate` —
+one file, no Node install needed. Under it, `require` loads builtins
+only, `__dirname` is the binary's own directory and `node:sqlite`
+keeps working, so the binary always logs plain JSON (no
+pino-pretty worker transport — E3) and resolves `~/.babelgate`
+through `os.homedir()` exactly like the npm install.
 
 ## Testing
 
@@ -189,3 +207,11 @@ plants sentinel strings in a prompt, a tool argument and a completion
 (plus a fake key) and asserts they reach only the ring (and `bodies`
 with `LOG_BODIES=true`). Real providers are exercised only by the
 opt-in `tests/live/` suite and `scripts/gates/`.
+
+`tests/process/` is the process-level suite (`npm run test:process`,
+never part of `npm test`): it spawns a gateway as its own process —
+`node dist/cli.js`, or `$BABELGATE_BIN` for the SEA binary — against
+`tests/process/mock-upstream.ts`, a loopback-only server that
+replays recorded provider bodies from `tests/fixtures/streams/` and
+`tests/process/replays/`. Same tests for both distributions, which
+is what "same code tested and shipped" means for the binary.

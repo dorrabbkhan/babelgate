@@ -15,6 +15,7 @@ export interface CliArgs {
   config?: string;
   port?: number;
   help?: boolean;
+  version?: boolean;
 }
 
 const PRESETS = ["claude-code", "openai-apps"] as const;
@@ -42,6 +43,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
       config: { type: "string" },
       port: { type: "string" },
       help: { type: "boolean" },
+      version: { type: "boolean" },
     },
   });
 
@@ -81,6 +83,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     args.port = port;
   }
   if (values.help) args.help = true;
+  if (values.version) args.version = true;
   return args;
 }
 
@@ -226,7 +229,7 @@ function usageLines(): string[] {
   return [
     "Usage: babelgate [--preset <claude-code|openai-apps>] [--target <provider>]",
     "                 [--model <name>] [--base-url <url>] [--port <n>]",
-    "                 [--config <path>] [--help]",
+    "                 [--config <path>] [--help] [--version]",
     "",
     "Config file discovery: --config, then BABELGATE_CONFIG,",
     "then ./babelgate.yaml. Upstream API keys come only from the environment",
@@ -240,6 +243,14 @@ export async function main(argv: string[]): Promise<void> {
     const args = parseCliArgs(argv);
     if (args.help) {
       for (const line of usageLines()) console.log(line);
+      return;
+    }
+    if (args.version) {
+      // require(), not an import: package.json sits outside the
+      // tsconfig rootDir, and esbuild inlines the same call for the
+      // SEA bundle — one version source for every distribution.
+      const pkg = require("../package.json") as { version: string };
+      console.log(`babelgate ${pkg.version}`);
       return;
     }
 

@@ -1,0 +1,9 @@
+{
+  "main": "dist-bin/babelgate.cjs",
+  "output": "dist-bin/sea-prep.blob",
+  "disableExperimentalSEAWarning": true,
+  "useSnapshot": false,
+  "useCodeCache": true,
+  "execArgvExtension": "env",
+  "assets": {}
+}
