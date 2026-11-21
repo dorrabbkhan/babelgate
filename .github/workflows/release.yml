@@ -69,3 +69,109 @@ jobs:
       # command is in SECURITY.md.
       - name: Sign the pushed image (keyless)
         run: cosign sign --yes ghcr.io/dorrabbkhan/babelgate@${{ steps.build.outputs.digest }}
+
+  # One leg per release target (v1.6 spec §3.2): the SEA binary is built
+  # on its native runner (no cross-injection) and the process suite runs
+  # against that exact binary — the release publishes only what the
+  # suites passed on the same runner. A failing leg fails the workflow
+  # and release-files never runs: no partial publish. win-x64's suites
+  # have never run before; if they fail, spec §3.2 says escalate rather
+  # than ship an untested binary.
+  binaries:
+    needs: smoke-pack
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      # One failing platform must not cancel the others — a release run
+      # shows every leg's result.
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, os: ubuntu-latest, bin: babelgate }
+          - { target: linux-arm64, os: ubuntu-24.04-arm, bin: babelgate }
+          - { target: darwin-arm64, os: macos-latest, bin: babelgate }
+          - { target: darwin-x64, os: macos-15-intel, bin: babelgate }
+          - { target: win-x64, os: windows-latest, bin: babelgate.exe }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # The SEA blob is built by and for Node 24 (spec §3.2, D1).
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:binary
+      - name: Run the process suite against the built binary
+        run: npm run test:process
+        env:
+          BABELGATE_BIN: dist-bin/${{ matrix.bin }}
+      - name: Resolve version (tag without leading v)
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Archive as tar.gz
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p release
+          tar -czf "release/babelgate-${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz" -C dist-bin babelgate
+      - name: Archive as zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Compress-Archive -Path dist-bin/babelgate.exe -DestinationPath "release/babelgate-${{ steps.version.outputs.version }}-${{ matrix.target }}.zip"
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: babelgate-${{ steps.version.outputs.version }}-${{ matrix.target }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
+
+  # SHA256SUMS, keyless blob signatures and the CycloneDX SBOM for the
+  # release (v1.6 spec §3.2). GitHub releases are created by the owner
+  # by hand — never from CI (v1.5 Task 13 owner decision), so there is
+  # no `gh release create`/`upload` here: the signed files ship as the
+  # `release-files` workflow artifact and the owner attaches them to
+  # the release the same way the v1.5 SBOM is attached (SECURITY.md).
+  release-files:
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # cosign keyless signs with the job's OIDC token
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Download every platform archive
+        uses: actions/download-artifact@v4
+        with:
+          pattern: babelgate-*
+          path: release
+          merge-multiple: true
+      - name: CycloneDX SBOM (the v1.5 step, generated in CI)
+        run: npm sbom --sbom-format cyclonedx --omit dev > "release/babelgate-${GITHUB_REF_NAME#v}.cdx.json"
+      - name: SHA256SUMS
+        run: npx ts-node scripts/packaging/checksums.ts release
+      - name: Install cosign
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      # cosign v3 emits one Sigstore bundle per signed file (signature,
+      # certificate and Rekor proof together); `cosign verify-blob
+      # --bundle` is in SECURITY.md.
+      - name: Sign every archive and SHA256SUMS (keyless)
+        run: |
+          for f in release/*.tar.gz release/*.zip release/SHA256SUMS; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+      - name: Upload the release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: release/
+          if-no-files-found: error
+          retention-days: 30
