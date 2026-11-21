@@ -154,3 +154,117 @@ describe("uiStatic socket rules", () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+/**
+ * The SEA asset source (v1.6 spec §3.2): the same handler serves the
+ * same paths from an in-memory get("ui/<rel>") map instead of disk —
+ * same index.html fallback, same access rules.
+ */
+function assetReq(path: string, remoteAddress = "127.0.0.1"): Request {
+  return {
+    method: "GET",
+    url: path,
+    path,
+    headers: {},
+    socket: { remoteAddress },
+  } as unknown as Request;
+}
+
+function assetRes(): Response & {
+  statusCode: number;
+  headers: Record<string, string>;
+  body: unknown;
+} {
+  const res = {
+    statusCode: 200,
+    headers: {} as Record<string, string>,
+    body: undefined as unknown,
+    status(code: number) {
+      res.statusCode = code;
+      return res;
+    },
+    json(body: unknown) {
+      res.body = body;
+      return res;
+    },
+    set(name: string, value: string) {
+      res.headers[name.toLowerCase()] = value;
+      return res;
+    },
+    send(body: unknown) {
+      res.body = body;
+      return res;
+    },
+  };
+  return res as unknown as Response & {
+    statusCode: number;
+    headers: Record<string, string>;
+    body: unknown;
+  };
+}
+
+describe("uiStatic assets source (SEA)", () => {
+  const files: Record<string, string> = {
+    "ui/index.html": "<html>spa</html>",
+    "ui/assets/app-a1b2c3.js": "console.log('app')",
+  };
+  const assets = {
+    get(path: string): Buffer | undefined {
+      const file = files[path];
+      return file === undefined ? undefined : Buffer.from(file);
+    },
+  };
+
+  it("assets source serves index and a hashed asset with content-type", () => {
+    const index = assetRes();
+    const indexNext = vi.fn();
+    uiStatic(config(), undefined, assets)(assetReq("/"), index, indexNext);
+    expect(indexNext).not.toHaveBeenCalled();
+    expect(index.statusCode).toBe(200);
+    expect(index.headers["content-type"]).toContain("text/html");
+    expect(String(index.body)).toBe("<html>spa</html>");
+
+    const res = assetRes();
+    const next = vi.fn();
+    uiStatic(config(), undefined, assets)(
+      assetReq("/assets/app-a1b2c3.js"),
+      res,
+      next,
+    );
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("javascript");
+    expect(String(res.body)).toBe("console.log('app')");
+  });
+
+  it("assets source falls back to index for client routes", () => {
+    const res = assetRes();
+    const next = vi.fn();
+    uiStatic(config(), undefined, assets)(assetReq("/routing"), res, next);
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["content-type"]).toContain("text/html");
+    expect(String(res.body)).toBe("<html>spa</html>");
+  });
+
+  it("assets source keeps the loopback rule", () => {
+    const get = vi.fn(assets.get);
+    const res = assetRes();
+    const next = vi.fn();
+    uiStatic(config(), undefined, { get })(
+      assetReq("/", "10.0.0.5"),
+      res,
+      next,
+    );
+    expect(next).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(403);
+    expect(res.body).toEqual({
+      error: {
+        code: "FORBIDDEN",
+        message:
+          "The UI answers only this machine. Set PROXY_API_KEY, or UI_ALLOW_REMOTE=true, to open it to the network.",
+      },
+    });
+    expect(get).not.toHaveBeenCalled();
+  });
+});

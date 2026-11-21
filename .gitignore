@@ -1,5 +1,7 @@
 # Compiled JavaScript and TypeScript output
 /dist/
+# SEA build output (scripts/build-binary.ts, v1.6)
+/dist-bin/
 *.js
 # Keep TypeScript declaration files if you publish a package
 !/src/**/*.d.ts

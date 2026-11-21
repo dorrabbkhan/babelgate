@@ -9,6 +9,7 @@ import { getMetricsSink } from "./observe/sinks/metrics";
 import { proxyRouter } from "./routes/proxy";
 import { uiApiRouter } from "./ui-api/router";
 import { uiStatic } from "./ui-api/static";
+import { isSea, seaAsset } from "./utils/sea";
 
 const app = express();
 
@@ -41,8 +42,16 @@ app.use("/ui/api", uiApiRouter());
 // without the key — the data lives behind /ui/api. UI=off falls
 // through to the same 404 as an unmatched route. The config is read
 // per request (same pattern as uiAccess) so UI=off + resetConfig
-// takes effect without rebuilding the app.
-app.use("/ui", (req, res, next) => uiStatic(getConfig())(req, res, next));
+// takes effect without rebuilding the app. In a SEA binary (v1.6
+// spec §3.2) the bundle comes from the embedded ui/* assets instead
+// of dist/ui on disk.
+app.use("/ui", (req, res, next) =>
+  uiStatic(
+    getConfig(),
+    undefined,
+    isSea() ? { get: seaAsset } : undefined,
+  )(req, res, next),
+);
 
 // 3a. Client auth — active only when PROXY_API_KEY is set.
 // /health above stays open for probes.

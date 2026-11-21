@@ -1,4 +1,5 @@
 import pino from "pino";
+import { isSea } from "./sea";
 
 function canResolvePinoPretty(): boolean {
   try {
@@ -16,8 +17,11 @@ export function loggerOptions(
   const isProduction = env.NODE_ENV === "production";
   return {
     level: env.LOG_LEVEL || (isProduction ? "info" : "debug"),
+    // E3: a worker transport can't exist in the SEA binary — the
+    // bundle is one file and pino-pretty isn't a builtin — so the
+    // binary always logs plain JSON.
     transport:
-      !isProduction && canResolve()
+      !isProduction && !isSea() && canResolve()
         ? {
             target: "pino-pretty",
             options: {
