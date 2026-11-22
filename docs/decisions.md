@@ -8565,3 +8565,30 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
 - **Files changed:** modified `install/install.ps1`,
   `install/install.sh`, `install/test/install.test.ts`,
   `docs/decisions.md`.
+
+## v1.6 Task 6 patch: winget schema headers
+
+- **Finding.** On the owner's Windows 11 VM (winget 1.11.510,
+  2026-11-22), `winget validate --manifest <rendered 1.6.0-rc.1
+  folder>` printed "Manifest validation succeeded with warnings" and
+  exited non-zero, one warning per file: `Manifest Warning: Schema
+  header not found.` The same run verified the installer hash and the
+  manifest fields, so only the header was missing.
+- **Fix.** winget looks for a
+  `# yaml-language-server: $schema=...` first line (wingetcreate
+  writes it; microsoft/winget-pkgs manifests carry it). Added it as
+  line 1 of `packaging/winget/dorrabbkhan.babelgate.installer.yaml.tmpl`
+  (`winget-manifest.installer.1.9.0.schema.json`),
+  `packaging/winget/dorrabbkhan.babelgate.locale.en-US.yaml.tmpl`
+  (`winget-manifest.defaultLocale.1.9.0.schema.json`) and
+  `packaging/winget/dorrabbkhan.babelgate.version.yaml.tmpl`
+  (`winget-manifest.version.1.9.0.schema.json`).
+- **Schema-URL source.** The URLs are the ones wingetcreate
+  (https://github.com/microsoft/winget-create) writes and
+  winget-pkgs manifests carry; they were named in the task
+  instructions and were not re-fetched in the sandbox.
+- **Files changed:** modified
+  `packaging/winget/dorrabbkhan.babelgate.installer.yaml.tmpl`,
+  `packaging/winget/dorrabbkhan.babelgate.locale.en-US.yaml.tmpl`,
+  `packaging/winget/dorrabbkhan.babelgate.version.yaml.tmpl`,
+  `scripts/packaging/render.test.ts`, `docs/decisions.md`.
