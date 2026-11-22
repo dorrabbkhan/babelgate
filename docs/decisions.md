@@ -8719,11 +8719,15 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   the thin entry point.
 - **Files outside the Files block:** `src/cli-first-run.ts` (the
   split above), `src/codex-model-catalog.json` (the embedded catalog
-  template above).
+  template above), `src/config/provider-presets.test.ts` (tests for
+  the `suggested` values recorded from the conductor's Step 4 live
+  run (fix round 1); the Files block names
+  `src/config/provider-presets.ts` but not its test file).
 - **Files changed:** created `src/cli-first-run.ts`,
   `src/codex-model-catalog.json`; modified `src/cli.ts`,
   `src/cli.test.ts`, `src/config/env-config.ts`,
-  `src/config/env-config.test.ts`, `docs/decisions.md`.
+  `src/config/env-config.test.ts`, `src/config/provider-presets.ts`,
+  `src/config/provider-presets.test.ts`, `docs/decisions.md`.
 - **Step 4 live results (conductor, 2026-11-22):**
 
   | preset | client | model | result |
