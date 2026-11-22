@@ -8660,3 +8660,67 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   modified `src/config/provider-presets.ts`,
   `src/config/gateway.schema.ts`, `src/config/yaml-config.ts`,
   `src/cli.ts`, `docs/decisions.md`.
+
+## v1.6 Task 8 — first run: `--provider`, `--preset codex`, key guidance (spec §3.3, E5, E11)
+
+- **`--provider` is an env-path flag** (conductor's call c): it sets
+  `TARGET_API`, `<TYPE>_API_BASE_URL`, `TARGET_PRESET` and
+  `TARGET_API_KEY_ENV` — the *name* of the variable the key is read
+  from, so no secret is copied between variables. env-config reads
+  `process.env[TARGET_API_KEY_ENV]`, falls back to the preset's
+  `api_key_env`, then the `<TYPE>_API_KEY` default; the missing-key
+  error names the effective variable. A preset with no `api_key_env`
+  is keyless (like `ollama`). `TARGET_PRESET` must name a preset in
+  `PRESET_NAMES` and lands on the provider entry as `preset` (the
+  free-tier 429 hint in Task 9 and the UI label in Task 14 read it).
+- **`--provider` is refused with a config file** (like `--target`)
+  and also with `--target`/`--base-url`, which it already fills —
+  the plan named only the config refusal; combining either would be
+  contradictory input.
+- **Missing-key line** (plan's literal string): `<provider>` is
+  rendered as the preset name — `OPENROUTER_API_KEY is not set. Get a
+  key at https://openrouter.ai/keys (free tier per openrouter-free
+  docs on 2026-11-22).` The tier word comes from `preset.tier`
+  (`free`/`cheap`/`shim`), so a cheap preset never claims a free
+  tier; a preset without `signup_url` prints `See <docs>` instead.
+  The check runs before listening whenever TARGET_PRESET resolves,
+  covering hand-set env as well as `--provider`.
+- **`--preset codex` writes `~/.babelgate/codex-model-catalog.json`
+  only** (verified: the whole `find home -type f` output is that one
+  file). The printed block is the recipe's config.toml with
+  `base_url` on the actual port plus `model_catalog_json` (the recipe
+  block lacks the key because it never generates a catalog). The
+  catalog's `slug`/`display_name` are replaced by the effective model
+  — `--model` > `suggested.codex` > `"babelgate"` — so Codex resolves
+  the entry instead of its unknown-slug fallback (owner decision A,
+  scripts/gates/codex-edit.sh).
+- **`src/codex-model-catalog.json` is a copy of
+  `examples/codex-model-catalog.json`.** The npm package ships only
+  `dist/` and the SEA binary has no examples/, so the template is
+  imported (esbuild inlines it); a parity test in `src/cli.test.ts`
+  fails if the two drift.
+- **EADDRINUSE prints the plan's one line and exits 1**; the port
+  comes from the listen error's `port` property (which also covers a
+  yaml-set port), with `PORT`/3000 as fallback.
+- **`suggested`/`max_output_tokens` stay unset** in
+  `src/config/provider-presets.ts`: plan Step 4 fills `suggested`
+  only for models proven on the edit task by the conductor's live
+  run, and provider output caps are model-dependent, not
+  provider-wide (per the providers' docs: DeepSeek accepts up to
+  384K, Groq/Cerebras list per-model caps), so no preset claims a cap
+  without a proven model. The mechanism — `TARGET_MAX_OUTPUT_TOKENS`
+  env and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in the claude-code export
+  lines (E11) — is wired and tested with a synthetic value.
+- **cli.ts split** (hard rule 7): it would have grown to ~530 lines;
+  the §3.3 first-run helpers and startup print helpers moved to
+  `src/cli-first-run.ts` (providerWanted, effectiveProviderPreset,
+  missingKeyError, clientInstructions, endpointLines, usageLines,
+  codexConfigToml, writeCodexCatalog). cli.ts stays at ~410 lines as
+  the thin entry point.
+- **Files outside the Files block:** `src/cli-first-run.ts` (the
+  split above), `src/codex-model-catalog.json` (the embedded catalog
+  template above).
+- **Files changed:** created `src/cli-first-run.ts`,
+  `src/codex-model-catalog.json`; modified `src/cli.ts`,
+  `src/cli.test.ts`, `src/config/env-config.ts`,
+  `src/config/env-config.test.ts`, `docs/decisions.md`.
