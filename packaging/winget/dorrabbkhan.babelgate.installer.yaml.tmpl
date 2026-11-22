@@ -1,0 +1,17 @@
+# Rendered by scripts/packaging/render.ts (v1.6 spec §3.2, Task 6) —
+# do not hand-edit the url or hash. Submitted by the owner to
+# microsoft/winget-pkgs under manifests/d/dorrabbkhan/babelgate/<v>/
+# (D4). winget manifest schema 1.9.0.
+PackageIdentifier: dorrabbkhan.babelgate
+PackageVersion: {{VERSION}}
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+- RelativeFilePath: babelgate.exe
+  PortableCommandAlias: babelgate
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/dorrabbkhan/babelgate/releases/download/v{{VERSION}}/babelgate-{{VERSION}}-win-x64.zip
+  InstallerSha256: {{SHA256_WIN_X64_UPPER}}
+ManifestType: installer
+ManifestVersion: 1.9.0
