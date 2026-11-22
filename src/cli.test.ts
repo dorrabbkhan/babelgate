@@ -1,8 +1,10 @@
 import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import type { Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as net from "node:net";
 import { describe, it, expect, vi } from "vitest";
+import { app } from "./app";
 import {
   parseCliArgs,
   presetEnv,
@@ -18,6 +20,19 @@ import {
 import { resetConfig } from "./config/env-config";
 import { PROVIDER_PRESETS } from "./config/provider-presets";
 import templateCatalog from "./codex-model-catalog.json";
+
+// --preset codex writes under ~/.babelgate; homedir() is module-level
+// ESM so vi.spyOn can't patch it — mock node:os once for the file and
+// redirect the home dir through BABELGATE_TEST_HOME instead, so the
+// catalog write lands in the test's temp dir on every platform (the
+// real home is read-only in the sandbox).
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  return {
+    ...actual,
+    homedir: () => process.env.BABELGATE_TEST_HOME ?? actual.homedir(),
+  };
+});
 
 describe("cli", () => {
   it("claude-code + ollama preset env", () => {
@@ -236,6 +251,28 @@ describe("cli", () => {
     });
   });
 
+  it("gemini-free suggests the proven model for both client presets", () => {
+    expect(
+      presetEnv({ preset: "claude-code", provider: "gemini-free" }, {}),
+    ).toEqual({
+      TARGET_API: "gemini",
+      GEMINI_API_BASE_URL: "https://generativelanguage.googleapis.com",
+      TARGET_PRESET: "gemini-free",
+      TARGET_API_KEY_ENV: "GEMINI_API_KEY",
+      MODEL_MAP: "claude-*=gemini-3.8-flash",
+      TARGET_CONTEXT_WINDOW: "32768",
+    });
+    expect(
+      presetEnv({ preset: "codex", provider: "gemini-free" }, {}),
+    ).toEqual({
+      TARGET_API: "gemini",
+      GEMINI_API_BASE_URL: "https://generativelanguage.googleapis.com",
+      TARGET_PRESET: "gemini-free",
+      TARGET_API_KEY_ENV: "GEMINI_API_KEY",
+      MODEL_MAP: "*=gemini-3.8-flash",
+    });
+  });
+
   it("--preset codex maps the suggested model with a wildcard", () => {
     const preset = PROVIDER_PRESETS.groq;
     preset.suggested = { codex: "qwen/qwen3-coder" };
@@ -349,7 +386,7 @@ describe("cli", () => {
     }
   });
 
-  it("--preset codex prints toml with port and writes catalog under ~/.babelgate", () => {
+  it("--preset codex prints toml with port and writes catalog under ~/.babelgate", async () => {
     const home = mkdtempSync(join(tmpdir(), "babelgate-home-"));
     const catalogPath = writeCodexCatalog("qwen/qwen3-coder", home);
     expect(catalogPath).toBe(
@@ -369,6 +406,54 @@ describe("cli", () => {
     expect(toml).toContain('wire_api = "responses"');
     expect(toml).toContain('model = "qwen/qwen3-coder"');
     expect(toml).toContain(`model_catalog_json = "${catalogPath}"`);
+
+    // The printed paste block ends with a blank line and an end
+    // marker — the routing table prints right after it, and a copy
+    // that stops at the marker can't pull route lines into
+    // config.toml.
+    const printed: string[] = [];
+    const logSpy = vi
+      .spyOn(console, "log")
+      .mockImplementation((line?: unknown) => {
+        printed.push(String(line));
+      });
+    const listenSpy = vi.spyOn(app, "listen");
+    const savedEnv = process.env;
+    const savedCode = process.exitCode;
+    process.env = {
+      ...savedEnv,
+      BABELGATE_TEST_HOME: home,
+      TARGET_API: "openai",
+      OPENAI_API_KEY: "test-key",
+      OPENAI_API_BASE_URL: "http://127.0.0.1:9",
+      PORT: "0",
+      USAGE_STORE: "off",
+    };
+    delete process.env.TARGET_API_KEY_ENV;
+    delete process.env.TARGET_PRESET;
+    delete process.env.BABELGATE_CONFIG;
+    delete process.env.MODEL_MAP;
+    delete process.env.PROXY_API_KEY;
+    let server: Server | undefined;
+    try {
+      await main(["--preset", "codex", "--model", "qwen/qwen3-coder"]);
+      server = listenSpy.mock.results[0]?.value as Server | undefined;
+      expect(readdirSync(home)).toEqual([".babelgate"]);
+      const end = printed.indexOf("requires_openai_auth = false");
+      expect(end).toBeGreaterThan(-1);
+      expect(printed[end + 1]).toBe("");
+      expect(printed[end + 2]).toBe("--- end of config.toml block ---");
+    } finally {
+      await new Promise<void>((resolve) => {
+        if (server === undefined) resolve();
+        else server.close(() => resolve());
+      });
+      logSpy.mockRestore();
+      listenSpy.mockRestore();
+      process.env = savedEnv;
+      process.exitCode = savedCode;
+      resetConfig();
+    }
   });
 
   it("codex catalog template stays in sync with examples/", () => {

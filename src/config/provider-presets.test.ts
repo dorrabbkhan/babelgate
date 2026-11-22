@@ -107,4 +107,26 @@ describe("provider preset tiers (v1.6 spec §3.3)", () => {
       ).toBe(true);
     }
   });
+
+  it("gemini-free suggests the proven edit-task model", () => {
+    expect(PROVIDER_PRESETS["gemini-free"].suggested).toEqual({
+      "claude-code": "gemini-3.8-flash",
+      codex: "gemini-3.8-flash",
+    });
+  });
+
+  it("presets without a live pass carry no suggestion", () => {
+    for (const name of [
+      "openrouter-free",
+      "groq",
+      "nvidia-nim",
+      "cerebras",
+      "deepseek",
+    ] as const) {
+      expect(
+        PROVIDER_PRESETS[name].suggested,
+        name,
+      ).toBeUndefined();
+    }
+  });
 });

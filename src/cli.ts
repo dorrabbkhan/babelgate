@@ -383,6 +383,11 @@ export async function main(argv: string[]): Promise<void> {
       for (const line of codexConfigToml(config.port, model, catalogPath)) {
         console.log(line);
       }
+      // The routing table prints next — the blank line and marker close
+      // the paste block so a copied block can't pull route lines into
+      // config.toml.
+      console.log("");
+      console.log("--- end of config.toml block ---");
     } else if (args.preset !== undefined) {
       // The export lines come from the requested preset — there is no
       // configured source format; the request path decides the dialect.

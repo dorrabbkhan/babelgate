@@ -8724,3 +8724,19 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `src/codex-model-catalog.json`; modified `src/cli.ts`,
   `src/cli.test.ts`, `src/config/env-config.ts`,
   `src/config/env-config.test.ts`, `docs/decisions.md`.
+- **Step 4 live results (conductor, 2026-11-22):**
+
+  | preset | client | model | result |
+  |---|---|---|---|
+  | gemini-free | claude-code | gemini-3.8-flash | PASS (23 s, 8 requests, all 200) |
+  | gemini-free | codex | gemini-3.8-flash | PASS (22 s, 7 requests, all 200; catalog written under ~/.babelgate) |
+  | openrouter-free | claude-code | poolside/laguna-s-2.1:free | FAIL: upstream 404 "no longer available on OpenRouter" |
+  | openrouter-free | claude-code | qwen/qwen3-coder:free, openai/gpt-oss-120b:free, z-ai/glm-4.5-air:free, moonshotai/kimi-k2:free, deepseek/deepseek-chat-v3.1:free | FAIL: upstream 404 "This model is unavailable for free" |
+  | groq, nvidia-nim, cerebras, deepseek | — | — | not run: no key available to the conductor |
+
+  Driver: the edit task from scripts/gates/claude-code-edit.sh /
+  codex-edit.sh with babelgate started as `--preset <client>
+  --provider <preset> --model <m>` on this branch (clean env). No
+  passing model → no suggestion (spec §3.3). `openrouter-free` has
+  no suggestion; whether the preset should ship while no `:free`
+  model serves is an owner question (Task 15/17).

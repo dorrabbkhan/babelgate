@@ -257,6 +257,12 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
     api_key_env: "GEMINI_API_KEY",
     signup_url: "https://aistudio.google.com/apikey",
     gaps: [],
+    // Proven on the edit task through `--provider gemini-free`,
+    // 2026-11-22 (conductor live run, v1.6 Task 8 Step 4).
+    suggested: {
+      "claude-code": "gemini-3.8-flash",
+      codex: "gemini-3.8-flash",
+    },
     docs: "https://ai.google.dev/gemini-api/docs/rate-limits",
     verified: "2026-11-22",
   },
