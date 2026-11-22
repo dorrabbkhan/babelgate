@@ -1,5 +1,8 @@
+import { z } from "zod";
+
 /**
- * Provider presets and the gap vocabulary (v1.5 spec §3.3).
+ * Provider presets and the gap vocabulary (v1.5 spec §3.3, widened by
+ * v1.6 spec §3.3).
  *
  * A provider entry may declare `gaps:` from a fixed vocabulary — each
  * gap names one thing the upstream's Anthropic-compatible endpoint
@@ -8,13 +11,16 @@
  * pass-through forward (or to the reply). The vocabulary is per gap,
  * never per provider pair.
  *
- * `PROVIDER_PRESETS` names shim endpoints that fill `type`,
- * `base_url`, `gaps` and — via the `preset` key's presence —
- * `passthrough: true` (D6). Explicit provider keys override preset
- * values. Every preset's gap list is verified against the provider's
- * own documentation (`docs`, `verified`) per the wire-format
- * evidence rule; Ollama's list comes from Task 1's measured probe
- * (E16), not just its docs page.
+ * `PROVIDER_PRESETS` names endpoints that fill `type`, `base_url`,
+ * `api_key_env` and `gaps`. `tier` splits them: "shim" presets are
+ * the five v1.5 Anthropic-endpoint shims — only those imply
+ * `passthrough: true` in yaml-config (v1.6 spec §3.3). "free" and
+ * "cheap" presets are ordinary providers reachable through the
+ * canonical path; they never imply pass-through. Explicit provider
+ * keys override preset values. Every preset's values are verified
+ * against the provider's own documentation (`docs`, `verified`) per
+ * the wire-format evidence rule, and the whole table is checked
+ * against `providerPresetSchema` at load.
  */
 
 export const GAPS = [
@@ -28,26 +34,74 @@ export const GAPS = [
 
 export type Gap = (typeof GAPS)[number];
 
+export const PRESET_TIERS = ["free", "cheap", "shim"] as const;
+
+export type PresetTier = (typeof PRESET_TIERS)[number];
+
 export const PRESET_NAMES = [
   "ollama-anthropic",
   "lmstudio-anthropic",
   "deepseek-anthropic",
   "glm-anthropic",
   "kimi-anthropic",
+  "openrouter-free",
+  "gemini-free",
+  "groq",
+  "nvidia-nim",
+  "cerebras",
+  "deepseek",
 ] as const;
 
 export type PresetName = (typeof PRESET_NAMES)[number];
 
 export interface ProviderPreset {
-  type: "anthropic";
+  type: "anthropic" | "openai" | "gemini";
+  /** "shim" presets imply passthrough; "free"/"cheap" never do (§3.3). */
+  tier: PresetTier;
   base_url: string;
   api_key_env?: string;
+  /** Where a user gets a key — printed when the key env is missing. */
+  signup_url?: string;
   gaps: Gap[];
-  /** Provider documentation the gap list was verified against. */
+  /** Model per client preset proven on the edit task (Task 8 fills). */
+  suggested?: {
+    "claude-code"?: string;
+    codex?: string;
+    "openai-apps"?: string;
+  };
+  /** Provider cap below the client's default (§3.3, E11). */
+  max_output_tokens?: number;
+  /** Provider documentation the values were verified against. */
   docs: string;
   /** Date of that verification (YYYY-MM-DD). */
   verified: string;
 }
+
+/**
+ * Runtime shape of one preset — the wire-format evidence rule makes
+ * `docs` and `verified` required, and `verified` must be a date.
+ * `PROVIDER_PRESETS` is parsed with this at module load, so a preset
+ * that drops its evidence fails at startup, not at request time.
+ */
+export const providerPresetSchema: z.ZodType<ProviderPreset> =
+  z.strictObject({
+    type: z.enum(["anthropic", "openai", "gemini"]),
+    tier: z.enum(PRESET_TIERS),
+    base_url: z.string().min(1),
+    api_key_env: z.string().min(1).optional(),
+    signup_url: z.string().min(1).optional(),
+    gaps: z.array(z.enum(GAPS)),
+    suggested: z
+      .strictObject({
+        "claude-code": z.string().min(1).optional(),
+        codex: z.string().min(1).optional(),
+        "openai-apps": z.string().min(1).optional(),
+      })
+      .optional(),
+    max_output_tokens: z.number().int().positive().optional(),
+    docs: z.string().min(1),
+    verified: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  });
 
 export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
   /**
@@ -63,6 +117,7 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    */
   "ollama-anthropic": {
     type: "anthropic",
+    tier: "shim",
     base_url: "http://localhost:11434",
     gaps: ["count_tokens", "url_images", "documents"],
     docs: "https://docs.ollama.com/api/anthropic-compatibility",
@@ -89,6 +144,7 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    */
   "lmstudio-anthropic": {
     type: "anthropic",
+    tier: "shim",
     base_url: "http://localhost:1234",
     gaps: ["count_tokens", "documents", "tool_choice"],
     docs: "https://lmstudio.ai/docs/developer/anthropic-compat",
@@ -105,6 +161,7 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    */
   "deepseek-anthropic": {
     type: "anthropic",
+    tier: "shim",
     base_url: "https://api.deepseek.com/anthropic",
     api_key_env: "DEEPSEEK_API_KEY",
     gaps: ["count_tokens", "prompt_cache"],
@@ -137,6 +194,7 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    */
   "glm-anthropic": {
     type: "anthropic",
+    tier: "shim",
     base_url: "https://api.z.ai/api/anthropic",
     api_key_env: "ZAI_API_KEY",
     gaps: ["count_tokens", "documents", "tool_choice", "url_images"],
@@ -156,10 +214,130 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    */
   "kimi-anthropic": {
     type: "anthropic",
+    tier: "shim",
     base_url: "https://api.moonshot.ai/anthropic",
     api_key_env: "MOONSHOT_API_KEY",
     gaps: ["count_tokens", "prompt_cache", "url_images", "documents"],
     docs: "https://platform.kimi.ai/docs/api/messages",
     verified: "2026-11-17",
   },
+  /**
+   * OpenRouter's OpenAI-compatible endpoint — its free tier is the
+   * `:free` model variants (per https://openrouter.ai/docs/faq:
+   * 50 requests/day, or 1000/day with >=10 purchased credits).
+   * Verified 2026-11-22 against https://openrouter.ai/docs/quickstart
+   * (`POST https://openrouter.ai/api/v1/chat/completions`,
+   * `Authorization: Bearer $OPENROUTER_API_KEY`): babelgate appends
+   * /v1/chat/completions itself, so base_url drops the /v1 — the
+   * same convention docs/recipes/openai-compatible-providers.md
+   * live-tests in the release gate and tests/live/live.helpers.ts
+   * documents.
+   */
+  "openrouter-free": {
+    type: "openai",
+    tier: "free",
+    base_url: "https://openrouter.ai/api",
+    api_key_env: "OPENROUTER_API_KEY",
+    signup_url: "https://openrouter.ai/keys",
+    gaps: [],
+    docs: "https://openrouter.ai/docs/quickstart",
+    verified: "2026-11-22",
+  },
+  /**
+   * Gemini API free tier through the native adapter. Verified
+   * 2026-11-22 against https://ai.google.dev/gemini-api/docs/
+   * quickstart (REST: `https://generativelanguage.googleapis.com/
+   * v1beta/...` with `x-goog-api-key: $GEMINI_API_KEY`) and the Free
+   * usage tier on https://ai.google.dev/gemini-api/docs/rate-limits.
+   */
+  "gemini-free": {
+    type: "gemini",
+    tier: "free",
+    base_url: "https://generativelanguage.googleapis.com",
+    api_key_env: "GEMINI_API_KEY",
+    signup_url: "https://aistudio.google.com/apikey",
+    gaps: [],
+    docs: "https://ai.google.dev/gemini-api/docs/rate-limits",
+    verified: "2026-11-22",
+  },
+  /**
+   * GroqCloud's OpenAI-compatible endpoint, free tier per its rate
+   * limits page. Verified 2026-11-22 against
+   * https://console.groq.com/docs/openai (OpenAI SDK base_url
+   * `https://api.groq.com/openai/v1`, `GROQ_API_KEY`) — babelgate
+   * appends /v1/chat/completions, so base_url drops the /v1 — and
+   * https://console.groq.com/docs/rate-limits for the free tier.
+   */
+  groq: {
+    type: "openai",
+    tier: "free",
+    base_url: "https://api.groq.com/openai",
+    api_key_env: "GROQ_API_KEY",
+    signup_url: "https://console.groq.com/keys",
+    gaps: [],
+    docs: "https://console.groq.com/docs/openai",
+    verified: "2026-11-22",
+  },
+  /**
+   * NVIDIA NIM hosted API catalog. Verified 2026-11-22 against
+   * https://docs.api.nvidia.com/nim/reference/llm-apis (URL
+   * `https://integrate.api.nvidia.com`, `POST /v1/chat/completions`,
+   * `Authorization: Bearer $NVIDIA_API_KEY`); build.nvidia.com's FAQ
+   * documents the free prototyping tier (no credit card, ~40 RPM).
+   */
+  "nvidia-nim": {
+    type: "openai",
+    tier: "free",
+    base_url: "https://integrate.api.nvidia.com",
+    api_key_env: "NVIDIA_API_KEY",
+    signup_url: "https://build.nvidia.com",
+    gaps: [],
+    docs: "https://docs.api.nvidia.com/nim/reference/llm-apis",
+    verified: "2026-11-22",
+  },
+  /**
+   * Cerebras Inference free tier. Verified 2026-11-22 against
+   * https://inference-docs.cerebras.ai/quickstart (`POST
+   * https://api.cerebras.ai/v1/chat/completions`,
+   * `CEREBRAS_API_KEY`, "Free accounts have lower per-minute
+   * limits") — babelgate appends /v1/chat/completions, so base_url
+   * drops the /v1.
+   */
+  cerebras: {
+    type: "openai",
+    tier: "free",
+    base_url: "https://api.cerebras.ai",
+    api_key_env: "CEREBRAS_API_KEY",
+    signup_url: "https://cloud.cerebras.ai",
+    gaps: [],
+    docs: "https://inference-docs.cerebras.ai/quickstart",
+    verified: "2026-11-22",
+  },
+  /**
+   * DeepSeek's OpenAI-compatible endpoint (paid, low cost — the
+   * "cheap" tier; pricing at
+   * https://api-docs.deepseek.com/quick_start/pricing). Verified
+   * 2026-11-22 against
+   * https://api-docs.deepseek.com/quick_start/quick_start (`base_url
+   * (OpenAI) = https://api.deepseek.com`, `DEEPSEEK_API_KEY`); the
+   * /v1 path is the documented OpenAI-compat alias, and
+   * docs/recipes/openai-compatible-providers.md already ships this
+   * base_url.
+   */
+  deepseek: {
+    type: "openai",
+    tier: "cheap",
+    base_url: "https://api.deepseek.com",
+    api_key_env: "DEEPSEEK_API_KEY",
+    signup_url: "https://platform.deepseek.com/api_keys",
+    gaps: [],
+    docs: "https://api-docs.deepseek.com/quick_start/quick_start",
+    verified: "2026-11-22",
+  },
 };
+
+// A preset without its wire-format evidence fails here, at module
+// load — never silently at request time.
+for (const preset of Object.values(PROVIDER_PRESETS)) {
+  providerPresetSchema.parse(preset);
+}

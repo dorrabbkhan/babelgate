@@ -8592,3 +8592,71 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `packaging/winget/dorrabbkhan.babelgate.locale.en-US.yaml.tmpl`,
   `packaging/winget/dorrabbkhan.babelgate.version.yaml.tmpl`,
   `scripts/packaging/render.test.ts`, `docs/decisions.md`.
+
+## v1.6 Task 7 — preset tiers; free and cheap presets; `babelgate presets` (spec §3.3, E5)
+
+- **`openrouter-free` base_url is `https://openrouter.ai/api`, not the
+  plan parenthetical's `https://openrouter.ai/api/v1`.** babelgate
+  appends `/v1/chat/completions` itself, so the plan's literal value
+  would have produced `/api/v1/v1/chat/completions`. The corrected
+  value is the one docs/recipes/openai-compatible-providers.md
+  live-tests in the release gate and tests/live/live.helpers.ts:54
+  documents ("NOT `.../api/v1`"); OpenRouter's quickstart gives the
+  full endpoint `https://openrouter.ai/api/v1/chat/completions`.
+- **`passthrough` is implied on `tier: "shim"` presets only** (spec
+  §3.3; Global Constraints). `src/config/yaml-config.ts` now checks
+  `preset.tier === "shim"`; the five v1.5 Anthropic presets carry
+  `tier: "shim"` and behave exactly as before. Free/cheap presets
+  ride the canonical path; a `preset:` on a `gemini` or non-shim
+  `openai` entry still fills type/base_url/api_key_env/gaps.
+- **`providerPresetSchema` (zod) guards the table** — `docs`,
+  `verified` (YYYY-MM-DD) and `tier` are required; `PROVIDER_PRESETS`
+  is parsed at module load so a preset without evidence fails at
+  startup. `suggested`/`max_output_tokens` stay unset: Task 8 fills
+  only models proven on the edit task.
+- **Preset verifications, 2026-11-22** (each against the provider's
+  own docs; base URLs follow babelgate's "drop the /v1" rule from
+  docs/recipes/openai-compatible-providers.md):
+  - `openrouter-free` (free): `POST
+    https://openrouter.ai/api/v1/chat/completions`,
+    `Authorization: Bearer $OPENROUTER_API_KEY` —
+    https://openrouter.ai/docs/quickstart; free `:free` model
+    variants with per-day limits —
+    https://openrouter.ai/docs/faq. Sign-up:
+    https://openrouter.ai/keys.
+  - `gemini-free` (free): `x-goog-api-key: $GEMINI_API_KEY` at
+    `https://generativelanguage.googleapis.com/v1beta/...` —
+    https://ai.google.dev/gemini-api/docs/quickstart; Free usage
+    tier — https://ai.google.dev/gemini-api/docs/rate-limits.
+    Sign-up: https://aistudio.google.com/apikey.
+  - `groq` (free): OpenAI SDK base_url
+    `https://api.groq.com/openai/v1`, `GROQ_API_KEY` —
+    https://console.groq.com/docs/openai; free tier —
+    https://console.groq.com/docs/rate-limits. Sign-up:
+    https://console.groq.com/keys.
+  - `nvidia-nim` (free): `https://integrate.api.nvidia.com` +
+    `POST /v1/chat/completions`, `Bearer $NVIDIA_API_KEY` —
+    https://docs.api.nvidia.com/nim/reference/llm-apis; free
+    prototyping tier (~40 RPM, no card) — build.nvidia.com FAQ.
+    Sign-up: https://build.nvidia.com.
+  - `cerebras` (free):
+    `https://api.cerebras.ai/v1/chat/completions`,
+    `CEREBRAS_API_KEY`, "Free accounts have lower per-minute
+    limits" — https://inference-docs.cerebras.ai/quickstart.
+    Sign-up: https://cloud.cerebras.ai.
+  - `deepseek` (cheap): `base_url (OpenAI) =
+    https://api.deepseek.com`, `DEEPSEEK_API_KEY` —
+    https://api-docs.deepseek.com/quick_start/quick_start (the /v1
+    path is the documented OpenAI-compat alias; pricing at
+    /quick_start/pricing). Sign-up:
+    https://platform.deepseek.com/api_keys.
+- **Files outside the Files block:** `src/cli.ts` — the task's
+  interface requires `babelgate presets` to print and exit 0; the
+  only argv entry point is `parseCliArgs`/`main` there (positional
+  `presets` parsed via `allowPositionals`, printed before config
+  discovery so the command needs no babelgate.yaml).
+- **Files changed:** created `src/cli-presets.ts`,
+  `src/cli-presets.test.ts`, `src/config/provider-presets.test.ts`;
+  modified `src/config/provider-presets.ts`,
+  `src/config/gateway.schema.ts`, `src/config/yaml-config.ts`,
+  `src/cli.ts`, `docs/decisions.md`.
