@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh — install a babelgate release binary (v1.6 spec §3.2,
+# install.sh - install a babelgate release binary (v1.6 spec section 3.2,
 # Task 6, Review Focus 4). POSIX sh; no sudo; never prints secrets.
 #
 #   sh install.sh [--version <v>] [--dir <path>]
@@ -9,8 +9,8 @@
 # checks the archive's SHA-256 against the one SHA256SUMS line for it
 # (SHA256SUMS also lists files we do not download, so a whole-file
 # `sha256sum --check` is never run), verifies both Sigstore bundles
-# with cosign when cosign is on PATH — a verification failure aborts,
-# never a fallback to "unsigned is fine" — and only then moves the
+# with cosign when cosign is on PATH - a verification failure aborts,
+# never a fallback to "unsigned is fine" - and only then moves the
 # binary into place. Any failure leaves the install dir untouched.
 #
 # BABELGATE_INSTALL_BASE_URL overrides the download base URL (tests);
@@ -52,7 +52,7 @@ download_stdout() {
 }
 
 version=""
-[ -n "${HOME:-}" ] || fail "HOME is not set — pass --dir <path>"
+[ -n "${HOME:-}" ] || fail "HOME is not set - pass --dir <path>"
 dir="${HOME}/.local/bin"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -96,7 +96,7 @@ target="${os_part}-${arch_part}"
 if [ -z "$version" ]; then
   tag=$(download_stdout "${API_URL%/}/releases/latest" \
     | sed -n 's/.*"tag_name"[^"]*"\([^"]*\)".*/\1/p' | head -n 1)
-  [ -n "$tag" ] || fail "could not resolve the latest release — pass --version <v>"
+  [ -n "$tag" ] || fail "could not resolve the latest release - pass --version <v>"
   version="$tag"
 fi
 version="${version#v}"
@@ -128,7 +128,7 @@ elif command -v shasum >/dev/null 2>&1; then
 else
   fail "need sha256sum or shasum to verify the download"
 fi
-[ "$actual" = "$expected" ] || fail "SHA-256 mismatch for ${archive} (expected ${expected}, got ${actual}) — aborted, nothing installed"
+[ "$actual" = "$expected" ] || fail "SHA-256 mismatch for ${archive} (expected ${expected}, got ${actual}) - aborted, nothing installed"
 
 # Provenance: cosign keyless bundles emitted by release.yml on the v*
 # tag (SECURITY.md). A cosign failure aborts; without cosign the
@@ -141,16 +141,16 @@ if command -v cosign >/dev/null 2>&1; then
     --certificate-identity-regexp "$COSIGN_IDENTITY" \
     --certificate-oidc-issuer "$COSIGN_ISSUER" \
     "${tmp}/SHA256SUMS" >/dev/null \
-    || fail "cosign could not verify SHA256SUMS — aborted, nothing installed"
+    || fail "cosign could not verify SHA256SUMS - aborted, nothing installed"
   cosign verify-blob \
     --bundle "${tmp}/${archive}.sigstore.json" \
     --certificate-identity-regexp "$COSIGN_IDENTITY" \
     --certificate-oidc-issuer "$COSIGN_ISSUER" \
     "${tmp}/${archive}" >/dev/null \
-    || fail "cosign could not verify ${archive} — aborted, nothing installed"
+    || fail "cosign could not verify ${archive} - aborted, nothing installed"
   echo "signature verified by cosign (release.yml, keyless)"
 else
-  echo "note: cosign not found — signature not verified; verify with: cosign verify-blob --bundle ${archive}.sigstore.json --certificate-identity-regexp '${COSIGN_IDENTITY}' --certificate-oidc-issuer ${COSIGN_ISSUER} ${archive}"
+  echo "note: cosign not found - signature not verified; verify with: cosign verify-blob --bundle ${archive}.sigstore.json --certificate-identity-regexp '${COSIGN_IDENTITY}' --certificate-oidc-issuer ${COSIGN_ISSUER} ${archive}"
 fi
 
 # Everything checked: extract and move into place. The temp dir lives
@@ -163,10 +163,10 @@ dest="${dir}/babelgate"
 mv "${tmp}/x/babelgate" "$dest" || fail "could not move babelgate into ${dir}"
 echo "installed babelgate ${version} to ${dest}"
 if ! "${dest}" --version; then
-  echo "install.sh: warning: '${dest} --version' failed — the binary may not run on this system" >&2
+  echo "install.sh: warning: '${dest} --version' failed - the binary may not run on this system" >&2
 fi
 
 case ":${PATH}:" in
   *":${dir}:"*) ;;
-  *) echo "note: ${dir} is not on PATH — add it with: export PATH=\"${dir}:\$PATH\"" ;;
+  *) echo "note: ${dir} is not on PATH - add it with: export PATH=\"${dir}:\$PATH\"" ;;
 esac

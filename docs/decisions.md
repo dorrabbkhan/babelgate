@@ -8544,6 +8544,28 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `scripts/packaging/render.ts`, `scripts/packaging/render.test.ts`;
   modified `.gitignore`, `docs/decisions.md`.
 
+## v1.6 Task 6 patch: install scripts are ASCII-only
+
+- **Cause.** `install/install.ps1` carried em dashes (U+2014) in
+  messages and comments and had no BOM. Windows PowerShell 5.1 reads
+  a BOM-less script as the ANSI code page: each em dash becomes the
+  bytes `â€”`, whose trailing `”` (U+201D) is a quote to PowerShell
+  and ends the string early — the script failed to parse and never
+  ran (found by the owner on a Windows VM, 2026-11-22).
+  `install/install.sh` carried the same characters. Both scripts are
+  now pure ASCII: `—` → `-`, `§` → `section`; every message's
+  meaning and other words are unchanged.
+- **Rule.** Any script a user pipes into a shell or runs on Windows
+  PowerShell 5.1 stays ASCII — no smart quotes, dashes or `§` in
+  messages or comments.
+- **Guard.** `install/test/install.test.ts` reads each script as
+  bytes and asserts no byte above 0x7F, listing the offending line
+  numbers on failure (`install.ps1 is ASCII only`,
+  `install.sh is ASCII only`).
+- **Files changed:** modified `install/install.ps1`,
+  `install/install.sh`, `install/test/install.test.ts`,
+  `docs/decisions.md`.
+
 ## v1.6 Task 6 patch: winget schema headers
 
 - **Finding.** On the owner's Windows 11 VM (winget 1.11.510,

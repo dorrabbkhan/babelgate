@@ -154,6 +154,20 @@ function fakeBin(entries: Record<string, string>): string {
   return d;
 }
 
+// Bytes, not text: Windows PowerShell 5.1 reads a BOM-less script as
+// the ANSI code page, where a UTF-8 em dash becomes the bytes `â€”`
+// and the `”` ends a string early (v1.6 Task 6 patch, 2026-11-22).
+// Returning line numbers makes a future em dash easy to find.
+function nonAsciiLines(path: string): number[] {
+  const lines = new Set<number>();
+  let line = 1;
+  for (const byte of readFileSync(path)) {
+    if (byte > 0x7f) lines.add(line);
+    if (byte === 0x0a) line += 1;
+  }
+  return [...lines];
+}
+
 describe("install/install.sh (v1.6 §3.2, Task 6)", () => {
   it("installs into --dir and prints version", async () => {
     const installDir = dir();
@@ -265,6 +279,15 @@ describe("install/install.sh (v1.6 §3.2, Task 6)", () => {
     const r = spawnSync("shellcheck", [SCRIPT], { encoding: "utf8" });
     expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
   });
+
+  it("install.sh is ASCII only", () => {
+    // A user pipes this script into a shell; keep it pure ASCII like
+    // install.ps1 so no locale or code page can mangle it.
+    const bad = nonAsciiLines(SCRIPT);
+    expect(bad, `non-ASCII byte(s) on line(s): ${bad.join(", ")}`).toEqual(
+      [],
+    );
+  });
 });
 
 describe("install/install.ps1 (v1.6 §3.2, Task 6)", () => {
@@ -280,5 +303,12 @@ describe("install/install.ps1 (v1.6 §3.2, Task 6)", () => {
     expect(text).toContain("certificate-identity-regexp");
     expect(text).toContain("BABELGATE_INSTALL_BASE_URL");
     expect(text).toContain("Set-StrictMode");
+  });
+
+  it("install.ps1 is ASCII only", () => {
+    const bad = nonAsciiLines(PS1);
+    expect(bad, `non-ASCII byte(s) on line(s): ${bad.join(", ")}`).toEqual(
+      [],
+    );
   });
 });

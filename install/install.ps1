@@ -1,14 +1,14 @@
-# install.ps1 — install a babelgate release binary on Windows (v1.6
-# spec §3.2, Task 6, Review Focus 4). Mirrors install.sh; no sudo.
+# install.ps1 - install a babelgate release binary on Windows (v1.6
+# spec section 3.2, Task 6, Review Focus 4). Mirrors install.sh; no sudo.
 #
 #   powershell -ExecutionPolicy Bypass -File install.ps1 [-Version <v>] [-Dir <path>]
 #
 # Downloads babelgate-<v>-win-x64.zip and SHA256SUMS from the GitHub
 # release into a temp dir inside the install dir's filesystem, checks
 # the zip's SHA-256 against the one SHA256SUMS line for it, verifies
-# both Sigstore bundles with cosign when cosign is on PATH — a
+# both Sigstore bundles with cosign when cosign is on PATH - a
 # verification failure aborts, never a fallback to "unsigned is
-# fine" — and only then moves babelgate.exe into place. Any failure
+# fine" - and only then moves babelgate.exe into place. Any failure
 # leaves the install dir untouched.
 #
 # BABELGATE_INSTALL_BASE_URL overrides the download base URL (tests);
@@ -65,7 +65,7 @@ if (-not $Version) {
   try {
     $release = Invoke-RestMethod -Uri "$($ApiUrl.TrimEnd('/'))/releases/latest"
   } catch {
-    Fail "could not resolve the latest release — pass -Version <v>"
+    Fail "could not resolve the latest release - pass -Version <v>"
   }
   $Version = $release.tag_name
 }
@@ -90,7 +90,7 @@ try {
   $expected = ($line -split '\s+')[0]
   $actual = (Get-FileHash -Algorithm SHA256 (Join-Path $tmp $Archive)).Hash.ToLowerInvariant()
   if ($actual -ne $expected) {
-    Fail "SHA-256 mismatch for $Archive (expected $expected, got $actual) — aborted, nothing installed"
+    Fail "SHA-256 mismatch for $Archive (expected $expected, got $actual) - aborted, nothing installed"
   }
 
   # Provenance: cosign keyless bundles emitted by release.yml on the
@@ -105,7 +105,7 @@ try {
       --certificate-oidc-issuer $CosignIssuer `
       (Join-Path $tmp 'SHA256SUMS') | Out-Null
     if ($LASTEXITCODE -ne 0) {
-      Fail 'cosign could not verify SHA256SUMS — aborted, nothing installed'
+      Fail 'cosign could not verify SHA256SUMS - aborted, nothing installed'
     }
     & cosign verify-blob `
       --bundle (Join-Path $tmp "$Archive.sigstore.json") `
@@ -113,11 +113,11 @@ try {
       --certificate-oidc-issuer $CosignIssuer `
       (Join-Path $tmp $Archive) | Out-Null
     if ($LASTEXITCODE -ne 0) {
-      Fail "cosign could not verify $Archive — aborted, nothing installed"
+      Fail "cosign could not verify $Archive - aborted, nothing installed"
     }
     Write-Output 'signature verified by cosign (release.yml, keyless)'
   } else {
-    Write-Output "note: cosign not found — signature not verified; verify with: cosign verify-blob --bundle $Archive.sigstore.json --certificate-identity-regexp '$CosignIdentity' --certificate-oidc-issuer $CosignIssuer $Archive"
+    Write-Output "note: cosign not found - signature not verified; verify with: cosign verify-blob --bundle $Archive.sigstore.json --certificate-identity-regexp '$CosignIdentity' --certificate-oidc-issuer $CosignIssuer $Archive"
   }
 
   # Everything checked: extract and move into place. The temp dir
@@ -131,12 +131,12 @@ try {
   Write-Output "installed babelgate $Version to $dest"
   & $dest --version
   if ($LASTEXITCODE -ne 0) {
-    [Console]::Error.WriteLine("install.ps1: warning: '$dest --version' failed — the binary may not run on this system")
+    [Console]::Error.WriteLine("install.ps1: warning: '$dest --version' failed - the binary may not run on this system")
   }
 
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if (-not $userPath -or (($userPath -split ';') -notcontains $Dir)) {
-    Write-Output "note: $Dir is not on your user PATH — add it to run 'babelgate' from anywhere"
+    Write-Output "note: $Dir is not on your user PATH - add it to run 'babelgate' from anywhere"
   }
 } finally {
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
