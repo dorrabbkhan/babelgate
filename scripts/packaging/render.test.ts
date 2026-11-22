@@ -156,6 +156,35 @@ describe("scripts/packaging/render.ts (v1.6 §3.2)", () => {
     expect(locale.Publisher).toBe("dorrabbkhan");
   });
 
+  it("winget manifests carry the schema header on line 1", () => {
+    const out = dir();
+    render(VERSION, writeSums(allFiles()), out);
+
+    const base = join(
+      out,
+      "winget",
+      "manifests",
+      "d",
+      "dorrabbkhan",
+      "babelgate",
+      VERSION,
+    );
+    // winget validate warns "Schema header not found" and exits
+    // non-zero without this first line (wingetcreate writes it).
+    const headers: Record<string, string> = {
+      "dorrabbkhan.babelgate.installer.yaml":
+        "# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json",
+      "dorrabbkhan.babelgate.locale.en-US.yaml":
+        "# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json",
+      "dorrabbkhan.babelgate.version.yaml":
+        "# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.9.0.schema.json",
+    };
+    for (const [file, header] of Object.entries(headers)) {
+      const firstLine = readFileSync(join(base, file), "utf8").split("\n")[0];
+      expect(firstLine).toBe(header);
+    }
+  });
+
   it("a missing target exits non-zero naming it", () => {
     const missing = `babelgate-${VERSION}-linux-arm64.tar.gz`;
     const sums = writeSums(allFiles().filter((n) => n !== missing));
