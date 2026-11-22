@@ -86,8 +86,9 @@ const PROVIDER_NAME = /^[a-z0-9][a-z0-9_-]*$/;
 
 const providerEntrySchema = z
   .strictObject({
-    // v1.5 spec §3.3: `preset` fills type/base_url/api_key_env/gaps
-    // for a known shim endpoint; every explicit key overrides it.
+    // v1.5 spec §3.3, widened by v1.6 spec §3.3: `preset` fills
+    // type/base_url/api_key_env/gaps for a known endpoint (shim,
+    // free or cheap tier); every explicit key overrides it.
     preset: z.enum(PRESET_NAMES).optional(),
     type: z
       .enum(["openai", "anthropic", "gemini", "ollama", "responses"])
@@ -105,7 +106,8 @@ const providerEntrySchema = z
     reasoning: z.boolean().optional(),
     // v1.5 spec §3.3: same-format pass-through opt-in. Only anthropic
     // and openai entries have a relay (responses entries pass through
-    // automatically; a shim preset implies it — Task 9).
+    // automatically; a `tier: "shim"` preset implies it — v1.6 §3.3;
+    // free/cheap presets never do).
     passthrough: z.boolean().optional(),
     timeout_ms: z.number().int().positive().optional(),
     stream_idle_ms: z.number().int().positive().optional(),

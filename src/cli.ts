@@ -2,12 +2,15 @@
 import { parseArgs } from "node:util";
 import type { Provider } from "./transformers/adapters";
 import { getConfig, setConfigPath } from "./config/env-config";
+import { PROVIDER_PRESETS } from "./config/provider-presets";
 import { resolveConfigPath } from "./config/yaml-config";
+import { formatPresetList } from "./cli-presets";
 import { installSqliteWarningFilter } from "./observe/sqlite";
 import { formatRoutingTable } from "./routing/table";
 import { startServer } from "./index";
 
 export interface CliArgs {
+  command?: "presets";
   preset?: "claude-code" | "openai-apps";
   target?: Provider;
   model?: string;
@@ -32,9 +35,10 @@ const PROVIDERS: Provider[] = [
  * naming the flag; upstream keys only ever come from the environment.
  */
 export function parseCliArgs(argv: string[]): CliArgs {
-  const { values } = parseArgs({
+  const { values, positionals } = parseArgs({
     args: argv,
     strict: true,
+    allowPositionals: true,
     options: {
       preset: { type: "string" },
       target: { type: "string" },
@@ -84,6 +88,14 @@ export function parseCliArgs(argv: string[]): CliArgs {
   }
   if (values.help) args.help = true;
   if (values.version) args.version = true;
+  for (const positional of positionals) {
+    // `babelgate presets` (v1.6 spec §3.3) is the only subcommand.
+    if (positional === "presets" && args.command === undefined) {
+      args.command = "presets";
+    } else {
+      throw new Error(`unexpected argument "${positional}"`);
+    }
+  }
   return args;
 }
 
@@ -230,6 +242,7 @@ function usageLines(): string[] {
     "Usage: babelgate [--preset <claude-code|openai-apps>] [--target <provider>]",
     "                 [--model <name>] [--base-url <url>] [--port <n>]",
     "                 [--config <path>] [--help] [--version]",
+    "       babelgate presets",
     "",
     "Config file discovery: --config, then BABELGATE_CONFIG,",
     "then ./babelgate.yaml. Upstream API keys come only from the environment",
@@ -251,6 +264,12 @@ export async function main(argv: string[]): Promise<void> {
       // SEA bundle — one version source for every distribution.
       const pkg = require("../package.json") as { version: string };
       console.log(`babelgate ${pkg.version}`);
+      return;
+    }
+    if (args.command === "presets") {
+      for (const line of formatPresetList(PROVIDER_PRESETS)) {
+        console.log(line);
+      }
       return;
     }
 

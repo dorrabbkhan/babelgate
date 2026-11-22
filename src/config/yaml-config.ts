@@ -198,9 +198,11 @@ export function loadYamlConfig(
           ? {}
           : { reasoning: provider.reasoning }),
         // §3.3 (D6): explicit `passthrough:` opt-in; a preset implies
-        // it when the key is absent.
+        // it when the key is absent — v1.6 §3.3: only on
+        // `tier: "shim"` presets (the five Anthropic-endpoint shims);
+        // free/cheap presets ride the canonical path.
         ...(provider.passthrough === undefined
-          ? preset === undefined
+          ? preset === undefined || preset.tier !== "shim"
             ? {}
             : { passthrough: true }
           : { passthrough: provider.passthrough }),
