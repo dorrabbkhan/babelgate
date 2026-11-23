@@ -9210,3 +9210,68 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   (b) return a clear error for a non-JSON content type on `/api/chat`
   (today: `Cannot read properties of undefined (reading 'think')`);
   (c) recipes for Cline and Goose.
+
+## v1.6 Task 12 — recipes + tested examples: LangChain, LlamaIndex, Vercel AI SDK, Ollama apps (spec §3.4)
+
+- **Four recipe pages** under `docs/recipes/`: `langchain.md`
+  (`ChatOpenAI` `configuration.baseURL`), `llamaindex.md`
+  (`@llamaindex/openai`'s `OpenAI` `baseURL`), `vercel-ai-sdk.md`
+  (`createOpenAI` `baseURL`, `openai.chat()` pinning Chat
+  Completions) and `ollama-apps.md` (Ollama-only apps — any client of
+  `POST /api/chat`, including the `ollama` JS library's
+  `new Ollama({ host })` — on cloud models: the matrix's unique
+  Ollama-client → non-Ollama-backend cell). Each page carries the
+  `babelgate --provider openrouter-free` first run (the three SDK
+  pages also `--preset openai-apps`), the compat-matrix "what works /
+  what doesn't" links, and names the pinned package versions its
+  example is checked against in CI.
+- **Checked in CI, not by hand** (spec §3.4 splits SDK recipes — CI
+  examples — from app recipes — hand checks):
+  `examples/sdk/sdk.examples.test.ts` listens on `app.listen(0)` and
+  drives each example's `run(baseUrl)` against it while msw serves
+  the upstream (same pattern as the integration suite, real SDKs
+  instead of supertest): LangChain OpenAI→Gemini, LlamaIndex
+  OpenAI→Anthropic, Vercel AI SDK OpenAI→OpenAI with a two-turn
+  `get_weather` tool call (recorded `tool_call` fixture, then a
+  `role: "tool"` message asserted on the captured second upstream
+  request), ollama-js Ollama→Gemini. Each example file under
+  `examples/sdk/` exports `run(baseUrl): Promise<string>` and doubles
+  as a `npx ts-node` script.
+- **Wire-format/doc evidence** (Global Constraints): the recipes were
+  written against
+  docs.langchain.com/oss/javascript/integrations/chat/openai,
+  developers.llamaindex.ai/typescript/framework/modules/models/llms/openai/,
+  ai-sdk.dev/providers/ai-sdk-providers/openai +
+  ai-sdk.dev/docs/reference/ai-sdk-core/generate-text, and
+  github.com/ollama/ollama-js + docs.ollama.com/api (all accessed
+  2026-11-23; cited on the pages). Installed packages
+  (`@langchain/openai` 1.8.4, `@llamaindex/openai` 0.4.22 +
+  `llamaindex` 0.12.1, `ai` 7.0.173 + `@ai-sdk/openai` 4.0.118,
+  `ollama` 0.6.4) are all ≥ 7 days old per the dependency rule.
+- **`package.json`/`package-lock.json` deviations from the allowed
+  Task 12 list** (Global Constraints names `@langchain/openai`,
+  `llamaindex`, `ai` + `@ai-sdk/openai`; `ollama` was already
+  present):
+  1. **`@llamaindex/openai` 0.4.22 added** — unavoidable: the
+     `llamaindex` umbrella 0.12.1 ships no provider classes (its
+     dependencies are only `@llamaindex/core`, `/env`,
+     `/node-parser`, `/workflow`); the `OpenAI` LLM lives in the
+     separate `@llamaindex/openai` package, so the recipe's install
+     line is `npm i llamaindex @llamaindex/openai` and the page says
+     why.
+  2. **`openai` devDependency range `^7.30.1` → `^7.57.0`** —
+     `@langchain/openai` 1.8.4 declares `openai: ^7.47.0` as a real
+     (non-peer) dependency, so npm must place openai ≥ 7.47 at the
+     root for dedupe regardless of the declared floor (main's lock
+     pinned exactly 7.30.1). Bumping the range names the version npm
+     resolves anyway and keeps one hoisted openai 7.x for the repo's
+     type-only imports (`src/types/openai.types.ts`,
+     `src/types/responses.types.ts`, `tests/contracts/stream-sdk.test.ts`)
+     and the SDK's runtime copy; `@llamaindex/openai` still nests its
+     own `openai@^5.12.0`, which no root range can dedupe.
+- **README recipe index only:** the four recipes join the client
+  list; no other README change (full restructure is Task 15).
+- **Files outside the Files block:** `package.json` and
+  `package-lock.json` — Global Constraints permits
+  package.json/package-lock.json changes in Task 12 "for the SDK
+  examples only"; the two deviations inside them are itemised above.
