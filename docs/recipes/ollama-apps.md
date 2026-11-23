@@ -88,8 +88,13 @@ npx ts-node examples/sdk/ollama-app.ts http://localhost:3000
   [`stream_tools`](../compatibility.md#tool-calls-streaming-stream_tools));
   keep `tool_name` on tool-result messages — a result without one can
   fail to pair on strict targets.
-- **Embeddings** — `POST /api/embed` routes like chat.
 - **`GET /api/tags`** — the merged model catalog.
+- **Embeddings — not served:** `POST /api/embed` returns 404 —
+  inbound embeddings are OpenAI-dialect only (`POST /v1/embeddings`),
+  and `/api/embed` exists only as an outbound path when Ollama is the
+  target. An Ollama app that needs embeddings should point that one
+  call at `/v1/embeddings` through an OpenAI-style client, or at
+  Ollama directly.
 - **Not served:** `pull`, `show`, `create`, `generate`,
   `api/version` — model management stays at the provider; apps that
   probe `/api/version` in a verify step (Open WebUI's Ollama-mode

@@ -45,11 +45,14 @@ export OPENAI_BASE_URL=http://localhost:3000/v1
 export OPENAI_API_KEY=babelgate
 ```
 
-`ChatOpenAI` reads `OPENAI_API_KEY` from the environment but **not**
-`OPENAI_BASE_URL` — pass `baseURL` in code as below. The key line is the
-value to use: `babelgate` is a placeholder for local dev (no
-`PROXY_API_KEY` → no client auth); with `PROXY_API_KEY` set, pass that
-key instead.
+`ChatOpenAI` **does** read `OPENAI_BASE_URL` from the environment —
+the pinned `@langchain/openai` 1.8.4 falls back to env
+`OPENAI_API_BASE` / `OPENAI_BASE_URL` after `configuration.baseURL`
+and a top-level `baseUrl` — so exporting the two lines works. The
+`configuration: { baseURL }` form below is still the clearest: it does
+not depend on the environment. The key line is the value to use:
+`babelgate` is a placeholder for local dev (no `PROXY_API_KEY` → no
+client auth); with `PROXY_API_KEY` set, pass that key instead.
 
 ## Point LangChain at it
 
