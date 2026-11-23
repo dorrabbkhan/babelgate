@@ -9269,6 +9269,15 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
      `src/types/responses.types.ts`, `tests/contracts/stream-sdk.test.ts`)
      and the SDK's runtime copy; `@llamaindex/openai` still nests its
      own `openai@^5.12.0`, which no root range can dedupe.
+- **`package-lock.json` generated to satisfy both npm 10 and npm 11**
+  (CI runs `npm ci` on Node 22's npm 10 and Node 24's npm 11): the
+  nested `openai@5` under `@llamaindex/openai` declares an optional
+  peer `zod ^3.23.8`; npm 11 leaves it unmaterialized, npm 10
+  requires a lock node for it and fails `npm ci` with
+  `Missing: zod@3.25.76 from lock file` without one. The lock
+  therefore carries `node_modules/@llamaindex/openai/node_modules/zod`
+  (3.25.76, `peer` + `optional`) on top of npm 11's tree — verified
+  with `npm ci --dry-run` on npm 10.9.11 and npm 11.19.1.
 - **README recipe index only:** the four recipes join the client
   list; no other README change (full restructure is Task 15).
 - **Files outside the Files block:** `package.json` and
