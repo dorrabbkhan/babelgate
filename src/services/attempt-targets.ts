@@ -1,6 +1,8 @@
 import type { ProviderEntry, ProviderRegistry } from "../routing/registry";
 import type { RoutePlan, RouteTarget } from "../routing/plan-route";
 import { hopOutcome, isFallbackEligible } from "../routing/fallback";
+import type { Breakers } from "../routing/circuit-breaker";
+import { PROVIDER_PRESETS } from "../config/provider-presets";
 import type { Hop } from "../routing/route-log";
 import type { Provider } from "../transformers";
 import { systemText } from "../transformers/system-text";
@@ -26,6 +28,11 @@ export interface AttemptResult<T> {
   target: RouteTarget;
   entry: ProviderEntry;
   hops: Hop[];
+  /**
+   * attempt() calls made — the x-babelgate-attempts count. `hops` may
+   * also carry skipped_open entries (§3.5), which are not attempts.
+   */
+  attempts: number;
 }
 
 /**
@@ -305,6 +312,28 @@ export interface AttemptCtx {
 }
 
 /**
+ * Review Focus 1 (v1.6 spec §3.5): a 429 from a `tier: "free"` preset
+ * — e.g. OpenRouter's daily free cap — gains a hint naming the preset
+ * and its limits doc, appended to the source-dialect message the
+ * client sees (`clientError` when toClientFacing already rendered
+ * it, `err.message` otherwise).
+ */
+function freeTierHint(entry: ProviderEntry, err: unknown): void {
+  if (!(err instanceof UpstreamError)) return;
+  if (err.upstreamStatus !== 429 || entry.preset === undefined) return;
+  const preset = PROVIDER_PRESETS[entry.preset];
+  if (preset.tier !== "free") return;
+  const hint = ` (free tier: ${entry.preset}, limits per ${preset.docs})`;
+  err.message += hint;
+  if (err.clientError !== undefined) {
+    err.clientError = {
+      ...err.clientError,
+      message: `${err.clientError.message}${hint}`,
+    };
+  }
+}
+
+/**
  * The fallback loop shared by both chat services (spec §3.4): try each
  * of plan's targets in order. A client abort rethrows immediately —
  * no further target is tried. A fallback-eligible failure with targets
@@ -313,28 +342,69 @@ export interface AttemptCtx {
  * is rethrown. `ctx.hops`, when given, is filled with every upstream
  * hop (ok and failed) so the caller can emit the route log line even on
  * failure; the same array is returned on success.
+ *
+ * §3.5: with `breakers`, a target whose circuit is open is skipped in
+ * order (a `skipped_open` hop, never a call) and each attempt records
+ * its outcome — an eligible failure feeds the counter even on the
+ * plan's last target; a success closes the circuit. When every target
+ * is open the first is still tried: the gateway never refuses locally
+ * on a guess.
  */
 export async function attemptTargets<T>(
   plan: RoutePlan,
   registry: ProviderRegistry,
   attempt: (entry: ProviderEntry, target: RouteTarget) => Promise<T>,
   ctx: AttemptCtx,
+  breakers?: Breakers,
 ): Promise<AttemptResult<T>> {
   const hops = ctx.hops ?? [];
 
+  // The open set is read once up front: nothing inside a single
+  // attempt loop can close a breaker, and a freshly opened target was
+  // already tried. `queue` is the targets to attempt — every one
+  // when no breakers are given.
+  const open = new Set(
+    breakers === undefined
+      ? []
+      : plan.targets.filter((t) => breakers.isOpen(t.provider)),
+  );
+  const queue =
+    open.size === 0
+      ? plan.targets
+      : open.size < plan.targets.length
+        ? plan.targets.filter((t) => !open.has(t))
+        : [plan.targets[0]!];
+  const skipped = (t: RouteTarget): boolean =>
+    open.has(t) && !queue.includes(t);
+  const skipHop = (t: RouteTarget): void => {
+    hops.push({
+      provider: t.provider,
+      model: t.model,
+      outcome: "skipped_open",
+      ms: 0,
+    });
+  };
+
+  let attempts = 0;
   for (const [index, target] of plan.targets.entries()) {
+    if (skipped(target)) {
+      skipHop(target);
+      continue;
+    }
     const entry = registry.get(target.provider);
     ctx.inFlight = entry;
+    attempts += 1;
     const start = Date.now();
     try {
       const value = await attempt(entry, target);
+      breakers?.recordSuccess(target.provider);
       hops.push({
         provider: target.provider,
         model: target.model,
         outcome: "ok",
         ms: Date.now() - start,
       });
-      return { value, target, entry, hops };
+      return { value, target, entry, hops, attempts };
     } catch (err) {
       // Client went away — stop; try no further target.
       if (ctx.signal?.aborted) throw err;
@@ -354,16 +424,22 @@ export async function attemptTargets<T>(
         });
       }
 
-      if (
-        index < plan.targets.length - 1 &&
-        isFallbackEligible(err)
-      ) {
+      freeTierHint(entry, err);
+      const eligible = isFallbackEligible(err);
+      if (eligible) breakers?.recordFailure(target.provider);
+      const last = queue.indexOf(target) === queue.length - 1;
+      if (eligible && !last) {
         continue;
+      }
+      // Targets the loop never reached still get their skip hop, so a
+      // terminal error's route log shows the open circuits past it.
+      for (const t of plan.targets.slice(index + 1)) {
+        if (skipped(t)) skipHop(t);
       }
       if (err instanceof ProxyError) {
         err.responseHeaders = {
           ...err.responseHeaders,
-          "x-babelgate-attempts": String(index + 1),
+          "x-babelgate-attempts": String(attempts),
         };
       }
       throw err;

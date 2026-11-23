@@ -9,8 +9,10 @@ import {
 import { createRegistry } from "../routing/registry";
 import type { ProviderEntry } from "../routing/registry";
 import type { RoutePlan } from "../routing/plan-route";
+import { createBreakers } from "../routing/circuit-breaker";
 import type { CanonicalRequest } from "../types/canonical.types";
 import { UpstreamError } from "../utils/errors";
+import { makeCanonicalError } from "../utils/canonical-error";
 import { runWithTrace } from "../observe/context";
 import { newTrace } from "../observe/trace";
 
@@ -186,6 +188,180 @@ describe("attemptTargets", () => {
     expect(hops).toHaveLength(2);
     expect(hops[0]!.outcome).toBe("http_error");
     expect(hops[1]!.outcome).toBe("http_error");
+  });
+});
+
+describe("circuit breaker (v1.6 spec §3.5)", () => {
+  const openCfg = {
+    failures: 1,
+    cooldownMs: 60_000,
+    maxCooldownMs: 60_000,
+  };
+
+  it("non-eligible error does not count", async () => {
+    const breakers = createBreakers({});
+    const ctx = { requestId: "r1" };
+
+    // A 400 is not fallback-eligible — it must not feed the counter:
+    // if it did, the second 503 below would already open the circuit.
+    const nonEligible = vi
+      .fn()
+      .mockRejectedValue(new UpstreamError("bad", 400, {}));
+    await attemptTargets(plan2, registry2(), nonEligible, ctx, breakers)
+      .catch(() => {});
+    const eligible = vi
+      .fn()
+      .mockRejectedValue(new UpstreamError("down", 503, {}));
+    await attemptTargets(plan2, registry2(), eligible, ctx, breakers).catch(
+      () => {},
+    );
+    await attemptTargets(plan2, registry2(), eligible, ctx, breakers).catch(
+      () => {},
+    );
+
+    expect(breakers.isOpen("primary")).toBe(false);
+    expect(
+      breakers.snapshot().find((s) => s.provider === "primary")
+        ?.consecutiveFailures,
+    ).toBe(2);
+  });
+
+  it("open target skipped with hop", async () => {
+    const breakers = createBreakers({ primary: openCfg });
+    breakers.recordFailure("primary");
+    const attempt = vi.fn().mockResolvedValue("done");
+
+    const result = await attemptTargets(
+      plan2,
+      registry2(),
+      attempt,
+      { requestId: "r1" },
+      breakers,
+    );
+
+    // The open primary is never called; the fallback takes over and
+    // the route log says why.
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(result.target).toEqual({ provider: "second", model: "m2" });
+    expect(result.hops).toHaveLength(2);
+    expect(result.hops[0]).toMatchObject({
+      provider: "primary",
+      model: "m1",
+      outcome: "skipped_open",
+      ms: 0,
+    });
+    expect(result.hops[1]).toMatchObject({
+      provider: "second",
+      model: "m2",
+      outcome: "ok",
+    });
+  });
+
+  // Review Focus 1: the gateway never refuses locally on a guess —
+  // with every target open the first is still tried.
+  it("all-open plan still tries first target", async () => {
+    const breakers = createBreakers({
+      primary: openCfg,
+      second: openCfg,
+    });
+    breakers.recordFailure("primary");
+    breakers.recordFailure("second");
+    const attempt = vi.fn().mockResolvedValue("done");
+
+    const result = await attemptTargets(
+      plan2,
+      registry2(),
+      attempt,
+      { requestId: "r1" },
+      breakers,
+    );
+
+    expect(attempt).toHaveBeenCalledTimes(1);
+    expect(result.value).toBe("done");
+    expect(result.target).toEqual({ provider: "primary", model: "m1" });
+    expect(result.hops[0]).toMatchObject({
+      provider: "primary",
+      outcome: "ok",
+    });
+  });
+
+  // Review Focus 1: a 429 on a free-tier preset carries a hint naming
+  // the preset and its limits doc, in the source's dialect.
+  it("free-tier 429 carries preset hint", async () => {
+    const registry = () =>
+      createRegistry([
+        {
+          name: "freeter",
+          type: "openai",
+          baseUrl: "http://freeter.test",
+          preset: "openrouter-free",
+        },
+      ]);
+    const plan: RoutePlan = {
+      targets: [{ provider: "freeter", model: "m" }],
+      reason: "default",
+    };
+    // The attempt throws the error postJson produces after
+    // toClientFacing — clientError is the source-dialect message.
+    const err429 = new UpstreamError("rate limited", 429, {});
+    err429.clientError = makeCanonicalError("rate_limit", "rate limited");
+    const attempt = vi.fn().mockRejectedValue(err429);
+
+    const err = await attemptTargets(plan, registry(), attempt, {
+      requestId: "r1",
+    }).catch((e) => e);
+
+    expect(err).toBe(err429);
+    expect(err.toCanonical().message).toContain(
+      " (free tier: openrouter-free, limits per https://openrouter.ai/docs/quickstart)",
+    );
+    expect(err.toCanonical().kind).toBe("rate_limit");
+  });
+
+  it("non-free preset and non-429 carry no hint", async () => {
+    const registry = () =>
+      createRegistry([
+        {
+          name: "cheap",
+          type: "openai",
+          baseUrl: "http://cheap.test",
+          preset: "deepseek",
+        },
+        {
+          name: "free2",
+          type: "openai",
+          baseUrl: "http://free2.test",
+          preset: "openrouter-free",
+        },
+      ]);
+    const plan: RoutePlan = {
+      targets: [{ provider: "cheap", model: "m" }],
+      reason: "default",
+    };
+    const err429 = new UpstreamError("rate limited", 429, {});
+    const err = await attemptTargets(
+      plan,
+      registry(),
+      vi.fn().mockRejectedValue(err429),
+      { requestId: "r1" },
+    ).catch((e) => e);
+
+    // deepseek is tier "cheap" — no free-tier hint.
+    expect(err.message).not.toContain("free tier");
+
+    // And a non-429 on the free preset gets no hint either.
+    const plan2free: RoutePlan = {
+      targets: [{ provider: "free2", model: "m" }],
+      reason: "default",
+    };
+    const err503 = new UpstreamError("down", 503, {});
+    const err2 = await attemptTargets(
+      plan2free,
+      registry(),
+      vi.fn().mockRejectedValue(err503),
+      { requestId: "r1" },
+    ).catch((e) => e);
+    expect(err2.message).not.toContain("free tier");
   });
 });
 

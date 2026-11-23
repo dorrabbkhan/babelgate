@@ -417,6 +417,7 @@ export async function passthroughCountTokens(opts: {
         },
       ),
     { requestId, signal: opts.signal },
+    config.breakers,
   );
 
   // The first non-relayable target: the §3.5 local answer.
@@ -437,7 +438,7 @@ export async function passthroughCountTokens(opts: {
       ...relayResponseHeaders(result.value.upstream.headers),
       "x-babelgate-provider": result.target.provider,
       "x-babelgate-model": result.target.model,
-      "x-babelgate-attempts": String(result.hops.length),
+      "x-babelgate-attempts": String(result.attempts),
     },
   };
 }

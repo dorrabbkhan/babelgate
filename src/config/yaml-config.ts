@@ -10,10 +10,16 @@ import type {
 import { parseTarget } from "../routing/rules";
 import { ConfigurationError } from "../utils/errors";
 import {
+  circuitBreakerDisabled,
   parseMedia,
   parseObserve,
   type GatewayConfig,
 } from "./env-config";
+import {
+  BREAKER_DEFAULTS,
+  createBreakers,
+  type BreakerConfig,
+} from "../routing/circuit-breaker";
 import { gatewayFileSchema } from "./gateway.schema";
 import { PROVIDER_PRESETS } from "./provider-presets";
 
@@ -257,6 +263,24 @@ export function loadYamlConfig(
     rules,
   };
 
+  // §3.5: per-provider `circuit_breaker:` keys — `false` disables,
+  // an object overrides the spec defaults per key; a provider with
+  // no key gets the defaults inside createBreakers.
+  const breakerCfg: Record<string, BreakerConfig | false> = {};
+  for (const [name, provider] of Object.entries(file.providers)) {
+    const cb = provider.circuit_breaker;
+    if (cb === undefined) continue;
+    breakerCfg[name] =
+      cb === false
+        ? false
+        : {
+            failures: cb.failures ?? BREAKER_DEFAULTS.failures,
+            cooldownMs: cb.cooldown_ms ?? BREAKER_DEFAULTS.cooldownMs,
+            maxCooldownMs:
+              cb.max_cooldown_ms ?? BREAKER_DEFAULTS.maxCooldownMs,
+          };
+  }
+
   // §3.6: `provider/model`-glob → USD/1M overrides; snake_case keys in
   // the file become camelCase PriceOverride fields.
   const prices: GatewayConfig["prices"] =
@@ -298,5 +322,9 @@ export function loadYamlConfig(
     // §3.2.2: media: keys — MEDIA_FETCH / MEDIA_ALLOW_PRIVATE win.
     media: parseMedia(env, file.media),
     prices,
+    // §3.5: CIRCUIT_BREAKER=off removes the breakers entirely.
+    ...(circuitBreakerDisabled(env)
+      ? {}
+      : { breakers: createBreakers(breakerCfg) }),
   };
 }

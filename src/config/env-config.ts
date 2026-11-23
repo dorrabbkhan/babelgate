@@ -7,6 +7,10 @@ import {
   createRegistry,
   type ProviderRegistry,
 } from "../routing/registry";
+import {
+  createBreakers,
+  type Breakers,
+} from "../routing/circuit-breaker";
 import type { RoutingConfig } from "../routing/plan-route";
 import {
   ignoredEnvKeys,
@@ -70,6 +74,14 @@ export interface GatewayConfig {
   media?: { fetch: boolean; allowPrivate: boolean };
   /** Top-level `prices:` overrides (spec §3.6); YAML only. */
   prices?: Record<string, PriceOverride>;
+  /**
+   * The process's passive circuit breakers (v1.6 spec §3.5), built at
+   * config load so their lifetime is the config's. Per-provider
+   * `circuit_breaker:` keys tune or disable it in YAML mode;
+   * `CIRCUIT_BREAKER=off` leaves this undefined — no breakers at all.
+   * Optional so tests can build configs field by field.
+   */
+  breakers?: Breakers;
 }
 
 /**
@@ -265,6 +277,10 @@ export function loadConfig(): EnvConfig {
     routing,
     observe: parseObserve(process.env),
     media: parseMedia(process.env),
+    // §3.5: env mode is one provider on the default breaker settings.
+    ...(circuitBreakerDisabled(process.env)
+      ? {}
+      : { breakers: createBreakers({}) }),
     deprecatedEnv:
       process.env.SOURCE_API !== undefined ? ["SOURCE_API"] : [],
   };
@@ -319,6 +335,16 @@ export interface ObserveYaml {
   inspector_buffer?: number;
   log_bodies?: boolean;
   would_cost_reference?: string;
+}
+
+/**
+ * `CIRCUIT_BREAKER` (v1.6 spec §3.5): `off` disables the passive
+ * breaker process-wide, in env and YAML modes alike — shared by
+ * loadConfig and loadYamlConfig, the same env-wins pattern the
+ * observe: keys use.
+ */
+export function circuitBreakerDisabled(env: NodeJS.ProcessEnv): boolean {
+  return !parseBoolEnv("CIRCUIT_BREAKER", env.CIRCUIT_BREAKER, true);
 }
 
 function parseBoolEnv(

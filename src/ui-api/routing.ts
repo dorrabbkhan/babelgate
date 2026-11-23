@@ -76,6 +76,8 @@ export function routingRouter(): Router {
         rules: config.routing.rules,
         defaultProvider: config.routing.defaultProvider,
         prices,
+        // v1.6 spec §3.5: live breaker state per provider.
+        breakers: config.breakers?.snapshot() ?? [],
       });
     } catch (err) {
       next(err);

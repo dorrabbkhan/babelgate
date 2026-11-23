@@ -1,10 +1,14 @@
 import type { Provider } from "../transformers";
 
-/** One tried route target (spec §3.4 route log line). */
+/**
+ * One tried route target (spec §3.4 route log line). `skipped_open`
+ * is the v1.6 §3.5 circuit-breaker outcome: the target was never
+ * called — its breaker was open.
+ */
 export interface Hop {
   provider: string;
   model: string;
-  outcome: "ok" | "http_error" | "timeout" | "transport";
+  outcome: "ok" | "http_error" | "timeout" | "transport" | "skipped_open";
   status?: number;
   ms: number;
 }

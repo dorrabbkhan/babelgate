@@ -8954,3 +8954,71 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
 - **Files changed:** modified `src/ui-api/requests.ts`,
   `src/ui-api/requests.test.ts`, `docs/decisions.md` — all inside
   the Files block.
+
+## v1.6 Task 9 — passive circuit breaker (spec §3.5, conductor's call (d), Review Focus 1)
+
+- **Where the state machine lives.** `src/routing/circuit-breaker.ts`
+  exports `createBreakers(cfg, now?)`: `cfg` is a sparse provider-name →
+  `BreakerConfig | false` record (absent = spec defaults 3 failures,
+  30 s cool-down doubling to 5 min). An eligible failure at or past
+  the threshold opens the circuit; a failure while open or on an
+  expired open re-opens with the next doubled cool-down — the
+  all-open plan keeps trying `targets[0]`, so a permanently down
+  first target keeps re-arming to the cap rather than escaping the
+  open state. One success resets streak and cool-down.
+- **The Breakers instance rides `GatewayConfig.breakers`,** built in
+  `loadConfig`/`loadYamlConfig`, not a module singleton: its lifetime
+  is the config's (per process in production, per `resetConfig()` in
+  tests — the fallback suite in `tests/integration/gateway.test.ts`
+  reloads its YAML per `it`, so a breaker opened in one test cannot
+  leak into the next). `CIRCUIT_BREAKER=off` leaves the field
+  undefined — the whole feature off; `circuit_breaker: false` per
+  provider disables just that one. Hand-built test configs omit the
+  field and see no breaker.
+- **`x-babelgate-attempts` counts attempts, not hops.** `Hop.outcome`
+  gains `skipped_open`; a skipped hop is recorded in the route log
+  (plan order, and on a terminal error the never-reached open targets
+  still get their hop) but is not an attempt. `AttemptResult` gains
+  `attempts`, and every `x-babelgate-attempts` site uses it.
+- **The free-tier hint applies without breakers too** (a 429 on a
+  `tier: "free"` preset gains
+  `" (free tier: <preset>, limits per <docs>)"` on `err.message` and
+  on the already-rendered `clientError` — the hint reaches the
+  source's dialect either way).
+- **Metrics and the routing API.** `babelgate_circuit_open{provider}`
+  is a scrape-time `collect` gauge (point-in-time state, not a per-
+  trace counter); `/ui/api/routing` gains `breakers: snapshot()`.
+- **Files outside the Files block:**
+  `src/services/chat.service.ts` — pass `config.breakers` into
+  `attemptTargets` and read `result.attempts` for
+  `x-babelgate-attempts`; `src/services/chat-stream.service.ts` —
+  same, on both the pass-through and bridged stream paths;
+  `src/services/canonical-stream.service.ts` — pass
+  `config.breakers`; `src/services/embeddings.service.ts` — pass
+  `config.breakers` and `result.attempts`;
+  `src/services/passthrough.ts` — pass `config.breakers` and
+  `result.attempts` (count_tokens relay and relayed replies);
+  `src/services/passthrough-trace.ts` — `result.attempts`, and
+  `markFailedPassthroughHop` looks at the last non-`skipped_open` hop
+  so a never-called pass-through entry is not marked;
+  `src/services/gap-fixes.test.ts` — the `AttemptResult` literal gains
+  `attempts: 1` (the field is required);
+  `src/config/yaml-config.test.ts` — `circuit_breaker` parsing,
+  per-provider `false`/override and `CIRCUIT_BREAKER=off`;
+  `src/config/env-config.test.ts` — `CIRCUIT_BREAKER` env behaviour.
+- **Files changed:** created `src/routing/circuit-breaker.ts`,
+  `src/routing/circuit-breaker.test.ts`; modified
+  `src/services/attempt-targets.ts`,
+  `src/services/attempt-targets.test.ts`,
+  `src/routing/route-log.ts`, `src/config/gateway.schema.ts`,
+  `src/config/yaml-config.ts`, `src/config/env-config.ts`,
+  `src/observe/sinks/metrics.ts`, `src/ui-api/routing.ts`,
+  `src/services/chat.service.ts`,
+  `src/services/chat-stream.service.ts`,
+  `src/services/canonical-stream.service.ts`,
+  `src/services/embeddings.service.ts`,
+  `src/services/passthrough.ts`,
+  `src/services/passthrough-trace.ts`,
+  `src/services/gap-fixes.test.ts`,
+  `src/config/yaml-config.test.ts`,
+  `src/config/env-config.test.ts`, `docs/decisions.md`.
