@@ -240,6 +240,12 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
     api_key_env: "OPENROUTER_API_KEY",
     signup_url: "https://openrouter.ai/keys",
     gaps: [],
+    // Proven on the edit task through `--provider openrouter-free`,
+    // 2026-11-23 (conductor live run, v1.6 Task 8 Step 4).
+    suggested: {
+      "claude-code": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      codex: "nvidia/nemotron-3-ultra-550b-a55b:free",
+    },
     docs: "https://openrouter.ai/docs/quickstart",
     verified: "2026-11-22",
   },
@@ -298,6 +304,12 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
     api_key_env: "NVIDIA_API_KEY",
     signup_url: "https://build.nvidia.com",
     gaps: [],
+    // Proven on the edit task through `--provider nvidia-nim`,
+    // 2026-11-23 (conductor live run, v1.6 Task 8 Step 4).
+    suggested: {
+      "claude-code": "nvidia/nemotron-3-ultra-550b-a55b",
+      codex: "nvidia/nemotron-3-ultra-550b-a55b",
+    },
     docs: "https://docs.api.nvidia.com/nim/reference/llm-apis",
     verified: "2026-11-22",
   },
@@ -316,6 +328,16 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
     api_key_env: "CEREBRAS_API_KEY",
     signup_url: "https://cloud.cerebras.ai",
     gaps: [],
+    // Proven on the edit task through `--provider cerebras`,
+    // 2026-11-23 (conductor live run, v1.6 Task 8 Step 4).
+    suggested: {
+      "claude-code": "gpt-oss-120b",
+      codex: "gpt-oss-120b",
+    },
+    // Cerebras free tier max output 32k per
+    // https://inference-docs.cerebras.ai/models/openai-oss; the model
+    // passed only with this cap.
+    max_output_tokens: 32768,
     docs: "https://inference-docs.cerebras.ai/quickstart",
     verified: "2026-11-22",
   },

@@ -295,6 +295,44 @@ describe("cli", () => {
     }
   });
 
+  it("cerebras suggests gpt-oss-120b with the 32k output cap", () => {
+    expect(
+      presetEnv({ preset: "claude-code", provider: "cerebras" }, {}),
+    ).toEqual({
+      TARGET_API: "openai",
+      OPENAI_API_BASE_URL: "https://api.cerebras.ai",
+      TARGET_API_KEY_ENV: "CEREBRAS_API_KEY",
+      TARGET_PRESET: "cerebras",
+      TARGET_MAX_OUTPUT_TOKENS: "32768",
+      MODEL_MAP: "claude-*=gpt-oss-120b",
+      TARGET_CONTEXT_WINDOW: "32768",
+    });
+    expect(
+      clientInstructions(
+        { preset: "claude-code", provider: "cerebras" },
+        3000,
+        "k",
+        32768,
+      ),
+    ).toEqual([
+      "export ANTHROPIC_BASE_URL=http://localhost:3000",
+      "export ANTHROPIC_AUTH_TOKEN=k",
+      "export CLAUDE_CODE_MAX_OUTPUT_TOKENS=32768",
+    ]);
+  });
+
+  it("openrouter-free suggests the proven model for codex", () => {
+    expect(
+      presetEnv({ preset: "codex", provider: "openrouter-free" }, {}),
+    ).toEqual({
+      TARGET_API: "openai",
+      OPENAI_API_BASE_URL: "https://openrouter.ai/api",
+      TARGET_API_KEY_ENV: "OPENROUTER_API_KEY",
+      TARGET_PRESET: "openrouter-free",
+      MODEL_MAP: "*=nvidia/nemotron-3-ultra-550b-a55b:free",
+    });
+  });
+
   it("claude-code preset adds max output tokens when preset sets it", () => {
     const preset = PROVIDER_PRESETS.deepseek;
     preset.max_output_tokens = 8192;

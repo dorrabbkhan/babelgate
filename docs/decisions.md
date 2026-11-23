@@ -8741,6 +8741,34 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   Driver: the edit task from scripts/gates/claude-code-edit.sh /
   codex-edit.sh with babelgate started as `--preset <client>
   --provider <preset> --model <m>` on this branch (clean env). No
-  passing model → no suggestion (spec §3.3). `openrouter-free` has
-  no suggestion; whether the preset should ship while no `:free`
-  model serves is an owner question (Task 15/17).
+  passing model → no suggestion (spec §3.3). `openrouter-free`: see
+  round 2.
+- **Step 4 live results, round 2 (conductor, 2026-11-23,
+  owner-provided keys):**
+
+  | preset | model | claude-code | codex |
+  |---|---|---|---|
+  | openrouter-free | nvidia/nemotron-3-ultra-550b-a55b:free | PASS (32 s) | PASS (22 s) |
+  | openrouter-free | nvidia/nemotron-3.5-super-vl:free | PASS (22 s) | PASS (20 s) |
+  | openrouter-free | dots-studio/dots-3-note-preview:free | PASS (18 s) | PASS (16 s) |
+  | openrouter-free | recursive/flint-v1.0:free | PASS (20 s) | FAIL: 429 "free-models-per-day" (account daily cap) |
+  | openrouter-free | google/gemma-4-31b-it:free, google/gemma-4-26b-a4b-it:free | FAIL: 429 "Provider returned error" | — |
+  | nvidia-nim | nvidia/nemotron-3-ultra-550b-a55b | PASS (17 s) | PASS (18 s) |
+  | nvidia-nim | moonshotai/kimi-k3.1-pro | FAIL: 21 of 22 attempts hit the 30 s upstream timeout | — |
+  | cerebras | gpt-oss-120b, TARGET_MAX_OUTPUT_TOKENS=32768 | PASS (71 s, 3×429 retried) | PASS (59 s) |
+  | cerebras | qwen-3.8-27b (cap 32768 and 16384) | FAIL: upstream 400 | — |
+  | groq | openai/gpt-oss-120b, qwen/qwen3.8-27b | FAIL: 413 tokens-per-minute limit of the on_demand tier (one Claude Code request exceeds it) | — |
+  | deepseek | deepseek-flash, deepseek-v4-pro | FAIL: 402 "Insufficient Balance" | — |
+
+  Suggestion per preset = the passing model with the most OpenRouter
+  traffic for openrouter-free (fewest provider 429s); the only
+  passing model elsewhere. The nvidia-nim pass also confirms the key
+  variable `NVIDIA_API_KEY`. OpenRouter's free cap without credits
+  is 50 requests/day; one edit task used 5–9 requests.
+
+  `src/config/provider-presets.ts` changes for round 2: `suggested`
+  added to `openrouter-free`
+  (nvidia/nemotron-3-ultra-550b-a55b:free for both client presets),
+  `nvidia-nim` (nvidia/nemotron-3-ultra-550b-a55b) and `cerebras`
+  (gpt-oss-120b); `max_output_tokens: 32768` added to `cerebras`
+  only.
