@@ -359,6 +359,12 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
     api_key_env: "DEEPSEEK_API_KEY",
     signup_url: "https://platform.deepseek.com/api_keys",
     gaps: [],
+    // Proven on the edit task through `--provider deepseek`,
+    // 2026-11-23 (conductor live run, v1.6 Task 8a Step 5).
+    suggested: {
+      "claude-code": "deepseek-flash",
+      codex: "deepseek-flash",
+    },
     docs: "https://api-docs.deepseek.com/quick_start/quick_start",
     verified: "2026-11-22",
   },

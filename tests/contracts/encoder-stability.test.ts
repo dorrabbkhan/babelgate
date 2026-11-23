@@ -34,7 +34,9 @@ import type {
  * a wire rule, not a stability violation; for the same reason an
  * appended assistant tool-call turn gets a user message prepended —
  * directly after a bare assistant it folds into it on the Chat wire
- * (v1.6 Task 8a), the designed merge, not a new turn.
+ * (v1.6 Task 8a), the designed merge, not a new turn. The excluded
+ * case is pinned exactly by "appended assistant tool-call after an
+ * assistant folds into it on the chat wire" below.
  */
 
 const SEED = 0xec0d;
@@ -284,6 +286,60 @@ const cases = PROVIDERS.flatMap((provider) =>
 );
 
 describe("request encoder stability (spec §3.2)", () => {
+  // v1.6 Task 8a (owner decision 2026-11-23): the case the
+  // appended-turn generator excludes — an assistant tool-call
+  // message directly after an assistant folds into it — pinned
+  // exactly as a documented Chat wire rule.
+  it("appended assistant tool-call after an assistant folds into it on the chat wire", () => {
+    const before: CanonicalRequest = {
+      model: "m",
+      messages: [
+        { role: "user", content: "hi" },
+        { role: "assistant", content: "A" },
+      ],
+    };
+    const after: CanonicalRequest = {
+      model: "m",
+      messages: [
+        ...before.messages,
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "f", arguments: '{"x":1}' },
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(encode("openai", before).messages).toEqual([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "A" },
+    ]);
+    const afterMessages = encode("openai", after)
+      .messages as unknown[];
+    expect(afterMessages).toHaveLength(2);
+    expect(afterMessages[0]).toEqual({ role: "user", content: "hi" });
+    expect(afterMessages[1]).toEqual({
+      role: "assistant",
+      content: "A",
+      tool_calls: [
+        {
+          id: "call_1",
+          type: "function",
+          function: { name: "f", arguments: '{"x":1}' },
+        },
+      ],
+    });
+    expect(afterMessages[0]).toEqual(
+      encode("openai", before).messages[0],
+    );
+  });
+
   it.each(cases)("$provider deterministic (case $i)", ({ provider, i, seed }) => {
     const rand = mulberry32(seed);
     const request = generateRequest(rand, i);
@@ -304,7 +360,10 @@ describe("request encoder stability (spec §3.2)", () => {
       // after a bare assistant folds into it on the Chat wire — the
       // same kind of wire rule as Anthropic's tool-result merge in
       // the header comment, not a new turn. A real appended turn
-      // starts with a user/tool boundary, so one is prepended here.
+      // starts with a user/tool boundary, so one is prepended here;
+      // the case this excludes is pinned by "appended assistant
+      // tool-call after an assistant folds into it on the chat
+      // wire" above.
       const appendedTurn: CanonicalMessage[] =
         turn.role === "assistant" && (turn.toolCalls ?? []).length > 0
           ? [{ role: "user", content: "go on" }, turn]

@@ -116,7 +116,7 @@ describe("provider preset tiers (v1.6 spec §3.3)", () => {
   });
 
   it("presets without a live pass carry no suggestion", () => {
-    for (const name of ["groq", "deepseek"] as const) {
+    for (const name of ["groq"] as const) {
       expect(
         PROVIDER_PRESETS[name].suggested,
         name,
@@ -136,6 +136,10 @@ describe("provider preset tiers (v1.6 spec §3.3)", () => {
     expect(PROVIDER_PRESETS.cerebras.suggested).toEqual({
       "claude-code": "gpt-oss-120b",
       codex: "gpt-oss-120b",
+    });
+    expect(PROVIDER_PRESETS.deepseek.suggested).toEqual({
+      "claude-code": "deepseek-flash",
+      codex: "deepseek-flash",
     });
     expect(PROVIDER_PRESETS.cerebras.max_output_tokens).toBe(32768);
     for (const name of PRESET_NAMES) {

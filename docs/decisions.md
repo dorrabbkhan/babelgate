@@ -8827,10 +8827,31 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   turn so the append models a real turn boundary; the assertion
   itself is unchanged (`toEqual(before)`), flagged not loosened
   per the v1.3 Task 4 precedent.
-- **`suggested` for `deepseek` stays unset**: plan Step 5 fills it
-  only from the conductor's live run (claude-code + codex passing
-  with no upstream 400), in a fix round on this PR.
+- Owner decision 2026-11-23: option 3 (keep the merge; the
+  encoder-stability generator change is approved; the excluded case
+  is pinned by an exact test) — the generator keeps prepending a
+  user message to an appended assistant tool-call turn, and
+  `it("appended assistant tool-call after an assistant folds into
+  it on the chat wire")` pins that merge as a documented wire rule
+  with fixed input and `toEqual` assertions.
+- **Step 5 live run (conductor, 2026-11-23)** — driver: the Task 8
+  edit-task driver, `--preset <client> --provider deepseek --model
+  <m>`, on commit 0903d1e:
+
+  | Client | Model | Runs | Result |
+  |---|---|---|---|
+  | codex | deepseek-flash | 3 | 3/3 PASS, 5 requests each, all 200, no upstream 400 |
+  | codex | deepseek-v4-pro | 3 | 3/3 PASS, 5 requests each, all 200, no upstream 400 |
+  | claude-code | deepseek-flash | 1 | PASS, 7 requests (2× 400 side requests, same count as Task 8 before this PR; the json_schema gap, Task 8b) |
+  | claude-code | deepseek-v4-pro | 1 | PASS, 8 requests (2× 400 side requests, as above) |
+
+  Both clients passed on `deepseek-flash`, the cheaper model, so
+  `deepseek.suggested` is `{ "claude-code": "deepseek-flash",
+  codex: "deepseek-flash" }`; `deepseek-v4-pro` passed too but is
+  not suggested.
 - **Files changed:** modified
   `src/transformers/adapters/openai.adapter.ts`,
   `src/transformers/adapters/openai.adapter.test.ts`,
-  `tests/contracts/encoder-stability.test.ts`, `docs/decisions.md`.
+  `tests/contracts/encoder-stability.test.ts`,
+  `src/config/provider-presets.ts`,
+  `src/config/provider-presets.test.ts`, `docs/decisions.md`.
