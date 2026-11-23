@@ -49,10 +49,20 @@ const OLLAMA_REPLY = {
   eval_count: 8,
 };
 
+/** Per-test upstream failure: `{status, body}` overrides OLLAMA_REPLY. */
+let upstreamOverride:
+  | { status: number; body: Record<string, unknown> }
+  | undefined;
+
 const server = setupServer(
-  http.post(`${OLLAMA_URL}/api/chat`, () =>
-    HttpResponse.json(OLLAMA_REPLY),
-  ),
+  http.post(`${OLLAMA_URL}/api/chat`, () => {
+    if (upstreamOverride !== undefined) {
+      return HttpResponse.json(upstreamOverride.body, {
+        status: upstreamOverride.status,
+      });
+    }
+    return HttpResponse.json(OLLAMA_REPLY);
+  }),
 );
 
 const UI = { "x-babelgate-ui": "1" };
@@ -129,12 +139,14 @@ beforeEach(() => {
 
 afterEach(() => {
   server.resetHandlers();
+  upstreamOverride = undefined;
   delete process.env.TARGET_API;
   delete process.env.OLLAMA_API_BASE_URL;
   delete process.env.UPSTREAM_RETRIES;
   delete process.env.USAGE_DB;
   delete process.env.USAGE_STORE;
   delete process.env.LOG_BODIES;
+  delete process.env.INSPECTOR_BUFFER;
   resetUsageStore();
   resetConfig();
 });
@@ -324,5 +336,102 @@ describe("GET /ui/api/requests/:id", () => {
       .set(UI);
     expect(res.status).toBe(404);
     expect(res.body.error).toMatchObject({ code: expect.any(String) });
+  });
+});
+
+/**
+ * v1.6 Task 8c: a request that fails upstream is inspectable like any
+ * other — the list and the detail read rows the store has queued but
+ * not yet flushed (the write-behind is ≤ 250 ms; a client reads right
+ * after the failed request).
+ */
+describe("failed requests reach the inspector", () => {
+  it("stream request with upstream 400 is listed with status error", async () => {
+    getUsageStore();
+    upstreamOverride = { status: 400, body: { error: "bad request" } };
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({ ...CHAT_BODY, stream: true });
+    expect(res.status).toBe(400);
+
+    const list = await request(app).get("/ui/api/requests").set(UI);
+    expect(list.status).toBe(200);
+    expect(list.body.rows).toHaveLength(1);
+    expect(list.body.rows[0]).toMatchObject({
+      stream: true,
+      status: "error",
+      httpStatus: 400,
+      errorType: "invalid_request",
+    });
+    expect(list.body.rows[0].hops).toEqual([
+      {
+        provider: "ollama",
+        model: "gpt-4",
+        outcome: "http_error",
+        status: 400,
+        ms: expect.any(Number),
+      },
+    ]);
+  });
+
+  it("failed request bodies are in the ring", async () => {
+    getUsageStore();
+    upstreamOverride = { status: 400, body: { error: "bad request" } };
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({ ...CHAT_BODY, stream: true });
+    expect(res.status).toBe(400);
+
+    const [id] = await listIds();
+    expect(id).toBeDefined();
+    const detail = await request(app)
+      .get(`/ui/api/requests/${id}`)
+      .set(UI);
+    expect(detail.status).toBe(200);
+    expect(detail.body.bodies).toMatchObject({
+      source: { value: { model: "gpt-4", stream: true } },
+      canonical: { value: { model: "gpt-4", stream: true } },
+      target: [{ value: expect.anything() }],
+    });
+    // An upstream failure has no response stage.
+    expect(detail.body.bodies.response).toBeUndefined();
+  });
+
+  it("non-stream upstream 500 is listed", async () => {
+    getUsageStore();
+    upstreamOverride = { status: 500, body: { error: "down" } };
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send(CHAT_BODY);
+    expect(res.status).toBe(502);
+
+    const list = await request(app).get("/ui/api/requests").set(UI);
+    expect(list.body.rows).toHaveLength(1);
+    expect(list.body.rows[0]).toMatchObject({
+      stream: false,
+      status: "error",
+      httpStatus: 502,
+      errorType: "upstream",
+    });
+  });
+
+  it("INSPECTOR_BUFFER=0 still stores no bodies for failed requests", async () => {
+    process.env.INSPECTOR_BUFFER = "0";
+    resetConfig();
+    getUsageStore();
+    upstreamOverride = { status: 400, body: { error: "bad request" } };
+    const res = await request(app)
+      .post("/v1/chat/completions")
+      .send({ ...CHAT_BODY, stream: true });
+    expect(res.status).toBe(400);
+
+    const [id] = await listIds();
+    expect(id).toBeDefined();
+    const detail = await request(app)
+      .get(`/ui/api/requests/${id}`)
+      .set(UI);
+    expect(detail.status).toBe(200);
+    expect(detail.body.bodies).toBeNull();
+    expect(detail.body.reason).toBe("not_retained");
   });
 });

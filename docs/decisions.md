@@ -8914,3 +8914,43 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `src/services/stream-attempt.ts`, `src/config/env-config.ts`,
   `src/config/env-config.test.ts`,
   `docs/recipes/native-endpoints.md`, `docs/decisions.md`.
+
+## v1.6 Task 8c — failed requests reach the `/ui` inspector (spec §3.9; v1.3 §3.5/§3.11)
+
+- **Why the row was missing** (the plan's first Interface asked for
+  this): the request-list source. Reproduction showed the failed
+  stream trace is emitted — the route log prints
+  `status: "error"`, `httpStatus: 400`, and the body ring already
+  holds `source`/`canonical`/`target` snapshots for it (verified in
+  `src/ui-api/requests.test.ts`). But `usage-store.ts` batches
+  inserts: `accept()` queues the row and `flush()` commits it after
+  250 ms or 100 rows. `GET /ui/api/requests` and `/:id` read only
+  committed SQLite rows, so a request that finished moments ago —
+  in the Task 8 live run, the failed Codex request queried right
+  after the earlier successful row had flushed — is invisible to
+  the inspector it exists for. The trace-emission and body-attach
+  paths needed no change.
+- **The fix:** `src/ui-api/requests.ts` calls `store.flush()`
+  before `listRequests` and `getRequest`. `flush()` is a no-op on
+  an empty queue, commits only rows the periodic flush would write
+  anyway (no change to what is logged or stored), and is
+  synchronous — the reads see the just-finished row. The store's
+  write-behind batching is unchanged.
+- **Privacy rules preserved:** rows list failed requests with
+  `status: "error"`, `httpStatus`, `errorType` and hop outcomes;
+  body snapshots stay memory-only in the ring, and
+  `INSPECTOR_BUFFER=0` still stores no bodies for failed requests
+  (detail answers `bodies: null`, `reason: "not_retained"`). Tests:
+  `"stream request with upstream 400 is listed with status error"`,
+  `"failed request bodies are in the ring"`, `"non-stream upstream
+  500 is listed"`, `"INSPECTOR_BUFFER=0 still stores no bodies for
+  failed requests"` in `src/ui-api/requests.test.ts` — the tests
+  read the endpoints immediately after the failed response, with
+  no manual flush, mirroring a real inspector client.
+- **Follow-up (not done, outside scope):** `GET /ui/api/usage` in
+  `src/ui-api/usage.ts` reads committed rows the same way and has
+  the same ≤250 ms staleness; Task 9+ metrics views may want the
+  same flush-on-read if fresh numbers matter there.
+- **Files changed:** modified `src/ui-api/requests.ts`,
+  `src/ui-api/requests.test.ts`, `docs/decisions.md` — all inside
+  the Files block.
