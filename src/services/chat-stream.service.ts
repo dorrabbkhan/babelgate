@@ -6,6 +6,7 @@ import { runStreamPipeline } from "./stream-pipeline";
 import {
   attemptTargets,
   errorTraceFields,
+  maxTokensClampOf,
   type AttemptCtx,
   type AttemptResult,
 } from "./attempt-targets";
@@ -13,7 +14,9 @@ import {
   attemptStreamTarget,
   finishStreamTrace,
   observedDecoder,
+  snapshotStreamResponse,
   stampTtfb,
+  streamEventTransforms,
   type UpstreamAttempt,
 } from "./stream-attempt";
 import {
@@ -32,7 +35,16 @@ import {
   type PassthroughObservation,
 } from "./passthrough-relay";
 import type { ChatInput } from "./chat.service";
+import { probeRequestCache } from "./chat-cache.service";
 import type { ProxyResult } from "./proxy.service";
+import {
+  entryEvents,
+  isCacheableEvents,
+  type CachedEntry,
+} from "./response-cache";
+import type { RouteTarget } from "../routing/plan-route";
+import type { CanonicalStreamEvent } from "../types/canonical.types";
+import { logger } from "../utils/logger";
 
 export { streamCanonical } from "./canonical-stream.service";
 export type { StreamCanonicalContext } from "./canonical-stream.service";
@@ -73,6 +85,20 @@ export async function proxyChatStream(
       query: opts?.query ?? {},
       requestedModel,
     });
+    // §3.5: an enabled cache answers before any upstream call — the
+    // stored event sequence (or a unary reply replayed as one) is
+    // pushed through this client's own transforms and encoder.
+    const cached = probeRequestCache(input);
+    if (cached !== undefined) {
+      try {
+        return streamCacheHit(input, cached, encoder);
+      } catch (err) {
+        logger.debug(
+          { requestId, err },
+          "Cache hit could not be replayed — fetching fresh",
+        );
+      }
+    }
     const bridgedAttempt = attemptStreamTarget(
       canonical,
       config,
@@ -196,6 +222,11 @@ export async function proxyChatStream(
     canonical,
   );
 
+  // §3.5: the winning target's key — the stream is stored under it
+  // once the reply completes (a complete stream only, decided at
+  // finish); undefined when the request is never cached.
+  const winKey = config.cache?.key(bridged.target, canonical);
+
   // True once the route starts consuming chunks — which it only does
   // after flushing headers, so iterated implies the client got the 200
   // status line.
@@ -212,6 +243,11 @@ export async function proxyChatStream(
       iterated,
       clientStatus,
     });
+    // §3.5: store only a complete, error-free stream — the pre-
+    // transform events, so a later hit re-shapes them for its client.
+    if (winKey !== undefined && isCacheableEvents(observed)) {
+      config.cache!.set(winKey, { events: observed });
+    }
   };
 
   const chunks = (async function* (): AsyncGenerator<string> {
@@ -238,6 +274,104 @@ export async function proxyChatStream(
       "x-babelgate-provider": bridged.target.provider,
       "x-babelgate-model": bridged.target.model,
       "x-babelgate-attempts": String(bridged.attempts),
+    },
+  };
+}
+
+/**
+ * §3.5: serve a stream cache hit — the stored pre-transform event
+ * sequence (a stored unary reply is replayed as the stream that would
+ * have produced it) is pushed through this entry's own transform
+ * chain and the client's stream encoder, so the replay is what a
+ * live decode would have produced, whatever the source format. The
+ * trace marks `cacheHit`, the row prices $0, and
+ * `x-babelgate-attempts: 0` says no upstream was called.
+ */
+function streamCacheHit(
+  input: ChatInput,
+  hit: { target: RouteTarget; entry: CachedEntry },
+  encoder: StreamEncoder,
+): ProxyResult {
+  const { canonical, requestedModel, plan, config, opts } = input;
+  const entry = config.registry.get(hit.target.provider);
+  const stored = entryEvents(hit.entry);
+  const expand = streamEventTransforms(
+    canonical,
+    entry.repairToolCalls === true,
+  );
+  const signal = opts?.signal ?? new AbortController().signal;
+  const hops: Hop[] = [
+    {
+      provider: hit.target.provider,
+      model: hit.target.model,
+      outcome: "ok",
+      ms: 0,
+    },
+  ];
+  const last = stored.at(-1);
+  const usageEvent = stored.find((e) => e.type === "usage");
+  const usage =
+    usageEvent?.type === "usage" ? usageEvent.usage : undefined;
+
+  // finishStreamTrace's rules for a stream that never went upstream:
+  // iterated means the route consumed chunks (the client got the 200);
+  // otherwise clientStatus is the status the client actually saw.
+  let iterated = false;
+  const finish = async (clientStatus?: number): Promise<void> => {
+    // Same ring snapshot + diagnostics a live stream's finish takes.
+    snapshotStreamResponse(requestedModel, canonical, stored);
+    await finishTrace({
+      reason: plan.reason,
+      requestedModel,
+      hops,
+      winner: hit.target.provider,
+      stream: true,
+      status: signal.aborted ? "aborted" : !iterated ? "error" : "ok",
+      httpStatus: iterated
+        ? 200
+        : signal.aborted
+          ? 499
+          : (clientStatus ?? 500),
+      cacheHit: true,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      cacheReadTokens: usage?.cacheReadTokens,
+      cacheWriteTokens: usage?.cacheWriteTokens,
+      reasoningTokens: usage?.reasoningTokens,
+      finishReason:
+        last?.type === "message_end" ? last.finishReason : undefined,
+      maxTokensClamp: maxTokensClampOf(canonical, entry),
+    });
+  };
+
+  const chunks = (async function* (): AsyncGenerator<string> {
+    try {
+      iterated = true;
+      for (const event of stored) {
+        for (const out of expand([event])) {
+          const encoded = encoder.encode(out);
+          if (encoded !== "") {
+            stampTtfb();
+            yield encoded;
+          }
+        }
+      }
+      if (!signal.aborted) {
+        const tail = encoder.end();
+        if (tail !== "") yield tail;
+      }
+    } finally {
+      await finish();
+    }
+  })();
+
+  return {
+    stream: { contentType: encoder.contentType, chunks, finish },
+    headers: {
+      "x-babelgate-provider": hit.target.provider,
+      "x-babelgate-model": hit.target.model,
+      "x-babelgate-attempts": "0",
+      "x-babelgate-cache": "hit",
     },
   };
 }

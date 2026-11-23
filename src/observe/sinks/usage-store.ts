@@ -76,6 +76,14 @@ ALTER TABLE requests ADD COLUMN passthrough INTEGER;
 ALTER TABLE requests ADD COLUMN preset TEXT;
 `,
   },
+  {
+    // v1.6 Task 10 (spec §3.5): the response-cache marker — 1 only when
+    // the reply was replayed from the cache, NULL elsewhere.
+    version: 4,
+    sql: `
+ALTER TABLE requests ADD COLUMN cache_hit INTEGER;
+`,
+  },
 ];
 
 /** Forward-only migrations driven by the `schema_version` table. */
@@ -116,10 +124,10 @@ export function createUsageStore(opts: {
       id, started_at, client, user_agent, source_api, requested_model,
       route_reason, provider, model, stream, status, http_status, error_type,
       input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-      reasoning_tokens, passthrough, preset,
+      reasoning_tokens, passthrough, preset, cache_hit,
       cost_usd, would_cost_usd, cost_estimated, price_source,
       ttfb_ms, total_ms, finish_reason, hops, notes, diagnostics, repairs
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertBody = db.prepare(
     "INSERT OR REPLACE INTO bodies (id, snapshots) VALUES (?, ?)",
@@ -162,6 +170,7 @@ export function createUsageStore(opts: {
           row.reasoningTokens,
           row.passthrough === true ? 1 : null,
           row.preset ?? null,
+          row.cacheHit === true ? 1 : null,
           row.costUsd,
           row.wouldCostUsd,
           row.costEstimated ? 1 : 0,

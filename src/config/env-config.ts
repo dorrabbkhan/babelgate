@@ -11,6 +11,11 @@ import {
   createBreakers,
   type Breakers,
 } from "../routing/circuit-breaker";
+import {
+  createResponseCache,
+  CACHE_DEFAULTS,
+  type ResponseCache,
+} from "../services/response-cache";
 import type { RoutingConfig } from "../routing/plan-route";
 import {
   ignoredEnvKeys,
@@ -82,6 +87,14 @@ export interface GatewayConfig {
    * Optional so tests can build configs field by field.
    */
   breakers?: Breakers;
+  /**
+   * The process's opt-in response cache (v1.6 spec §3.5), built at
+   * config load so its lifetime is the config's. YAML's `cache:`
+   * section sets it up; `CACHE=on` enables it with spec defaults,
+   * `CACHE=off` or an absent `cache:` leaves this undefined — no
+   * cache at all. Optional so tests can build configs field by field.
+   */
+  cache?: ResponseCache;
 }
 
 /**
@@ -224,6 +237,7 @@ export function loadConfig(): EnvConfig {
   const modelMap = parseModelMap(process.env.MODEL_MAP);
   const targetContextWindow = parseTargetContextWindow();
   const targetMaxOutputTokens = parseTargetMaxOutputTokens();
+  const cache = parseCache(process.env);
 
   // Env-only mode (spec §3.5): one provider named after TARGET_API,
   // itself the default; MODEL_MAP entries become ordered routes to it.
@@ -281,6 +295,9 @@ export function loadConfig(): EnvConfig {
     ...(circuitBreakerDisabled(process.env)
       ? {}
       : { breakers: createBreakers({}) }),
+    // §3.5: CACHE=on builds the opt-in response cache on the spec
+    // defaults; absent or off leaves the field undefined.
+    ...(cache === undefined ? {} : { cache }),
     deprecatedEnv:
       process.env.SOURCE_API !== undefined ? ["SOURCE_API"] : [],
   };
@@ -345,6 +362,35 @@ export interface ObserveYaml {
  */
 export function circuitBreakerDisabled(env: NodeJS.ProcessEnv): boolean {
   return !parseBoolEnv("CIRCUIT_BREAKER", env.CIRCUIT_BREAKER, true);
+}
+
+/** The YAML `cache:` section's keys (gateway.schema.ts). */
+export interface CacheYaml {
+  enabled?: boolean;
+  ttl_ms?: number;
+  max_entries?: number;
+  ignore_temperature?: boolean;
+}
+
+/**
+ * `cache:` / `CACHE` (v1.6 spec §3.5): the opt-in exact-match response
+ * cache — `CACHE` wins over `cache.enabled`, the same env-wins
+ * pattern the observe: keys use, shared by loadConfig and
+ * loadYamlConfig. Returns undefined when disabled: the services see
+ * "no cache" as an absent field, like `breakers`.
+ */
+export function parseCache(
+  env: NodeJS.ProcessEnv,
+  yaml: CacheYaml = {},
+): ResponseCache | undefined {
+  const enabled = parseBoolEnv("CACHE", env.CACHE, yaml.enabled ?? false);
+  if (!enabled) return undefined;
+  return createResponseCache({
+    ttlMs: yaml.ttl_ms ?? CACHE_DEFAULTS.ttlMs,
+    maxEntries: yaml.max_entries ?? CACHE_DEFAULTS.maxEntries,
+    ignoreTemperature:
+      yaml.ignore_temperature ?? CACHE_DEFAULTS.ignoreTemperature,
+  });
 }
 
 function parseBoolEnv(

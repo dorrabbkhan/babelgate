@@ -1,5 +1,6 @@
 import type { GatewayConfig } from "../config/env-config";
 import type { Hop } from "../routing/route-log";
+import type { ProviderEntry } from "../routing/registry";
 import { planRoute } from "../routing/plan-route";
 import { newTrace } from "../observe/trace";
 import {
@@ -17,13 +18,22 @@ import { streamCanonicalEvents } from "./stream-pipeline";
 import {
   attemptTargets,
   errorTraceFields,
+  maxTokensClampOf,
 } from "./attempt-targets";
 import {
   attemptStreamTarget,
   finishStreamTrace,
   observedDecoder,
+  snapshotStreamResponse,
   stampTtfb,
+  streamEventTransforms,
 } from "./stream-attempt";
+import {
+  entryEvents,
+  isCacheableEvents,
+  probeCache,
+} from "./response-cache";
+import { logger } from "../utils/logger";
 
 export interface StreamCanonicalContext {
   requestId: string;
@@ -56,6 +66,89 @@ async function* canonicalAttemptStream(
     providerNames: new Set(config.registry.names()),
   });
   const hops: Hop[] = [];
+
+  // §3.5: an enabled cache answers before any upstream call — the
+  // stored event sequence (a unary reply is replayed as one) is
+  // pushed through the same transform chain a live decode gets. The
+  // playground has no source dialect, so no target is filtered out.
+  if (config.cache !== undefined) {
+    const cached = probeCache(config.cache, canonical, plan.targets);
+    if (cached !== undefined) {
+      // Only SETUP failures fall back to the upstream path — a throw
+      // mid-replay propagates like a live stream's own error would.
+      let stored: CanonicalStreamEvent[] | undefined;
+      let expand:
+        | ((events: CanonicalStreamEvent[]) => CanonicalStreamEvent[])
+        | undefined;
+      let entry: ProviderEntry | undefined;
+      try {
+        stored = entryEvents(cached.entry);
+        entry = config.registry.get(cached.target.provider);
+        expand = streamEventTransforms(
+          canonical,
+          entry.repairToolCalls === true,
+        );
+      } catch (err) {
+        logger.debug(
+          { requestId: ctx.requestId, err },
+          "Cache hit could not be replayed — fetching fresh",
+        );
+      }
+      if (stored !== undefined && expand !== undefined && entry !== undefined) {
+        const replayHops: Hop[] = [
+          {
+            provider: cached.target.provider,
+            model: cached.target.model,
+            outcome: "ok",
+            ms: 0,
+          },
+        ];
+        const usageEvent = stored.find((e) => e.type === "usage");
+        const usage =
+          usageEvent?.type === "usage" ? usageEvent.usage : undefined;
+        const last = stored.at(-1);
+        const signal = ctx.signal ?? new AbortController().signal;
+        let iterated = false;
+        try {
+          for (const event of stored) {
+            for (const out of expand([event])) {
+              stampTtfb();
+              iterated = true;
+              yield out;
+            }
+          }
+        } finally {
+          // Same ring snapshot + diagnostics a live stream's finish
+          // takes.
+          snapshotStreamResponse(requestedModel, canonical, stored);
+          await finishTrace({
+            reason: plan.reason,
+            requestedModel,
+            hops: replayHops,
+            winner: cached.target.provider,
+            stream: true,
+            status: signal.aborted
+              ? "aborted"
+              : !iterated
+                ? "error"
+                : "ok",
+            httpStatus: iterated ? 200 : signal.aborted ? 499 : 500,
+            cacheHit: true,
+            inputTokens: usage?.inputTokens,
+            outputTokens: usage?.outputTokens,
+            cacheReadTokens: usage?.cacheReadTokens,
+            cacheWriteTokens: usage?.cacheWriteTokens,
+            reasoningTokens: usage?.reasoningTokens,
+            finishReason:
+              last?.type === "message_end" ? last.finishReason : undefined,
+            maxTokensClamp: maxTokensClampOf(canonical, entry),
+          });
+        }
+        return;
+      }
+    }
+  }
+
   let result;
   try {
     result = await attemptTargets(
@@ -85,6 +178,10 @@ async function* canonicalAttemptStream(
   const signal = ctx.signal ?? new AbortController().signal;
   let iterated = false;
 
+  // §3.5: the winning target's key — the stream is stored under it at
+  // finish, complete and error-free only.
+  const winKey = config.cache?.key(result.target, canonical);
+
   try {
     for await (const event of streamCanonicalEvents({
       upstream: upstream.body,
@@ -106,6 +203,9 @@ async function* canonicalAttemptStream(
       signal,
       iterated,
     });
+    if (winKey !== undefined && isCacheableEvents(observed)) {
+      config.cache!.set(winKey, { events: observed });
+    }
   }
 }
 

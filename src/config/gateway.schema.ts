@@ -84,6 +84,19 @@ export interface GatewayFilePrice {
   cache_write?: number;
 }
 
+/**
+ * The YAML `cache:` section (v1.6 spec §3.5): the opt-in exact-match
+ * response cache — off by default; `CACHE` wins over `enabled` at
+ * load. `ttl_ms`/`max_entries`/`ignore_temperature` take the spec
+ * defaults (5 min, 500 entries, temperature honoured).
+ */
+export interface GatewayFileCache {
+  enabled?: boolean;
+  ttl_ms?: number;
+  max_entries?: number;
+  ignore_temperature?: boolean;
+}
+
 /** A parsed babelgate.yaml file, before targets are resolved (spec §3.5). */
 export interface GatewayFile {
   default: string;
@@ -92,6 +105,7 @@ export interface GatewayFile {
   routes?: GatewayFileRoute[];
   observe?: GatewayFileObserve;
   media?: GatewayFileMedia;
+  cache?: GatewayFileCache;
   prices?: Record<string, GatewayFilePrice>;
 }
 
@@ -234,6 +248,15 @@ export const gatewayFileSchema: z.ZodType<GatewayFile> = z.strictObject({
     .strictObject({
       fetch: z.boolean().optional(),
       allow_private: z.boolean().optional(),
+    })
+    .optional(),
+  // v1.6 spec §3.5: the opt-in response cache, off by default.
+  cache: z
+    .strictObject({
+      enabled: z.boolean().optional(),
+      ttl_ms: z.number().int().positive().optional(),
+      max_entries: z.number().int().positive().optional(),
+      ignore_temperature: z.boolean().optional(),
     })
     .optional(),
   prices: z
