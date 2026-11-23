@@ -277,6 +277,82 @@ describe("loadYamlConfig", () => {
     }
   });
 
+  it("circuit_breaker lands on the breakers config, default on (v1.6 spec §3.5)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-breaker-"));
+    try {
+      const file = join(dir, "cfg.yaml");
+      writeFileSync(
+        file,
+        [
+          "default: main",
+          "providers:",
+          "  main:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          "    circuit_breaker: false",
+          "  backup:",
+          "    type: ollama",
+          "    base_url: http://localhost:11435",
+          "    circuit_breaker:",
+          "      failures: 1",
+          "      cooldown_ms: 5000",
+          "      max_cooldown_ms: 20000",
+          "",
+        ].join("\n"),
+      );
+      const config = loadYamlConfig(file, {});
+      const breakers = config.breakers;
+      expect(breakers).toBeDefined();
+
+      // `false` never opens; the override opens on the first failure
+      // with its own 5 s cool-down (not the 30 s default); a provider
+      // the file doesn't name gets the defaults.
+      breakers!.recordFailure("main");
+      breakers!.recordFailure("main");
+      breakers!.recordFailure("main");
+      expect(breakers!.isOpen("main")).toBe(false);
+      breakers!.recordFailure("backup");
+      expect(breakers!.isOpen("backup")).toBe(true);
+      const openUntil = breakers!.snapshot().find(
+        (s) => s.provider === "backup",
+      )!.openUntil!;
+      expect(openUntil).toBeLessThanOrEqual(Date.now() + 5_000);
+      expect(openUntil).toBeGreaterThan(Date.now() + 4_000);
+
+      // CIRCUIT_BREAKER=off removes the breakers entirely.
+      expect(
+        loadYamlConfig(file, { CIRCUIT_BREAKER: "off" }).breakers,
+      ).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("circuit_breaker with an unknown key is a startup error", () => {
+    const dir = mkdtempSync(join(tmpdir(), "babelgate-breaker-bad-"));
+    try {
+      const file = join(dir, "cfg.yaml");
+      writeFileSync(
+        file,
+        [
+          "default: ollama",
+          "providers:",
+          "  ollama:",
+          "    type: ollama",
+          "    base_url: http://localhost:11434",
+          "    circuit_breaker:",
+          "      probes: true",
+          "",
+        ].join("\n"),
+      );
+      expect(() => loadYamlConfig(file, {})).toThrowError(
+        "circuit_breaker",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("live_prices, local and top-level prices: parse (spec §3.6)", () => {
     const dir = mkdtempSync(join(tmpdir(), "babelgate-prices-"));
     try {

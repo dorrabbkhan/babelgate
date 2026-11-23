@@ -29,8 +29,21 @@ export interface GatewayFileProvider {
   reasoning_passback?: boolean;
   reasoning?: boolean;
   passthrough?: boolean;
+  circuit_breaker?: GatewayFileBreaker | false;
   timeout_ms?: number;
   stream_idle_ms?: number;
+}
+
+/**
+ * The YAML `circuit_breaker:` tuning object (v1.6 spec §3.5): every
+ * key optional, absent keys take the spec defaults (3 failures,
+ * 30 s cool-down doubling to 5 min). `circuit_breaker: false`
+ * disables the provider's breaker entirely.
+ */
+export interface GatewayFileBreaker {
+  failures?: number;
+  cooldown_ms?: number;
+  max_cooldown_ms?: number;
 }
 
 /** One entry in a babelgate.yaml `routes` list (spec §3.5). */
@@ -109,6 +122,18 @@ const providerEntrySchema = z
     // automatically; a `tier: "shim"` preset implies it — v1.6 §3.3;
     // free/cheap presets never do).
     passthrough: z.boolean().optional(),
+    // v1.6 spec §3.5: passive circuit breaker — `false` disables it,
+    // an object tunes failures/cool-downs per provider.
+    circuit_breaker: z
+      .union([
+        z.literal(false),
+        z.strictObject({
+          failures: z.number().int().positive().optional(),
+          cooldown_ms: z.number().int().positive().optional(),
+          max_cooldown_ms: z.number().int().positive().optional(),
+        }),
+      ])
+      .optional(),
     timeout_ms: z.number().int().positive().optional(),
     stream_idle_ms: z.number().int().positive().optional(),
   })

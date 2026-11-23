@@ -388,6 +388,7 @@ describe("applyGapFixes (v1.5 spec §3.3)", () => {
           hops: [
             { provider: "shim", model: "claude-upstream", outcome: "ok", ms: 1 },
           ],
+          attempts: 1,
         },
         observation: { events, terminal: { type: "message_stop" } },
         signal: new AbortController().signal,

@@ -252,4 +252,19 @@ describe("Environment Configuration", () => {
 
     expect(() => loadConfig()).toThrow("TARGET_PRESET");
   });
+
+  it("breakers default on; CIRCUIT_BREAKER=off disables them (v1.6 spec §3.5)", () => {
+    process.env.TARGET_API = "ollama";
+    expect(loadConfig().breakers).toBeDefined();
+
+    process.env.CIRCUIT_BREAKER = "off";
+    expect(loadConfig().breakers).toBeUndefined();
+  });
+
+  it("a junk CIRCUIT_BREAKER value is a config error", () => {
+    process.env.TARGET_API = "ollama";
+    process.env.CIRCUIT_BREAKER = "maybe";
+
+    expect(() => loadConfig()).toThrow("CIRCUIT_BREAKER");
+  });
 });

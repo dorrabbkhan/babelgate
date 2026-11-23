@@ -1,6 +1,7 @@
 import {
   collectDefaultMetrics,
   Counter,
+  Gauge,
   Histogram,
   Registry,
 } from "prom-client";
@@ -128,6 +129,30 @@ export function createMetricsSink(): MetricsSink {
     help: "Non-chat requests — count_tokens and model lists",
     labelNames: ["source", "kind"],
     registers: [registry],
+  });
+  // v1.6 spec §3.5: breaker state is a point-in-time view — the gauge
+  // collects at scrape time rather than per trace. getConfig may be
+  // unavailable in a bare sink (unit tests); then no series.
+  new Gauge({
+    name: "babelgate_circuit_open",
+    help: "Circuit breaker state per provider (1 = open, 0 = closed)",
+    labelNames: ["provider"],
+    registers: [registry],
+    collect() {
+      let breakers;
+      try {
+        breakers = getConfig().breakers;
+      } catch {
+        return;
+      }
+      if (breakers === undefined) return;
+      for (const s of breakers.snapshot()) {
+        this.set(
+          { provider: capLabel("provider", s.provider) },
+          s.state === "open" ? 1 : 0,
+        );
+      }
+    },
   });
 
   return {

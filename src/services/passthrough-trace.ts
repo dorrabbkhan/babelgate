@@ -177,7 +177,11 @@ export function markFailedPassthroughHop(
   registry: ProviderRegistry,
   abortedInFlight?: ProviderEntry,
 ): void {
-  const last = hops[hops.length - 1];
+  // A skipped_open hop means nothing reached that target — the last
+  // real hop is the last non-skipped one.
+  const last = [...hops]
+    .reverse()
+    .find((h) => h.outcome !== "skipped_open");
   if (last === undefined) {
     if (
       abortedInFlight !== undefined &&
@@ -242,7 +246,7 @@ export async function finishPassthroughUnary(opts: {
       ...relayResponseHeaders(result.value.headers),
       "x-babelgate-provider": result.target.provider,
       "x-babelgate-model": result.target.model,
-      "x-babelgate-attempts": String(result.hops.length),
+      "x-babelgate-attempts": String(result.attempts),
     },
   };
 }

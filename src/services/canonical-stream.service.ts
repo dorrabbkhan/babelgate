@@ -63,6 +63,7 @@ async function* canonicalAttemptStream(
       config.registry,
       attemptStreamTarget(canonical, config, ctx.requestId, ctx.signal),
       { requestId: ctx.requestId, signal: ctx.signal, hops },
+      config.breakers,
     );
   } catch (err) {
     await finishTrace({

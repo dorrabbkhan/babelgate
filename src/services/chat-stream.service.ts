@@ -108,6 +108,7 @@ export async function proxyChatStream(
         return bridgedAttempt(entry, target);
       },
       attemptCtx,
+      config.breakers,
     );
   } catch (err) {
     // v1.5 follow-up: same marking as chat.service — a failed
@@ -182,7 +183,7 @@ export async function proxyChatStream(
         ...relayResponseHeaders(pt.value.upstream.headers),
         "x-babelgate-provider": pt.target.provider,
         "x-babelgate-model": pt.target.model,
-        "x-babelgate-attempts": String(pt.hops.length),
+        "x-babelgate-attempts": String(pt.attempts),
       },
     };
   }
@@ -236,7 +237,7 @@ export async function proxyChatStream(
     headers: {
       "x-babelgate-provider": bridged.target.provider,
       "x-babelgate-model": bridged.target.model,
-      "x-babelgate-attempts": String(bridged.hops.length),
+      "x-babelgate-attempts": String(bridged.attempts),
     },
   };
 }

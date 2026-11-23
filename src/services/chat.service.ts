@@ -179,6 +179,7 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
           },
         ),
       attemptCtx,
+      config.breakers,
     );
   } catch (err) {
     // v1.5 follow-up: a failed attempt whose last hop was a
@@ -335,7 +336,7 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
     headers: {
       "x-babelgate-provider": result.target.provider,
       "x-babelgate-model": result.target.model,
-      "x-babelgate-attempts": String(result.hops.length),
+      "x-babelgate-attempts": String(result.attempts),
     },
   };
 }

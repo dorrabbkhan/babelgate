@@ -264,6 +264,7 @@ async function run(input: EmbeddingsInput): Promise<ProxyResult> {
           },
         ),
       { requestId: input.requestId, signal: input.signal, hops },
+      config.breakers,
     );
 
     // §3.5: the upstream JSON lands in the ring even when decoding
@@ -320,7 +321,7 @@ async function run(input: EmbeddingsInput): Promise<ProxyResult> {
       headers: {
         "x-babelgate-provider": result.target.provider,
         "x-babelgate-model": result.target.model,
-        "x-babelgate-attempts": String(result.hops.length),
+        "x-babelgate-attempts": String(result.attempts),
       },
     };
   } catch (err) {
