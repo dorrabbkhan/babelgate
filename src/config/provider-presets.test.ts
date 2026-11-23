@@ -107,4 +107,43 @@ describe("provider preset tiers (v1.6 spec §3.3)", () => {
       ).toBe(true);
     }
   });
+
+  it("gemini-free suggests the proven edit-task model", () => {
+    expect(PROVIDER_PRESETS["gemini-free"].suggested).toEqual({
+      "claude-code": "gemini-3.8-flash",
+      codex: "gemini-3.8-flash",
+    });
+  });
+
+  it("presets without a live pass carry no suggestion", () => {
+    for (const name of ["groq", "deepseek"] as const) {
+      expect(
+        PROVIDER_PRESETS[name].suggested,
+        name,
+      ).toBeUndefined();
+    }
+  });
+
+  it("live-proven presets carry their edit-task model", () => {
+    expect(PROVIDER_PRESETS["openrouter-free"].suggested).toEqual({
+      "claude-code": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      codex: "nvidia/nemotron-3-ultra-550b-a55b:free",
+    });
+    expect(PROVIDER_PRESETS["nvidia-nim"].suggested).toEqual({
+      "claude-code": "nvidia/nemotron-3-ultra-550b-a55b",
+      codex: "nvidia/nemotron-3-ultra-550b-a55b",
+    });
+    expect(PROVIDER_PRESETS.cerebras.suggested).toEqual({
+      "claude-code": "gpt-oss-120b",
+      codex: "gpt-oss-120b",
+    });
+    expect(PROVIDER_PRESETS.cerebras.max_output_tokens).toBe(32768);
+    for (const name of PRESET_NAMES) {
+      if (name === "cerebras") continue;
+      expect(
+        PROVIDER_PRESETS[name].max_output_tokens,
+        name,
+      ).toBeUndefined();
+    }
+  });
 });

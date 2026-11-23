@@ -8660,3 +8660,115 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   modified `src/config/provider-presets.ts`,
   `src/config/gateway.schema.ts`, `src/config/yaml-config.ts`,
   `src/cli.ts`, `docs/decisions.md`.
+
+## v1.6 Task 8 — first run: `--provider`, `--preset codex`, key guidance (spec §3.3, E5, E11)
+
+- **`--provider` is an env-path flag** (conductor's call c): it sets
+  `TARGET_API`, `<TYPE>_API_BASE_URL`, `TARGET_PRESET` and
+  `TARGET_API_KEY_ENV` — the *name* of the variable the key is read
+  from, so no secret is copied between variables. env-config reads
+  `process.env[TARGET_API_KEY_ENV]`, falls back to the preset's
+  `api_key_env`, then the `<TYPE>_API_KEY` default; the missing-key
+  error names the effective variable. A preset with no `api_key_env`
+  is keyless (like `ollama`). `TARGET_PRESET` must name a preset in
+  `PRESET_NAMES` and lands on the provider entry as `preset` (the
+  free-tier 429 hint in Task 9 and the UI label in Task 14 read it).
+- **`--provider` is refused with a config file** (like `--target`)
+  and also with `--target`/`--base-url`, which it already fills —
+  the plan named only the config refusal; combining either would be
+  contradictory input.
+- **Missing-key line** (plan's literal string): `<provider>` is
+  rendered as the preset name — `OPENROUTER_API_KEY is not set. Get a
+  key at https://openrouter.ai/keys (free tier per openrouter-free
+  docs on 2026-11-22).` The tier word comes from `preset.tier`
+  (`free`/`cheap`/`shim`), so a cheap preset never claims a free
+  tier; a preset without `signup_url` prints `See <docs>` instead.
+  The check runs before listening whenever TARGET_PRESET resolves,
+  covering hand-set env as well as `--provider`.
+- **`--preset codex` writes `~/.babelgate/codex-model-catalog.json`
+  only** (verified: the whole `find home -type f` output is that one
+  file). The printed block is the recipe's config.toml with
+  `base_url` on the actual port plus `model_catalog_json` (the recipe
+  block lacks the key because it never generates a catalog). The
+  catalog's `slug`/`display_name` are replaced by the effective model
+  — `--model` > `suggested.codex` > `"babelgate"` — so Codex resolves
+  the entry instead of its unknown-slug fallback (owner decision A,
+  scripts/gates/codex-edit.sh).
+- **`src/codex-model-catalog.json` is a copy of
+  `examples/codex-model-catalog.json`.** The npm package ships only
+  `dist/` and the SEA binary has no examples/, so the template is
+  imported (esbuild inlines it); a parity test in `src/cli.test.ts`
+  fails if the two drift.
+- **EADDRINUSE prints the plan's one line and exits 1**; the port
+  comes from the listen error's `port` property (which also covers a
+  yaml-set port), with `PORT`/3000 as fallback.
+- **`suggested`/`max_output_tokens` stay unset** in
+  `src/config/provider-presets.ts`: plan Step 4 fills `suggested`
+  only for models proven on the edit task by the conductor's live
+  run, and provider output caps are model-dependent, not
+  provider-wide (per the providers' docs: DeepSeek accepts up to
+  384K, Groq/Cerebras list per-model caps), so no preset claims a cap
+  without a proven model. The mechanism — `TARGET_MAX_OUTPUT_TOKENS`
+  env and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` in the claude-code export
+  lines (E11) — is wired and tested with a synthetic value.
+- **cli.ts split** (hard rule 7): it would have grown to ~530 lines;
+  the §3.3 first-run helpers and startup print helpers moved to
+  `src/cli-first-run.ts` (providerWanted, effectiveProviderPreset,
+  missingKeyError, clientInstructions, endpointLines, usageLines,
+  codexConfigToml, writeCodexCatalog). cli.ts stays at ~410 lines as
+  the thin entry point.
+- **Files outside the Files block:** `src/cli-first-run.ts` (the
+  split above), `src/codex-model-catalog.json` (the embedded catalog
+  template above), `src/config/provider-presets.test.ts` (tests for
+  the `suggested` values recorded from the conductor's Step 4 live
+  run (fix round 1); the Files block names
+  `src/config/provider-presets.ts` but not its test file).
+- **Files changed:** created `src/cli-first-run.ts`,
+  `src/codex-model-catalog.json`; modified `src/cli.ts`,
+  `src/cli.test.ts`, `src/config/env-config.ts`,
+  `src/config/env-config.test.ts`, `src/config/provider-presets.ts`,
+  `src/config/provider-presets.test.ts`, `docs/decisions.md`.
+- **Step 4 live results (conductor, 2026-11-22):**
+
+  | preset | client | model | result |
+  |---|---|---|---|
+  | gemini-free | claude-code | gemini-3.8-flash | PASS (23 s, 8 requests, all 200) |
+  | gemini-free | codex | gemini-3.8-flash | PASS (22 s, 7 requests, all 200; catalog written under ~/.babelgate) |
+  | openrouter-free | claude-code | poolside/laguna-s-2.1:free | FAIL: upstream 404 "no longer available on OpenRouter" |
+  | openrouter-free | claude-code | qwen/qwen3-coder:free, openai/gpt-oss-120b:free, z-ai/glm-4.5-air:free, moonshotai/kimi-k2:free, deepseek/deepseek-chat-v3.1:free | FAIL: upstream 404 "This model is unavailable for free" |
+  | groq, nvidia-nim, cerebras, deepseek | — | — | not run: no key available to the conductor |
+
+  Driver: the edit task from scripts/gates/claude-code-edit.sh /
+  codex-edit.sh with babelgate started as `--preset <client>
+  --provider <preset> --model <m>` on this branch (clean env). No
+  passing model → no suggestion (spec §3.3). `openrouter-free`: see
+  round 2.
+- **Step 4 live results, round 2 (conductor, 2026-11-23,
+  owner-provided keys):**
+
+  | preset | model | claude-code | codex |
+  |---|---|---|---|
+  | openrouter-free | nvidia/nemotron-3-ultra-550b-a55b:free | PASS (32 s) | PASS (22 s) |
+  | openrouter-free | nvidia/nemotron-3.5-super-vl:free | PASS (22 s) | PASS (20 s) |
+  | openrouter-free | dots-studio/dots-3-note-preview:free | PASS (18 s) | PASS (16 s) |
+  | openrouter-free | recursive/flint-v1.0:free | PASS (20 s) | FAIL: 429 "free-models-per-day" (account daily cap) |
+  | openrouter-free | google/gemma-4-31b-it:free, google/gemma-4-26b-a4b-it:free | FAIL: 429 "Provider returned error" | — |
+  | nvidia-nim | nvidia/nemotron-3-ultra-550b-a55b | PASS (17 s) | PASS (18 s) |
+  | nvidia-nim | moonshotai/kimi-k3.1-pro | FAIL: 21 of 22 attempts hit the 30 s upstream timeout | — |
+  | cerebras | gpt-oss-120b, TARGET_MAX_OUTPUT_TOKENS=32768 | PASS (71 s, 3×429 retried) | PASS (59 s) |
+  | cerebras | qwen-3.8-27b (cap 32768 and 16384) | FAIL: upstream 400 | — |
+  | groq | openai/gpt-oss-120b, qwen/qwen3.8-27b | FAIL: 413 tokens-per-minute limit of the on_demand tier (one Claude Code request exceeds it) | — |
+  | deepseek | deepseek-flash, deepseek-v4-pro | FAIL: 402 "Insufficient Balance" | — |
+
+  Suggestion per preset = the passing model with the most OpenRouter
+  traffic for openrouter-free (fewest provider 429s); the only
+  passing model elsewhere. The nvidia-nim pass also confirms the key
+  variable `NVIDIA_API_KEY`. OpenRouter's free cap without credits
+  is 50 requests/day; one edit task used 5–9 requests.
+
+  `src/config/provider-presets.ts` changes for round 2: `suggested`
+  added to `openrouter-free`
+  (nvidia/nemotron-3-ultra-550b-a55b:free for both client presets),
+  `nvidia-nim` (nvidia/nemotron-3-ultra-550b-a55b) and `cerebras`
+  (gpt-oss-120b); `max_output_tokens: 32768` added to `cerebras`
+  only.

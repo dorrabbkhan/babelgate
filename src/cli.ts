@@ -2,16 +2,31 @@
 import { parseArgs } from "node:util";
 import type { Provider } from "./transformers/adapters";
 import { getConfig, setConfigPath } from "./config/env-config";
-import { PROVIDER_PRESETS } from "./config/provider-presets";
+import {
+  PRESET_NAMES,
+  PROVIDER_PRESETS,
+  type PresetName,
+} from "./config/provider-presets";
 import { resolveConfigPath } from "./config/yaml-config";
 import { formatPresetList } from "./cli-presets";
+import {
+  clientInstructions,
+  codexConfigToml,
+  effectiveProviderPreset,
+  endpointLines,
+  missingKeyError,
+  providerWanted,
+  usageLines,
+  writeCodexCatalog,
+} from "./cli-first-run";
 import { installSqliteWarningFilter } from "./observe/sqlite";
 import { formatRoutingTable } from "./routing/table";
 import { startServer } from "./index";
 
 export interface CliArgs {
   command?: "presets";
-  preset?: "claude-code" | "openai-apps";
+  preset?: "claude-code" | "codex" | "openai-apps";
+  provider?: PresetName;
   target?: Provider;
   model?: string;
   baseUrl?: string;
@@ -21,7 +36,7 @@ export interface CliArgs {
   version?: boolean;
 }
 
-const PRESETS = ["claude-code", "openai-apps"] as const;
+const PRESETS = ["claude-code", "codex", "openai-apps"] as const;
 const PROVIDERS: Provider[] = [
   "openai",
   "gemini",
@@ -41,6 +56,7 @@ export function parseCliArgs(argv: string[]): CliArgs {
     allowPositionals: true,
     options: {
       preset: { type: "string" },
+      provider: { type: "string" },
       target: { type: "string" },
       model: { type: "string" },
       "base-url": { type: "string" },
@@ -60,6 +76,14 @@ export function parseCliArgs(argv: string[]): CliArgs {
     }
     args.preset = values.preset as CliArgs["preset"];
   }
+  if (values.provider !== undefined) {
+    if (!(PRESET_NAMES as readonly string[]).includes(values.provider)) {
+      throw new Error(
+        `--provider must be one of: ${PRESET_NAMES.join(", ")}`,
+      );
+    }
+    args.provider = values.provider as PresetName;
+  }
   if (values.target !== undefined) {
     if (!PROVIDERS.includes(values.target as Provider)) {
       throw new Error(`--target must be one of: ${PROVIDERS.join(", ")}`);
@@ -69,14 +93,26 @@ export function parseCliArgs(argv: string[]): CliArgs {
   if (values.model !== undefined) args.model = values.model;
   if (values["base-url"] !== undefined) args.baseUrl = values["base-url"];
   if (values.config !== undefined) args.config = values.config;
+  // --provider fills target, base URL and key env itself — combining
+  // it with the flags it replaces would be contradictory input.
+  if (
+    args.provider !== undefined &&
+    (args.target !== undefined || args.baseUrl !== undefined)
+  ) {
+    throw new Error(
+      "--provider cannot be combined with --target or --base-url",
+    );
+  }
   if (
     args.config !== undefined &&
     (args.target !== undefined ||
       args.model !== undefined ||
-      args.baseUrl !== undefined)
+      args.baseUrl !== undefined ||
+      args.provider !== undefined)
   ) {
     throw new Error(
-      "--target, --model and --base-url are defined by the config file",
+      "--target, --model, --provider and --base-url are defined by " +
+        "the config file",
     );
   }
   if (values.port !== undefined) {
@@ -109,6 +145,9 @@ function effectiveTarget(
   env: NodeJS.ProcessEnv,
 ): Provider | undefined {
   if (args.target !== undefined) return args.target;
+  if (args.provider !== undefined) {
+    return PROVIDER_PRESETS[args.provider].type;
+  }
   return PROVIDERS.includes(env.TARGET_API as Provider)
     ? (env.TARGET_API as Provider)
     : undefined;
@@ -130,17 +169,31 @@ function wantedEnv(
   // no flag or preset may set TARGET_API, MODEL_MAP, *_API_BASE_URL or
   // TARGET_CONTEXT_WINDOW — only PORT still applies (§3.5).
   if (!configMode) {
+    // --provider <preset> is an env-path flag like --target (v1.6 spec
+    // §3.3): the wanted env values are built by cli-first-run.
+    if (args.provider !== undefined) {
+      Object.assign(wanted, providerWanted(args.provider));
+    }
     if (args.target !== undefined) {
       wanted.TARGET_API = args.target;
     }
 
+    const providerPreset = effectiveProviderPreset(args, env);
     if (args.preset === "claude-code") {
-      if (args.model !== undefined) {
-        wanted.MODEL_MAP = `claude-*=${args.model}`;
+      const model = args.model ?? providerPreset?.suggested?.["claude-code"];
+      if (model !== undefined) {
+        wanted.MODEL_MAP = `claude-*=${model}`;
       }
       wanted.TARGET_CONTEXT_WINDOW = "32768";
       if (effectiveTarget(args, env) === "ollama") {
         wanted.UPSTREAM_TIMEOUT_MS = "600000";
+      }
+    }
+
+    if (args.preset === "codex") {
+      const model = args.model ?? providerPreset?.suggested?.codex;
+      if (model !== undefined) {
+        wanted.MODEL_MAP = `*=${model}`;
       }
     }
 
@@ -197,60 +250,6 @@ export function overriddenKeys(
   );
 }
 
-/**
- * The `export …` lines the user pastes into their shell to point the client
- * app at this proxy. PROXY_API_KEY is the proxy's own client-facing key, not
- * an upstream key.
- */
-export function clientInstructions(
-  args: CliArgs,
-  port: number,
-  proxyApiKey?: string,
-): string[] {
-  const token = proxyApiKey ?? "babelgate";
-  if (args.preset === "claude-code") {
-    return [
-      `export ANTHROPIC_BASE_URL=http://localhost:${port}`,
-      `export ANTHROPIC_AUTH_TOKEN=${token}`,
-    ];
-  }
-  if (args.preset === "openai-apps") {
-    return [
-      `export OPENAI_BASE_URL=http://localhost:${port}/v1`,
-      `export OPENAI_API_KEY=${token}`,
-    ];
-  }
-  return [];
-}
-
-/**
- * The endpoints block printed at startup when no preset is given
- * (spec §3.7): one URL per client dialect, column-aligned.
- */
-export function endpointLines(port: number): string[] {
-  return [
-    `OpenAI     http://localhost:${port}/v1`,
-    `Anthropic  http://localhost:${port}`,
-    `Gemini     http://localhost:${port}`,
-    `Ollama     http://localhost:${port}`,
-    `UI         http://localhost:${port}/ui`,
-  ];
-}
-
-function usageLines(): string[] {
-  return [
-    "Usage: babelgate [--preset <claude-code|openai-apps>] [--target <provider>]",
-    "                 [--model <name>] [--base-url <url>] [--port <n>]",
-    "                 [--config <path>] [--help] [--version]",
-    "       babelgate presets",
-    "",
-    "Config file discovery: --config, then BABELGATE_CONFIG,",
-    "then ./babelgate.yaml. Upstream API keys come only from the environment",
-    "(OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, OLLAMA_API_KEY,",
-    "RESPONSES_API_KEY).",
-  ];
-}
-
 export async function main(argv: string[]): Promise<void> {
   try {
     const args = parseCliArgs(argv);
@@ -287,10 +286,12 @@ export async function main(argv: string[]): Promise<void> {
       configMode &&
       (args.target !== undefined ||
         args.model !== undefined ||
-        args.baseUrl !== undefined)
+        args.baseUrl !== undefined ||
+        args.provider !== undefined)
     ) {
       throw new Error(
-        "--target, --model and --base-url are defined by the config file",
+        "--target, --model, --provider and --base-url are defined by " +
+          "the config file",
       );
     }
 
@@ -306,6 +307,16 @@ export async function main(argv: string[]): Promise<void> {
           "(flags and presets never replace values you set)",
       );
     }
+    // Missing upstream key on a preset first run: say which env var the
+    // key is read from and where to get one, before listening (§3.3).
+    if (!configMode) {
+      const keyError = missingKeyError(process.env);
+      if (keyError !== undefined) {
+        console.error(keyError);
+        process.exitCode = 1;
+        return;
+      }
+    }
     if (
       !configMode &&
       args.preset === "claude-code" &&
@@ -317,20 +328,74 @@ export async function main(argv: string[]): Promise<void> {
           "to the target unchanged",
       );
     }
+    if (!configMode && args.preset === "codex" && !process.env.MODEL_MAP) {
+      console.error(
+        "babelgate: no --model given and no suggested codex model; the " +
+          "config.toml model name is forwarded to the target unchanged",
+      );
+    }
 
     setConfigPath(args.config);
     // §3.4: the node:sqlite ExperimentalWarning (that warning only) is
     // filtered before the usage store can load the builtin.
     installSqliteWarningFilter();
-    await startServer();
+    try {
+      await startServer();
+    } catch (err) {
+      // Review Focus 2: a busy port is one line and exit 1, never a
+      // stack trace. The listen error carries the port it failed on.
+      if ((err as NodeJS.ErrnoException).code === "EADDRINUSE") {
+        const port =
+          (err as NodeJS.ErrnoException & { port?: number }).port ??
+          (process.env.PORT !== undefined ? Number(process.env.PORT) : 3000);
+        console.error(
+          `Port ${port} is in use. Start with --port ${port + 1} ` +
+            "(or stop the other process).",
+        );
+        process.exitCode = 1;
+        return;
+      }
+      throw err;
+    }
     const config = getConfig();
-    if (args.preset !== undefined) {
+    const maxOutputTokens =
+      process.env.TARGET_MAX_OUTPUT_TOKENS !== undefined
+        ? Number(process.env.TARGET_MAX_OUTPUT_TOKENS)
+        : undefined;
+    if (args.preset === "codex") {
+      // §3.3: print the config.toml block on the actual port and write
+      // the model catalog under ~/.babelgate — nothing else outside it.
+      const model =
+        args.model ??
+        effectiveProviderPreset(args, process.env)?.suggested?.codex ??
+        "babelgate";
+      const catalogPath = writeCodexCatalog(model);
+      for (const line of clientInstructions(
+        args,
+        config.port,
+        config.proxyApiKey,
+        maxOutputTokens,
+      )) {
+        console.log(line);
+      }
+      console.log(`Codex model catalog written to ${catalogPath}`);
+      console.log("Paste into ~/.codex/config.toml:");
+      for (const line of codexConfigToml(config.port, model, catalogPath)) {
+        console.log(line);
+      }
+      // The routing table prints next — the blank line and marker close
+      // the paste block so a copied block can't pull route lines into
+      // config.toml.
+      console.log("");
+      console.log("--- end of config.toml block ---");
+    } else if (args.preset !== undefined) {
       // The export lines come from the requested preset — there is no
       // configured source format; the request path decides the dialect.
       for (const line of clientInstructions(
         args,
         config.port,
         config.proxyApiKey,
+        maxOutputTokens,
       )) {
         console.log(line);
       }

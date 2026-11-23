@@ -179,4 +179,64 @@ describe("Environment Configuration", () => {
       "OLLAMA_API_BASE_URL environment variable is required",
     );
   });
+
+  it("TARGET_API_KEY_ENV names the variable the key is read from", () => {
+    process.env.TARGET_API = "openai";
+    process.env.TARGET_API_KEY_ENV = "OPENROUTER_API_KEY";
+    process.env.OPENROUTER_API_KEY = "or-key";
+    unsetEnv("OPENAI_API_KEY");
+
+    const config = loadConfig();
+
+    expect(config.targetApiKey).toBe("or-key");
+    expect(config.registry.get("openai").apiKeyEnv).toBe(
+      "OPENROUTER_API_KEY",
+    );
+  });
+
+  it("TARGET_API_KEY_ENV names the missing key in the error", () => {
+    process.env.TARGET_API = "openai";
+    process.env.TARGET_API_KEY_ENV = "OPENROUTER_API_KEY";
+    unsetEnv("OPENAI_API_KEY");
+    unsetEnv("OPENROUTER_API_KEY");
+
+    expect(() => loadConfig()).toThrow(
+      "OPENROUTER_API_KEY environment variable is required",
+    );
+  });
+
+  it("TARGET_PRESET lands on the provider entry and supplies the key env", () => {
+    process.env.TARGET_API = "openai";
+    process.env.TARGET_PRESET = "groq";
+    process.env.GROQ_API_KEY = "groq-key";
+    unsetEnv("TARGET_API_KEY_ENV");
+    unsetEnv("OPENAI_API_KEY");
+
+    const config = loadConfig();
+
+    expect(config.targetApiKey).toBe("groq-key");
+    expect(config.registry.get("openai").preset).toBe("groq");
+  });
+
+  it("a keyless preset needs no api key", () => {
+    process.env.TARGET_API = "anthropic";
+    process.env.TARGET_PRESET = "ollama-anthropic";
+    unsetEnv("TARGET_API_KEY_ENV");
+    unsetEnv("ANTHROPIC_API_KEY");
+
+    const config = loadConfig();
+
+    expect(config.registry.get("anthropic").apiKey).toBeUndefined();
+    expect(config.registry.get("anthropic").preset).toBe(
+      "ollama-anthropic",
+    );
+  });
+
+  it("an unknown TARGET_PRESET is a config error", () => {
+    process.env.TARGET_API = "openai";
+    process.env.TARGET_PRESET = "not-a-preset";
+    process.env.OPENAI_API_KEY = "test-key";
+
+    expect(() => loadConfig()).toThrow("TARGET_PRESET");
+  });
 });

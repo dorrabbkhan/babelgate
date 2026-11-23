@@ -13,6 +13,12 @@ import {
   loadYamlConfig,
   resolveConfigPath,
 } from "./yaml-config";
+import {
+  PRESET_NAMES,
+  PROVIDER_PRESETS,
+  type PresetName,
+  type ProviderPreset,
+} from "./provider-presets";
 import { ConfigurationError } from "../utils/errors";
 import { logger } from "../utils/logger";
 
@@ -158,12 +164,39 @@ export function loadConfig(): EnvConfig {
     responses: "RESPONSES_API_KEY",
   };
 
-  const targetApiKey = process.env[apiKeyEnvVars[normalizedTarget]];
+  // TARGET_PRESET records which provider preset the env describes
+  // (v1.6 spec §3.3) — the provider entry keeps it for the routing
+  // and UI layers (free-tier hint, preset label).
+  const targetPresetName = process.env.TARGET_PRESET;
+  let targetPreset: ProviderPreset | undefined;
+  if (targetPresetName !== undefined && targetPresetName !== "") {
+    if (!(PRESET_NAMES as readonly string[]).includes(targetPresetName)) {
+      throw new ConfigurationError(
+        `TARGET_PRESET must be one of: ${PRESET_NAMES.join(", ")}`,
+      );
+    }
+    targetPreset = PROVIDER_PRESETS[targetPresetName as PresetName];
+  }
 
-  // Ollama doesn't require an API key
-  if (!targetApiKey && normalizedTarget !== "ollama") {
+  // TARGET_API_KEY_ENV names the variable holding the upstream key
+  // (v1.6 spec §3.3, conductor's call c): the key is read from that
+  // variable, never copied between variables. A preset supplies the
+  // name as a fallback; a preset with no api_key_env is keyless.
+  const keyEnvName =
+    process.env.TARGET_API_KEY_ENV ??
+    targetPreset?.api_key_env ??
+    apiKeyEnvVars[normalizedTarget];
+  const targetApiKey = process.env[keyEnvName];
+
+  const keyless =
+    targetPreset !== undefined &&
+    targetPreset.api_key_env === undefined &&
+    process.env.TARGET_API_KEY_ENV === undefined;
+
+  // Ollama and keyless presets don't require an API key
+  if (!targetApiKey && normalizedTarget !== "ollama" && !keyless) {
     throw new Error(
-      `${apiKeyEnvVars[normalizedTarget]} environment variable is required for target API ${targetApi}`,
+      `${keyEnvName} environment variable is required for target API ${targetApi}`,
     );
   }
 
@@ -188,10 +221,10 @@ export function loadConfig(): EnvConfig {
       type: normalizedTarget,
       baseUrl: targetBaseUrl.replace(/\/$/, ""),
       apiKey: targetApiKey,
-      apiKeyEnv:
-        targetApiKey !== undefined
-          ? apiKeyEnvVars[normalizedTarget]
-          : undefined,
+      apiKeyEnv: targetApiKey !== undefined ? keyEnvName : undefined,
+      ...(targetPresetName !== undefined && targetPresetName !== ""
+        ? { preset: targetPresetName as PresetName }
+        : {}),
       contextWindow: targetContextWindow,
       ...(targetMaxOutputTokens === undefined
         ? {}
