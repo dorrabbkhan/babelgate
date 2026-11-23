@@ -9,7 +9,10 @@ import { uiError } from "./access";
  * usage store, newest first, cursor-paged; the detail carries the row
  * plus bodies — ring first, then the `bodies` table (LOG_BODIES) — or
  * `bodies: null, reason: "not_retained"`. A disabled store answers
- * empty, never an error: the Requests screen still loads.
+ * empty, never an error: the Requests screen still loads. Both reads
+ * flush the store's write-behind queue first — a request that just
+ * finished (a failed one most of all, that is what the inspector is
+ * for) is listed at once, not up to 250 ms later.
  */
 
 const DEFAULT_LIMIT = 50;
@@ -52,6 +55,7 @@ export function requestsRouter(): Router {
       res.json({ rows: [] });
       return;
     }
+    store.flush();
     try {
       const { rows, nextCursor } = store.listRequests({
         ...(strParam(req.query.cursor) !== undefined
@@ -89,7 +93,9 @@ export function requestsRouter(): Router {
   });
 
   router.get("/requests/:id", (req, res) => {
-    const found = getUsageStore()?.getRequest(req.params.id);
+    const store = getUsageStore();
+    store?.flush();
+    const found = store?.getRequest(req.params.id);
     if (found === undefined) {
       return uiError(res, 404, "NOT_FOUND", "request not found");
     }
