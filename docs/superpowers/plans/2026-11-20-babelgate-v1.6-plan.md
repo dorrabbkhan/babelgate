@@ -82,6 +82,8 @@ CHANGELOG.md, package.json version                                              
 | 7 | Preset tiers; free/cheap presets from provider docs; `babelgate presets` | — | | Sonnet | Config vocabulary, doc-cited values |
 | 8 | First run: `--provider`, `--preset codex`, key guidance, suggested models proven | 7 | | Opus | User-facing defaults; live proof per model |
 | 8a | Chat encoder never sends an empty assistant message (Codex → DeepSeek) | 8 | | Opus | Wire format; replayed history; found in Task 8's live run |
+| 8b | `json_schema` gap: downgrade to `json_object` for providers without schema output (DeepSeek) | 8 | | Sonnet | Gap vocabulary is data plus one fixer |
+| 8c | Failed requests reach the `/ui` inspector | — | | Sonnet | Observability; offline tests only |
 | 9 | Circuit breaker | — | | Sonnet | Small state machine in one loop |
 | 10 | Response cache | 9 | | Opus | Keying correctness; stream replay; schema migration |
 | 11 | Recipes: Cursor, Continue, Aider, Open WebUI | 8 | | Sonnet | Copy, hand-verified |
@@ -249,6 +251,39 @@ Found by the conductor's Task 8 live run (2026-11-23, owner decision: fix before
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `./scripts/check.sh` → PASS.
 - [ ] **Step 5 (live, conductor runs):** the Task 8 driver, `--preset codex --provider deepseek` on `deepseek-flash` and `deepseek-v4-pro`, three runs each; all must pass with no upstream 400. Claude Code on both re-run once (no regression). Then DeepSeek's `suggested` (claude-code and codex) is set from the models that passed with both clients, in a fix round on this PR, with the live table in decisions.md and the PR body.
 - **Commit** `fix(openai): never send an empty assistant message`.
+
+### Task 8b: `json_schema` gap for providers without schema output
+
+Found by the conductor's Task 8 live run (2026-11-23): Claude Code → babelgate `--provider deepseek` passes the edit task, but 2 side requests per run get upstream `400 "This response_format type is unavailable now"`. Claude Code sends `response_format`/structured output that babelgate encodes as Chat `{type:"json_schema", json_schema:{…}}` (`src/transformers/adapters/openai.adapter.ts`, the `responseFormat` block); DeepSeek documents only `{type:"json_object"}` (https://api-docs.deepseek.com/guides/json_mode). v1.5 spec §3.3 gap vocabulary.
+
+**Files:**
+- Modify: `src/config/provider-presets.ts` (new gap `json_schema` in `GAPS`; `deepseek` preset `gaps: ["json_schema"]`), `src/transformers/adapters/openai.adapter.ts` (gap fixer), tests beside each, `docs/recipes/native-endpoints.md` (gap table row), `docs/decisions.md`
+
+**Interfaces:**
+- Gap `json_schema`: a Chat request with `response_format.type === "json_schema"` is sent as `{type:"json_object"}`; the schema is not dropped silently: a trace note `response_format_downgraded` at `response_format`, and one system-message line appended naming the expected JSON shape (`Respond with JSON matching this schema: <schema JSON>`). JSON mode requires the word "json" in the prompt per DeepSeek's guide; the appended line satisfies it.
+- Only entries whose `gaps` list `json_schema` change; every other provider is byte-identical. No canonical change, no provider branch (the gap is data).
+- Verify against DeepSeek's docs page on the task date and cite it in the code comment and the decisions entry; drop `deepseek-anthropic` from scope (its endpoint is the Anthropic shim).
+
+- [ ] **Step 1: Tests.** `"json_schema gap sends json_object with a schema line and a note"`, `"provider without the gap keeps json_schema unchanged"`, `"deepseek preset declares the json_schema gap"`.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `./scripts/check.sh` → PASS.
+- [ ] **Step 5 (live, conductor runs):** Claude Code edit task through `--provider deepseek` on `deepseek-flash`: passes with no upstream 400 in the log.
+- **Commit** `feat(gaps): json_schema downgrade for providers without schema output`.
+
+### Task 8c: Failed requests reach the `/ui` inspector
+
+Found by the conductor's Task 8 live run (2026-11-23): a Codex stream request that got upstream 400 (`POST /v1/responses 400`, route log `status: "error"`) did not appear in `GET /ui/api/requests`; only the successful request did, so its body snapshots could not be inspected. Inspector spec: v1.3 §3.5 / §3.11 (ring of the last `INSPECTOR_BUFFER` traces, memory only).
+
+**Files:**
+- Modify: whichever of `src/services/canonical-stream.service.ts`, `src/services/proxy.service.ts`, `src/observe/sinks/body-ring.ts`, `src/ui-api/requests.ts` holds the cause, tests beside each, `docs/decisions.md`
+
+**Interfaces:**
+- First find why the row is missing (the request list source, the trace never emitted on the upstream-error path of a stream, or bodies not attached) and record it in the decisions entry.
+- A request that fails upstream (HTTP 4xx/5xx before or after headers, streaming and non-streaming) is listed by `/ui/api/requests` with `status: "error"`, its `httpStatus`, and its body snapshots in the ring (`GET /ui/api/requests/:id`), same privacy rules as successful requests (memory only, `INSPECTOR_BUFFER=0` disables).
+- No change to what is logged or stored on disk.
+
+- [ ] **Step 1: Tests.** `"stream request with upstream 400 is listed with status error"`, `"failed request bodies are in the ring"`, `"non-stream upstream 500 is listed"`, `"INSPECTOR_BUFFER=0 still stores no bodies for failed requests"`.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `./scripts/check.sh` → PASS.
+- **Commit** `fix(observe): failed requests reach the inspector`.
 
 ### Task 9: Circuit breaker
 
