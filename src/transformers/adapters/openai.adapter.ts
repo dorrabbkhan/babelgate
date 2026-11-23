@@ -494,9 +494,35 @@ function toCacheControl(
 export function fromCanonicalRequest(
   request: CanonicalRequest,
 ): ChatCompletionRequest {
-  const messages: ChatCompletionMessageParam[] = request.messages.map(
-    convertFromCanonicalMessage,
-  );
+  // v1.6 Task 8a: a Chat upstream rejects an assistant message with
+  // none of content, tool_calls or reasoning_content (DeepSeek 400s
+  // "Invalid assistant message"; others silently misread it) — empty
+  // ones are dropped here with a note, and an assistant tool-call
+  // message directly after another assistant message folds into it
+  // (one turn decoded as adjacent canonical messages — a message item
+  // then the function_call items — encodes back as the single
+  // content + tool_calls shape Chat defines).
+  const messages: ChatCompletionMessageParam[] = [];
+  for (const [i, msg] of request.messages.entries()) {
+    const wire = convertFromCanonicalMessage(msg, i);
+    if (wire === undefined) continue;
+    const prev = messages[messages.length - 1] as unknown as
+      | Record<string, unknown>
+      | undefined;
+    if (
+      prev !== undefined &&
+      prev.role === "assistant" &&
+      (wire as { role?: string }).role === "assistant" &&
+      (wire as { tool_calls?: unknown }).tool_calls !== undefined
+    ) {
+      mergeAssistantMessage(
+        prev,
+        wire as unknown as Record<string, unknown>,
+      );
+      continue;
+    }
+    messages.push(wire);
+  }
 
   const result: ChatCompletionRequest = {
     model: request.model,
@@ -632,14 +658,17 @@ export function fromCanonicalRequest(
 
 function convertFromCanonicalMessage(
   msg: CanonicalMessage,
-): ChatCompletionMessageParam {
-  const content = convertFromCanonicalContent(msg.content);
-
+  index: number,
+): ChatCompletionMessageParam | undefined {
   if (msg.role === "assistant") {
-    const assistantMsg = {
-      role: "assistant" as const,
-      content: typeof content === "string" ? content : null,
-    };
+    // v1.6 Task 8a: a message with no text, no tool calls and no
+    // surviving reasoning_content is not sent — DeepSeek answers 400
+    // "Invalid assistant message: content, tool_calls or
+    // reasoning_content must be set"
+    // (https://api-docs.deepseek.com/api/create-chat-completion). The
+    // shape arises when a replayed turn's only content was reasoning
+    // stripped for this target, or an empty text part.
+    const text = assistantText(msg);
     // v1.4 spec §3.3 (Task 8): reasoning parts become
     // `reasoning_content` when they survive canonicalForTarget — only
     // reasoning_passback entries keep them. Origin-checked like every
@@ -647,24 +676,50 @@ function convertFromCanonicalMessage(
     // Field name per DeepSeek (https://api-docs.deepseek.com/guides/reasoning_model)
     // and OpenRouter (https://openrouter.ai/docs/use-cases/reasoning-tokens).
     const reasoningText = reasoningContent(msg);
+    const toolCalls =
+      msg.toolCalls && msg.toolCalls.length > 0
+        ? msg.toolCalls.map((tc) => ({
+            id: tc.id,
+            type: "function",
+            function: {
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+            },
+          }))
+        : undefined;
+    if (
+      text === undefined &&
+      reasoningText === undefined &&
+      toolCalls === undefined
+    ) {
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "openai",
+          code: "field_dropped",
+          path: `messages[${index}]`,
+        },
+        "Dropping an empty assistant message (no content, tool_calls or reasoning_content)",
+      );
+      return undefined;
+    }
+    const assistantMsg = {
+      role: "assistant" as const,
+      // No text keeps the shape it always sent: string "" stays "",
+      // a parts array with none stays null.
+      content: text ?? (typeof msg.content === "string" ? "" : null),
+    };
     if (reasoningText !== undefined) {
       (assistantMsg as { reasoning_content?: string }).reasoning_content =
         reasoningText;
     }
-    if (msg.toolCalls && msg.toolCalls.length > 0) {
-      (assistantMsg as { tool_calls?: unknown }).tool_calls = msg.toolCalls.map(
-        (tc) => ({
-          id: tc.id,
-          type: "function",
-          function: {
-            name: tc.function.name,
-            arguments: tc.function.arguments,
-          },
-        }),
-      );
+    if (toolCalls !== undefined) {
+      (assistantMsg as { tool_calls?: unknown }).tool_calls = toolCalls;
     }
     return assistantMsg;
   }
+
+  const content = convertFromCanonicalContent(msg.content);
 
   if (msg.role === "tool") {
     // v1.5 spec §3.2.1: media has no slot on a Chat tool message —
@@ -749,6 +804,51 @@ function toolResultText(content: string | CanonicalContentPart[]): string {
     .filter((p) => p.type === "text")
     .map((p) => p.text ?? "")
     .join("\n");
+}
+
+/**
+ * An assistant message's visible text (v1.6 Task 8a): string content
+ * as-is, else the text parts joined with "\n" (the same join
+ * toolResultText and the Ollama encoder use). Reasoning parts are
+ * `reasoningContent`'s job; media parts have no assistant slot on
+ * the Chat wire. An empty join is "no text".
+ */
+function assistantText(msg: CanonicalMessage): string | undefined {
+  const text =
+    typeof msg.content === "string"
+      ? msg.content
+      : msg.content
+          .filter((p) => p.type === "text")
+          .map((p) => p.text ?? "")
+          .join("\n");
+  return text === "" ? undefined : text;
+}
+
+/**
+ * Fold an encoded assistant tool-call message into the encoded
+ * assistant message directly before it (v1.6 Task 8a): one turn
+ * decoded as adjacent canonical messages encodes back as the single
+ * `content` + `tool_calls` assistant message Chat defines — parallel
+ * calls concatenate onto the same message.
+ */
+function mergeAssistantMessage(
+  prev: Record<string, unknown>,
+  next: Record<string, unknown>,
+): void {
+  const texts = [prev.content, next.content].filter(
+    (c): c is string => typeof c === "string" && c !== "",
+  );
+  prev.content = texts.length > 0 ? texts.join("\n") : "";
+  const reasoning = [prev.reasoning_content, next.reasoning_content].filter(
+    (r): r is string => typeof r === "string" && r !== "",
+  );
+  if (reasoning.length > 0) {
+    prev.reasoning_content = reasoning.join("\n\n");
+  }
+  prev.tool_calls = [
+    ...((prev.tool_calls as unknown[] | undefined) ?? []),
+    ...((next.tool_calls as unknown[] | undefined) ?? []),
+  ];
 }
 
 /**

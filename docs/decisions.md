@@ -8772,3 +8772,86 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `nvidia-nim` (nvidia/nemotron-3-ultra-550b-a55b) and `cerebras`
   (gpt-oss-120b); `max_output_tokens: 32768` added to `cerebras`
   only.
+
+## v1.6 Task 8a — Chat encoder never sends an empty assistant message (spec §3.3; v1.4 spec §3.3)
+
+- **The replayed shape that produced the empty message** (found via
+  the decode→encode test built from Codex's turn-2 input): a Chat
+  reply of `content: null` + `reasoning_content` + `tool_calls`
+  decodes to canonical `[{reasoning},{text:""}]` + `toolCalls`; the
+  Responses encode emits that as a `reasoning` (bg1) item, an
+  **empty `output_text` message item** and a `function_call` item;
+  the replayed input decodes back to two adjacent canonical
+  assistant messages — `[{reasoning},{text:""}]` and `""` +
+  `toolCalls`. For a non-`reasoning_passback` target (the
+  `deepseek` preset sets no passback flag),
+  `stripReasoningForTarget` removes the reasoning part and leaves
+  `[{text:""}]`; the old encoder sent any parts array as
+  `content: null` with no `tool_calls`/`reasoning_content` — the
+  `{role:"assistant",content:null}` DeepSeek 400s on
+  ("Invalid assistant message: content, tool_calls or
+  reasoning_content must be set",
+  https://api-docs.deepseek.com/api/create-chat-completion). Both
+  candidate shapes in the plan converge here; the root cause is
+  encode-side, so `responses.items.ts` is unchanged.
+- **Two wire rules in `fromCanonicalRequest`** (holds for every
+  Chat target, no provider branch): (1) an assistant message with
+  no text, no tool calls and no surviving `reasoning_content` is
+  not sent — a `field_dropped` note at `messages[<i>]` where `<i>`
+  is the canonical index; (2) an encoded assistant tool-call
+  message directly after another assistant message folds into it —
+  the single `content` + `tool_calls` shape Chat defines (the plan
+  names the text→calls pair; consecutive call messages — parallel
+  calls from one decoded turn — concatenate onto it too, since a
+  real turn boundary always has a user/tool message between).
+  Merging after dropping keeps tool-call/tool-result pairing valid:
+  a dropped message never had `tool_calls`, so no `tool` result is
+  orphaned. "Same turn" is positional — canonical carries no turn
+  marker, and adjacent assistants can only come from one turn's
+  items or a replayed history.
+- **Assistant `content` now keeps its text from parts arrays**:
+  `assistantText` joins text parts with `"\n"` (the
+  `toolResultText`/Ollama convention); before, any array encoded
+  `content: null` and the text was silently lost — the "no text"
+  rule could not have been evaluated without it. A no-text kept
+  message preserves the old shape per input kind (`""` → `""`,
+  array → `null`); DeepSeek's own tool-call replies use the same
+  two shapes.
+- **Files outside the Files block:**
+  `tests/contracts/encoder-stability.test.ts` — the appended-turn
+  property failed on the designed merge (a bare assistant
+  tool-call turn after a bare assistant folds into it — not a new
+  turn, same wire-rule class as the generator's existing bare
+  `tool` exclusion for Anthropic's merge). The generator now
+  prepends a `user` message to an appended assistant tool-call
+  turn so the append models a real turn boundary; the assertion
+  itself is unchanged (`toEqual(before)`), flagged not loosened
+  per the v1.3 Task 4 precedent.
+- Owner decision 2026-11-23: option 3 (keep the merge; the
+  encoder-stability generator change is approved; the excluded case
+  is pinned by an exact test) — the generator keeps prepending a
+  user message to an appended assistant tool-call turn, and
+  `it("appended assistant tool-call after an assistant folds into
+  it on the chat wire")` pins that merge as a documented wire rule
+  with fixed input and `toEqual` assertions.
+- **Step 5 live run (conductor, 2026-11-23)** — driver: the Task 8
+  edit-task driver, `--preset <client> --provider deepseek --model
+  <m>`, on commit 0903d1e:
+
+  | Client | Model | Runs | Result |
+  |---|---|---|---|
+  | codex | deepseek-flash | 3 | 3/3 PASS, 5 requests each, all 200, no upstream 400 |
+  | codex | deepseek-v4-pro | 3 | 3/3 PASS, 5 requests each, all 200, no upstream 400 |
+  | claude-code | deepseek-flash | 1 | PASS, 7 requests (2× 400 side requests, same count as Task 8 before this PR; the json_schema gap, Task 8b) |
+  | claude-code | deepseek-v4-pro | 1 | PASS, 8 requests (2× 400 side requests, as above) |
+
+  Both clients passed on `deepseek-flash`, the cheaper model, so
+  `deepseek.suggested` is `{ "claude-code": "deepseek-flash",
+  codex: "deepseek-flash" }`; `deepseek-v4-pro` passed too but is
+  not suggested.
+- **Files changed:** modified
+  `src/transformers/adapters/openai.adapter.ts`,
+  `src/transformers/adapters/openai.adapter.test.ts`,
+  `tests/contracts/encoder-stability.test.ts`,
+  `src/config/provider-presets.ts`,
+  `src/config/provider-presets.test.ts`, `docs/decisions.md`.
