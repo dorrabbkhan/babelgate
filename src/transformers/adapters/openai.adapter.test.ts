@@ -1582,3 +1582,203 @@ describe('reasoning_content (v1.4 spec §3.3)', () => {
     });
   });
 });
+
+// ===== v1.6 Task 8a: the Chat encoder never sends an empty assistant
+// message (Codex → DeepSeek turn-2 replay 400, spec §3.3) =====
+
+import {
+  toCanonicalRequest as responsesToCanonicalRequest,
+  fromCanonicalResponse as responsesFromCanonicalResponse,
+} from './responses.adapter';
+
+describe('empty assistant messages (v1.6 Task 8a)', () => {
+  const ATTEMPT = { providerName: 'deep', upstreamModel: 'deepseek-flash' };
+  const ORIGIN: CanonicalReasoningOrigin = {
+    provider: 'deep',
+    model: 'deepseek-flash',
+  };
+  const NO_PASSBACK: ProviderEntry = {
+    name: 'deep',
+    type: 'openai',
+    baseUrl: 'http://x',
+  };
+  const TARGET = { provider: 'openai', model: 'deepseek-flash' };
+
+  it('chat encode drops an assistant message left empty by dropped reasoning', () => {
+    // The replayed turn's reasoning part is stripped for a
+    // non-passback target; what remains (an empty text part) carries
+    // nothing a Chat upstream can see — the whole message must not
+    // be sent (DeepSeek: "Invalid assistant message: content,
+    // tool_calls or reasoning_content must be set").
+    const canonical = canonicalForTarget(
+      {
+        model: 'deepseek-flash',
+        messages: [
+          { role: 'user', content: 'hi' },
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'reasoning',
+                reasoning: { text: 'why', origin: ORIGIN },
+              },
+              { type: 'text', text: '' },
+            ],
+          },
+          { role: 'user', content: 'next' },
+        ],
+      },
+      NO_PASSBACK,
+      TARGET,
+    );
+    const wire = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest(canonical),
+    ) as unknown as { messages: Array<Record<string, unknown>> };
+    expect(
+      wire.messages.filter((m) => m.role === 'assistant'),
+    ).toHaveLength(0);
+  });
+
+  it('chat encode merges assistant text and tool calls from one turn', () => {
+    // A Responses turn decodes as adjacent assistant messages — a
+    // message item, then the function_call items — where Chat carries
+    // a single assistant message with content + tool_calls.
+    const wire = fromCanonicalRequest({
+      model: 'm',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'let me check' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            {
+              id: 'call_1',
+              type: 'function',
+              function: { name: 'f', arguments: '{}' },
+            },
+          ],
+        },
+        { role: 'tool', toolCallId: 'call_1', content: 'done' },
+        { role: 'user', content: 'next' },
+      ],
+    }) as unknown as { messages: Array<Record<string, unknown>> };
+
+    expect(wire.messages).toEqual([
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: 'let me check',
+        tool_calls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'f', arguments: '{}' },
+          },
+        ],
+      },
+      { role: 'tool', content: 'done', tool_call_id: 'call_1' },
+      { role: 'user', content: 'next' },
+    ]);
+  });
+
+  it('responses turn-2 replay encodes to valid chat messages', () => {
+    // The exact replay shape Codex sent on turn 2 of the Task 8 live
+    // run (DeepSeek 400): turn 1 answered reasoning_content + a tool
+    // call with content null, so the Responses encode emits a
+    // reasoning item, an empty output_text message and a
+    // function_call — and Codex replays all three as input.
+    const turn1 = runWithAttempt(ATTEMPT, () =>
+      toCanonicalResponse(
+        {
+          id: 'chatcmpl-1',
+          object: 'chat.completion',
+          created: 1,
+          model: 'deepseek-flash',
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: null,
+                reasoning_content: 'thinking about it',
+                tool_calls: [
+                  {
+                    id: 'call_1',
+                    type: 'function',
+                    function: { name: 'f', arguments: '{}' },
+                  },
+                ],
+              },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        } as unknown as ChatCompletionResponse,
+        'deepseek-flash',
+      ),
+    );
+
+    const toCodex = responsesFromCanonicalResponse(turn1);
+    const replayed = responsesToCanonicalRequest({
+      model: 'deepseek-flash',
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_text', text: 'do the edit' }],
+        },
+        ...(toCodex.output as unknown as Array<Record<string, unknown>>),
+        {
+          type: 'function_call_output',
+          call_id: 'call_1',
+          output: 'done',
+        },
+      ],
+    } as unknown as Parameters<typeof responsesToCanonicalRequest>[0]);
+
+    const shaped = canonicalForTarget(replayed, NO_PASSBACK, TARGET);
+    const wire = runWithAttempt(ATTEMPT, () =>
+      fromCanonicalRequest(shaped),
+    ) as unknown as { messages: Array<Record<string, unknown>> };
+
+    // DeepSeek rejects any assistant message with none of content,
+    // tool_calls or reasoning_content set.
+    for (const m of wire.messages) {
+      if (m.role !== 'assistant') continue;
+      expect(
+        (m.content !== null && m.content !== undefined) ||
+          m.tool_calls !== undefined ||
+          m.reasoning_content !== undefined,
+      ).toBe(true);
+    }
+    // The tool result still pairs with its call.
+    expect(
+      wire.messages.find((m) => m.role === 'tool'),
+    ).toMatchObject({ tool_call_id: 'call_1' });
+  });
+
+  it('empty assistant drop records a trace note', () => {
+    let wire: { messages: Array<Record<string, unknown>> } | undefined;
+    const trace = traced(() => {
+      wire = runWithAttempt(ATTEMPT, () =>
+        fromCanonicalRequest({
+          model: 'm',
+          messages: [
+            { role: 'user', content: 'hi' },
+            { role: 'assistant', content: '' },
+          ],
+        }),
+      ) as unknown as { messages: Array<Record<string, unknown>> };
+    });
+
+    expect(
+      wire?.messages.filter((m) => m.role === 'assistant'),
+    ).toHaveLength(0);
+    expect(trace.notes).toContainEqual({
+      stage: 'encode',
+      adapter: 'openai',
+      code: 'field_dropped',
+      path: 'messages[1]',
+    });
+  });
+});
