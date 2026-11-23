@@ -9284,3 +9284,55 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `package-lock.json` — Global Constraints permits
   package.json/package-lock.json changes in Task 12 "for the SDK
   examples only"; the two deviations inside them are itemised above.
+
+## v1.6 Task 13 — scripted competitor check (spec §3.9, E12)
+
+- **What shipped:** `scripts/research/competitor-check.sh` fetches, per
+  `owner/repo` in `competitor-repos.txt`, `gh api repos/<repo>` (stars,
+  last push, archived), `repos/<repo>/releases/latest` (404 → the repo
+  has no GitHub release and the cell reads `—`; any other error aborts
+  naming the repo) and
+  `search/issues?q=repo:<repo> is:issue is:open created:>=<since>
+  thinking OR tool OR stream OR reasoning` (`per_page=5`,
+  `sort=created&order=desc` — `total_count` is the report's count, the
+  first 5 titles render with `#number` links). The JSON lands in a temp
+  dir and `scripts/research/competitor-check.ts` parses it into the
+  dated Markdown table plus the stale-preset-docs section — the `.sh`
+  is fetch-only, the `.ts` is parse-only, per the Interfaces line.
+- **Repo list:** the 2026-11-20 market-check table (eleven rows,
+  including `dorrabbkhan/babelgate` itself — it was a row in that
+  check) plus the plan's additions `anthropics/claude-code`,
+  `openai/codex`, `ollama/ollama`. Labels are one-word roles
+  (self/gateway/router/switcher/client/provider) so the table reads
+  like the earlier market docs.
+- **Defaults and rendering:** `--since` defaults to 30 days ago (GNU
+  `date -d` with a BSD `date -v-30d` fallback for macOS), `--out` to
+  `docs/research/<today>-competitor-check.md`. Stars render `NN.Nk`
+  above 10k like the 11-16/11-20 market docs; release cells are
+  `<tag> (<date>)` or `—`; the archived flag renders `**archived**`.
+  Issue titles are whitespace-collapsed and `[`/`]`-escaped so a
+  recorded title can't become a Markdown link. "Stale" means
+  `verified` more than 30 days before the report date — exactly 30 is
+  not stale (pinned by `"stale preset docs listed"`).
+- **Fixtures are recorded, not written:** the three fixture repos —
+  `BerriAI/litellm`, `tensorzero/tensorzero` (archived),
+  `musistudio/claude-code-router` — were captured with the same three
+  `gh api` calls on 2026-11-23 into `scripts/research/fixtures/`, so
+  the tests exercise the real response shapes offline.
+- **Files outside the Files block:** `scripts/research/competitor-check.ts`
+  (the `.ts` helper the Interfaces line requires — "pure parsing in a
+  `.ts` helper so it is testable offline" — but the Files block lists
+  only the `.sh`, the repo list and the test);
+  `scripts/research/fixtures/repos.txt`;
+  `scripts/research/fixtures/BerriAI_litellm.repo.json`;
+  `scripts/research/fixtures/BerriAI_litellm.release.json`;
+  `scripts/research/fixtures/BerriAI_litellm.issues.json`;
+  `scripts/research/fixtures/tensorzero_tensorzero.repo.json`;
+  `scripts/research/fixtures/tensorzero_tensorzero.release.json`;
+  `scripts/research/fixtures/tensorzero_tensorzero.issues.json`;
+  `scripts/research/fixtures/musistudio_claude-code-router.repo.json`;
+  `scripts/research/fixtures/musistudio_claude-code-router.release.json`;
+  `scripts/research/fixtures/musistudio_claude-code-router.issues.json`
+  (Step 1 names `scripts/research/fixtures/` for the recorded `gh api`
+  JSON but the Files block does not list it); and `docs/decisions.md`
+  (this entry).
