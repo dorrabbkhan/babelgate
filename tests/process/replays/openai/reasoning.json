@@ -1,0 +1,337 @@
+{
+  "source": "recorded: openai API, deepseek/deepseek-r1-0528 (via npm run record:streams; reasoning requested via the OpenRouter `reasoning` object)",
+  "date": "2026-11-23",
+  "model": "deepseek/deepseek-r1-0528",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "gen-1795476177-DO4zYvlnSg9wv1VK5KaJ",
+      "model": "deepseek/deepseek-r1-0528"
+    },
+    {
+      "type": "text_delta",
+      "text": "No,"
+    },
+    {
+      "type": "text_delta",
+      "text": " 9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".11"
+    },
+    {
+      "type": "text_delta",
+      "text": " is not"
+    },
+    {
+      "type": "text_delta",
+      "text": " greater than"
+    },
+    {
+      "type": "text_delta",
+      "text": " 9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".  \n\n"
+    },
+    {
+      "type": "text_delta",
+      "text": "To compare"
+    },
+    {
+      "type": "text_delta",
+      "text": ":  \n"
+    },
+    {
+      "type": "text_delta",
+      "text": "- "
+    },
+    {
+      "type": "text_delta",
+      "text": "9."
+    },
+    {
+      "type": "text_delta",
+      "text": "9 can"
+    },
+    {
+      "type": "text_delta",
+      "text": " be written"
+    },
+    {
+      "type": "text_delta",
+      "text": " as "
+    },
+    {
+      "type": "text_delta",
+      "text": "9."
+    },
+    {
+      "type": "text_delta",
+      "text": "90 ("
+    },
+    {
+      "type": "text_delta",
+      "text": "since"
+    },
+    {
+      "type": "text_delta",
+      "text": " "
+    },
+    {
+      "type": "text_delta",
+      "text": "9."
+    },
+    {
+      "type": "text_delta",
+      "text": "9 ="
+    },
+    {
+      "type": "text_delta",
+      "text": " 9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".90"
+    },
+    {
+      "type": "text_delta",
+      "text": ").  \n"
+    },
+    {
+      "type": "text_delta",
+      "text": "- Comparing"
+    },
+    {
+      "type": "text_delta",
+      "text": " the"
+    },
+    {
+      "type": "text_delta",
+      "text": " decimal parts"
+    },
+    {
+      "type": "text_delta",
+      "text": ": "
+    },
+    {
+      "type": "text_delta",
+      "text": "0."
+    },
+    {
+      "type": "text_delta",
+      "text": "11 ("
+    },
+    {
+      "type": "text_delta",
+      "text": "from"
+    },
+    {
+      "type": "text_delta",
+      "text": " 9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".11"
+    },
+    {
+      "type": "text_delta",
+      "text": ") is"
+    },
+    {
+      "type": "text_delta",
+      "text": " less than"
+    },
+    {
+      "type": "text_delta",
+      "text": " 0"
+    },
+    {
+      "type": "text_delta",
+      "text": "."
+    },
+    {
+      "type": "text_delta",
+      "text": "90 ("
+    },
+    {
+      "type": "text_delta",
+      "text": "from "
+    },
+    {
+      "type": "text_delta",
+      "text": "9."
+    },
+    {
+      "type": "text_delta",
+      "text": "90)."
+    },
+    {
+      "type": "text_delta",
+      "text": "  \n-"
+    },
+    {
+      "type": "text_delta",
+      "text": " Therefore,"
+    },
+    {
+      "type": "text_delta",
+      "text": " 9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".11"
+    },
+    {
+      "type": "text_delta",
+      "text": " < "
+    },
+    {
+      "type": "text_delta",
+      "text": "9."
+    },
+    {
+      "type": "text_delta",
+      "text": "9."
+    },
+    {
+      "type": "text_delta",
+      "text": "  \n\nAlternatively"
+    },
+    {
+      "type": "text_delta",
+      "text": ":"
+    },
+    {
+      "type": "text_delta",
+      "text": "  \n-"
+    },
+    {
+      "type": "text_delta",
+      "text": " "
+    },
+    {
+      "type": "text_delta",
+      "text": "9."
+    },
+    {
+      "type": "text_delta",
+      "text": "11 ="
+    },
+    {
+      "type": "text_delta",
+      "text": " 911"
+    },
+    {
+      "type": "text_delta",
+      "text": "/100"
+    },
+    {
+      "type": "text_delta",
+      "text": "  \n-"
+    },
+    {
+      "type": "text_delta",
+      "text": " 9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".9"
+    },
+    {
+      "type": "text_delta",
+      "text": " = "
+    },
+    {
+      "type": "text_delta",
+      "text": "99/"
+    },
+    {
+      "type": "text_delta",
+      "text": "10 ="
+    },
+    {
+      "type": "text_delta",
+      "text": " 990"
+    },
+    {
+      "type": "text_delta",
+      "text": "/100"
+    },
+    {
+      "type": "text_delta",
+      "text": "  \n-"
+    },
+    {
+      "type": "text_delta",
+      "text": " Since"
+    },
+    {
+      "type": "text_delta",
+      "text": " 911"
+    },
+    {
+      "type": "text_delta",
+      "text": "/100"
+    },
+    {
+      "type": "text_delta",
+      "text": " < "
+    },
+    {
+      "type": "text_delta",
+      "text": "990/"
+    },
+    {
+      "type": "text_delta",
+      "text": "100,"
+    },
+    {
+      "type": "text_delta",
+      "text": " 9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".11"
+    },
+    {
+      "type": "text_delta",
+      "text": " is"
+    },
+    {
+      "type": "text_delta",
+      "text": " less than"
+    },
+    {
+      "type": "text_delta",
+      "text": " 9"
+    },
+    {
+      "type": "text_delta",
+      "text": ".9"
+    },
+    {
+      "type": "text_delta",
+      "text": "."
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "inputTokens": 20,
+        "outputTokens": 667,
+        "totalTokens": 687
+      }
+    },
+    {
+      "type": "message_end",
+      "finishReason": "stop"
+    }
+  ],
+  "nonStreaming": null
+}

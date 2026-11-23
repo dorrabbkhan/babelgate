@@ -1,0 +1,65 @@
+{
+  "source": "recorded: openai API, deepseek/deepseek-r1-0528 (via npm run record:streams; reasoning requested via the OpenRouter `reasoning` object; tool call forced with tool_choice required)",
+  "date": "2026-11-23",
+  "model": "deepseek/deepseek-r1-0528",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "gen-1795476198-TUO8nQsO9Q1xborDUMmN",
+      "model": "deepseek/deepseek-r1-0528"
+    },
+    {
+      "type": "tool_call_start",
+      "index": 0,
+      "id": "01a20ab8a9d9b560b8cc0f6ed43c944e",
+      "name": "get_weather"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "{\""
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "location"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "\":\""
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "Paris"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "\""
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "}"
+    },
+    {
+      "type": "tool_call_end",
+      "index": 0
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "inputTokens": 103,
+        "outputTokens": 101,
+        "totalTokens": 204
+      }
+    },
+    {
+      "type": "message_end",
+      "finishReason": "tool_call"
+    }
+  ],
+  "nonStreaming": null
+}

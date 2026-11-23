@@ -1,0 +1,41 @@
+{
+  "source": "recorded: gemini API, gemini-3.5-flash (via npm run record:streams; includeThoughts:true)",
+  "date": "2026-11-23",
+  "model": "gemini-3.5-flash",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "Vs8Ea__xHcKhvdIP7NjzsAM",
+      "model": "gemini-3.6-flash"
+    },
+    {
+      "type": "text_delta",
+      "text": "No, 9.11 is **not** greater than 9.9. \n\nHere is why:\n"
+    },
+    {
+      "type": "text_delta",
+      "text": "* If you equalize the decimal places, you are comparing **9.11** to **9.90**."
+    },
+    {
+      "type": "text_delta",
+      "text": " \n* Since 9.90 (or 9.9) has a 9 in the tenths place"
+    },
+    {
+      "type": "text_delta",
+      "text": " while 9.11 has a 1 in the tenths place, **9.9 is larger than 9.11**."
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "inputTokens": 17,
+        "outputTokens": 101,
+        "totalTokens": 376
+      }
+    },
+    {
+      "type": "message_end",
+      "finishReason": "stop"
+    }
+  ],
+  "nonStreaming": null
+}

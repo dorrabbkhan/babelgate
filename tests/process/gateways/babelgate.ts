@@ -20,6 +20,12 @@ export function babelgateYaml(upstream: string): string {
     "responses",
   ]) {
     lines.push(`  ${provider}:`, `    type: ${provider}`, `    base_url: ${upstream}`);
+    // §3.3: reasoning_content reaches an openai/ollama target only
+    // with the entry's reasoning_passback opt-in — the conformance
+    // scenarios assert it goes back, so the mock entries set it.
+    if (provider === "openai" || provider === "ollama") {
+      lines.push(`    reasoning_passback: true`);
+    }
     // the mock ignores auth — api_key_env is only schema-required
     if (provider !== "ollama") {
       lines.push(`    api_key_env: BABELGATE_MOCK_KEY`);

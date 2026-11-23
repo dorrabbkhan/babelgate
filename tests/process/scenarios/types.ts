@@ -104,8 +104,7 @@ export interface Scenario {
   upstream: UpstreamDialect;
   /**
    * The recorded provider body the mock upstream replays — resolved
-   * like mock-upstream.ts (replays root before the streams corpus, so
-   * `openai/tool_call.sse` reuses the recorded fixture).
+   * like mock-upstream.ts (replays root before the streams corpus).
    */
   replay: string;
   turns: ScenarioTurn[];

@@ -1,0 +1,40 @@
+{
+  "source": "recorded: gemini API, gemini-3.5-flash (via npm run record:streams; includeThoughts:true)",
+  "date": "2026-11-23",
+  "model": "gemini-3.5-flash",
+  "expectedEvents": [
+    {
+      "type": "message_start",
+      "id": "WM8Ea7WPI-aM7M8PufamsQU",
+      "model": "gemini-3.6-flash"
+    },
+    {
+      "type": "tool_call_start",
+      "index": 0,
+      "id": "call_12989856760500694172",
+      "name": "get_weather"
+    },
+    {
+      "type": "tool_call_delta",
+      "index": 0,
+      "argumentsDelta": "{\"location\":\"Paris\"}"
+    },
+    {
+      "type": "tool_call_end",
+      "index": 0
+    },
+    {
+      "type": "usage",
+      "usage": {
+        "inputTokens": 59,
+        "outputTokens": 16,
+        "totalTokens": 149
+      }
+    },
+    {
+      "type": "message_end",
+      "finishReason": "tool_call"
+    }
+  ],
+  "nonStreaming": null
+}

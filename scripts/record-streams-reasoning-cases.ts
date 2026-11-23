@@ -91,14 +91,16 @@ export function openaiReasoningCases(): Record<string, RecCase> {
 /**
  * Gemini thinking models return `thought: true` parts and
  * `thoughtSignature` when generationConfig.thinkingConfig.includeThoughts
- * is true (https://ai.google.dev/gemini-api/docs/thinking).
+ * is true (https://ai.google.dev/gemini-api/docs/thinking). On
+ * gemini-3.5-flash a `thinkingBudget` returns thought tokens but no
+ * streamed thought parts; `thinkingLevel: "high"` does.
  */
 export function geminiThinkingCases(): Record<string, RecCase> {
   if (!REPLAYS_ONLY) return {};
   const generationConfig = {
     temperature: 0,
     maxOutputTokens: 2048,
-    thinkingConfig: { thinkingBudget: 1024, includeThoughts: true },
+    thinkingConfig: { thinkingLevel: "high", includeThoughts: true },
   };
   return {
     thinking: {

@@ -1,10 +1,10 @@
 /**
  * streamed-tool-args (v1.6 plan Task 13b): the upstream streams one
  * tool call's arguments in >= 5 deltas (the recorded
- * `openai/tool_call.sse` — 8 argument chunks). Pass: the client
- * stream carries exactly one tool call whose concatenated arguments
- * parse as the recorded JSON. Wire rules: Chat Completions streams
- * `tool_calls[].function.arguments` as string fragments
+ * `openai/tool_call.sse` — 5 non-empty argument chunks). Pass: the
+ * client stream carries exactly one tool call whose concatenated
+ * arguments parse as the recorded JSON. Wire rules: Chat Completions
+ * streams `tool_calls[].function.arguments` as string fragments
  * (https://platform.openai.com/docs/api-reference/chat-streaming);
  * Anthropic streams them as `input_json_delta.partial_json` and
  * Responses as `response.function_call_arguments.delta`
@@ -37,8 +37,8 @@ const TOOLS_RESPONSES = [
   },
 ];
 
-/** The recorded arguments in tests/fixtures/streams/openai/tool_call.sse. */
-const RECORDED_ARGS = { location: "Santorini, Greece" };
+/** The recorded arguments in tests/process/replays/openai/tool_call.sse. */
+const RECORDED_ARGS = { location: "Paris" };
 
 function anthropicToolCalls(r: TurnResult): {
   count: number;
@@ -106,14 +106,11 @@ function build(client: "anthropic" | "responses"): Scenario {
     name: `streamed-tool-args:${client}->openai`,
     client,
     upstream: "openai",
-    // tests/process/replays/openai/tool_call.sse — verbatim events
-    // from tests/fixtures/streams/openai/tool_call.sse (the
-    // OpenAI Go SDK streamaccumulator_test.go recording) re-framed
-    // with the blank-line event separator the SSE wire format uses
-    // (https://html.spec.whatwg.org/multipage/server-sent-events.html):
-    // the fixture lost its empty lines on extraction and stricter
-    // upstream readers (CCR, free-claude-code) parse the whole file
-    // as one event. Every other corpus fixture is blank-separated.
+    // tests/process/replays/openai/tool_call.sse — recorded bytes
+    // from gpt-4o-mini (npm run record:streams,
+    // RECORD_OUT_DIR=tests/process/replays, 2026-11-23): the
+    // arguments stream as 5 non-empty deltas
+    // `{"` `location` `":"` `Paris` `"}` — the plan's >= 5.
     replay: "openai/tool_call.sse",
     turns: [
       {

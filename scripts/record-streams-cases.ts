@@ -210,7 +210,7 @@ function openaiSetup(streamsDir: string) {
   );
   const model = envOr(
     "RECORD_OPENAI_MODEL",
-    viaOpenRouter ? "deepseek/deepseek-r1" : "gpt-4o-mini",
+    viaOpenRouter ? "deepseek/deepseek-r1-0528" : "gpt-4o-mini",
   );
   return {
     dir: join(streamsDir, "openai"),

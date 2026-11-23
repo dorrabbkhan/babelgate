@@ -18,10 +18,10 @@
 #
 # Keys come from env, never from flags:
 #   openai upstream — OPENROUTER_API_KEY (target openrouter.ai/api,
-#                     model default deepseek/deepseek-r1) or
+#                     model default deepseek/deepseek-r1-0528) or
 #                     OPENAI_API_KEY (api.openai.com, gpt-4o-mini)
 #   gemini upstream — GEMINI_API_KEY (generativelanguage.googleapis.com,
-#                     gemini-2.5-flash)
+#                     gemini-3.5-flash)
 # Model overrides: CONFORMANCE_LIVE_MODEL_{OPENAI,GEMINI} or
 # CONFORMANCE_LIVE_MODEL.
 #
@@ -76,7 +76,7 @@ case "$upstream" in
     if [ -n "${OPENROUTER_API_KEY:-}" ] || [ -z "${OPENAI_API_KEY:-}" ]; then
       key_env="OPENROUTER_API_KEY"
       target="https://openrouter.ai/api"
-      model_default="deepseek/deepseek-r1"
+      model_default="deepseek/deepseek-r1-0528"
     else
       key_env="OPENAI_API_KEY"
       target="https://api.openai.com"
@@ -87,7 +87,7 @@ case "$upstream" in
     key_header="x-goog-api-key"
     key_env="GEMINI_API_KEY"
     target="https://generativelanguage.googleapis.com"
-    model_default="gemini-2.5-flash"
+    model_default="gemini-3.5-flash"
     ;;
 esac
 if [ -z "${!key_env:-}" ] && [ "$dry_run" = 0 ]; then

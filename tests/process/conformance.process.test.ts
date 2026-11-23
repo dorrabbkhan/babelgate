@@ -116,7 +116,8 @@ function routesFor(s: Scenario): MockRoute[] {
   };
   return s.upstream === "openai"
     ? [{ method: "POST", path: /chat\/completions$/, reply }]
-    : [{ method: "POST", path: /generateContent/, reply }];
+    // streamed calls hit :streamGenerateContent ("Generate" capital G)
+    : [{ method: "POST", path: /[gG]enerateContent/, reply }];
 }
 
 /** The same resolution order as mock-upstream.ts, checked up front so
@@ -289,7 +290,7 @@ describe("conformance (spec §3.10)", () => {
           result: verdict.pass ? "pass" : "fail",
           reason: verdict.reason,
           evidence: verdict.evidence,
-          live: verdict.pass ? "pending" : "pending",
+          live: "pending",
         });
         expect(
           verdict.pass,
@@ -349,7 +350,7 @@ function renderReport(): string {
   for (const f of failures) {
     lines.push(
       `- ${f.gateway} / ${f.scenario}: ${f.reason ?? "failed"}`,
-      `  - repro: CONFORMANCE_GATEWAYS=${f.gateway} CONFORMANCE_REPLAY=1 npm run test:process -- conformance.process.test.ts`,
+      `  - repro: CONFORMANCE_GATEWAYS=${f.gateway} npm run test:process -- conformance.process.test.ts`,
     );
     if (f.evidence !== undefined) {
       lines.push(
@@ -357,6 +358,15 @@ function renderReport(): string {
         `  - response shape: \`${JSON.stringify(f.evidence.response)}\``,
       );
     }
+  }
+  lines.push("", "## Live confirmation", "");
+  if (failures.length === 0) {
+    lines.push("- none");
+  }
+  for (const f of failures) {
+    lines.push(
+      `- ${f.gateway} / ${f.scenario}: \`scripts/research/conformance-live.sh ${f.gateway} "${f.scenario}"\``,
+    );
   }
   const unsupported = cells.filter((c) => c.result === "not supported");
   if (unsupported.length > 0) {
