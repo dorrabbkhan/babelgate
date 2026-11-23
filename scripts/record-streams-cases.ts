@@ -5,6 +5,10 @@
  */
 import { join } from "node:path";
 import type { Provider } from "../src/transformers";
+import {
+  geminiThinkingCases,
+  openaiReasoningCases,
+} from "./record-streams-reasoning-cases";
 
 const WEATHER_DESCRIPTION = "Get the current weather for a city";
 const WEATHER_SCHEMA = {
@@ -187,10 +191,27 @@ async function ollamaSetup(
 }
 
 function openaiSetup(streamsDir: string) {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) return "OPENAI_API_KEY not set";
-  const baseUrl = envOr("OPENAI_API_BASE_URL", "https://api.openai.com");
-  const model = envOr("RECORD_OPENAI_MODEL", "gpt-4o-mini");
+  // OpenRouter is a second key source for the Chat dialect: its
+  // reasoning models stream `reasoning` / `reasoning_details` on the
+  // assistant message
+  // (https://openrouter.ai/docs/use-cases/reasoning-tokens); DeepSeek
+  // direct uses `reasoning_content`
+  // (https://api-docs.deepseek.com/guides/reasoning_model). OPENAI_API_KEY
+  // wins when both are set (a bare OPENROUTER_API_KEY run defaults to
+  // the OpenRouter base URL and a reasoning model).
+  const openaiKey = process.env.OPENAI_API_KEY;
+  const openrouterKey = process.env.OPENROUTER_API_KEY;
+  const key = openaiKey ?? openrouterKey;
+  if (!key) return "OPENAI_API_KEY / OPENROUTER_API_KEY not set";
+  const viaOpenRouter = openaiKey === undefined && openrouterKey !== undefined;
+  const baseUrl = envOr(
+    "OPENAI_API_BASE_URL",
+    viaOpenRouter ? "https://openrouter.ai/api" : "https://api.openai.com",
+  );
+  const model = envOr(
+    "RECORD_OPENAI_MODEL",
+    viaOpenRouter ? "deepseek/deepseek-r1" : "gpt-4o-mini",
+  );
   return {
     dir: join(streamsDir, "openai"),
     ext: "sse" as const,
@@ -267,6 +288,10 @@ function openaiSetup(streamsDir: string) {
           max_tokens: 5,
         },
       },
+      // Reasoning replays (v1.6 Task 13b): defined in
+      // record-streams-reasoning-cases.ts, empty unless RECORD_OUT_DIR
+      // redirects the output to tests/process/replays/.
+      ...openaiReasoningCases(),
       // No deterministic trigger for an OpenAI in-stream error is known;
       // the case stays unrecorded until one is found.
     },
@@ -450,6 +475,10 @@ function geminiSetup(streamsDir: string) {
           generationConfig: { temperature: 0, maxOutputTokens: 8 },
         },
       },
+      // Thinking replays (v1.6 Task 13b): defined in
+      // record-streams-reasoning-cases.ts, empty unless RECORD_OUT_DIR
+      // redirects the output to tests/process/replays/.
+      ...geminiThinkingCases(),
       // No deterministic trigger for a Gemini in-stream error is known;
       // the case stays unrecorded until one is found.
     },
@@ -460,9 +489,11 @@ function geminiSetup(streamsDir: string) {
 export function providerSetups(
   streamsDir: string,
   ollamaKillCmd?: string,
-): Record<
-  Provider,
-  () => ProviderRecording | string | Promise<ProviderRecording | string>
+): Partial<
+  Record<
+    Provider,
+    () => ProviderRecording | string | Promise<ProviderRecording | string>
+  >
 > {
   return {
     ollama: () => ollamaSetup(streamsDir, ollamaKillCmd),

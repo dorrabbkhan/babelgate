@@ -9336,3 +9336,68 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   (Step 1 names `scripts/research/fixtures/` for the recorded `gh api`
   JSON but the Files block does not list it); and `docs/decisions.md`
   (this entry).
+
+## v1.6 Task 13b — competitor conformance run (spec §3.10, D9)
+
+- **What shipped:** a generalization of the §3.2 process harness — a
+  `GatewayUnderTest` per gateway (babelgate, CCR 3.1.6, free-claude-code
+  v6.15.0/e8806fb, installed pinned under gitignored `tmp/` by
+  `scripts/research/conformance-run.sh`) — three replay-backed
+  scenarios (`thinking-after-tool`, `streamed-tool-args`,
+  `multi-turn-reasoning`), `conformance.process.test.ts` driven by
+  `CONFORMANCE_GATEWAYS` (default `babelgate` only; no skipped tests),
+  `scripts/research/conformance-live.sh` for live confirmation, and the
+  draft report. Evidence is shape-only (`<string:N>`), never prompt or
+  completion text.
+- **Reasoning pass-rule citations (the request field that carries
+  reasoning back, per upstream docs):** OpenRouter Chat `reasoning` /
+  `reasoning_details` —
+  https://openrouter.ai/docs/use-cases/reasoning-tokens; DeepSeek Chat
+  `reasoning_content` — https://api-docs.deepseek.com/guides/reasoning_model;
+  Gemini `thought` / `thoughtSignature` on a model part —
+  https://ai.google.dev/gemini-api/docs/thinking. Anthropic client side:
+  signed thinking blocks —
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking.
+  The same URLs sit in code comments in
+  `tests/process/scenarios/client.ts`, the three scenario modules and
+  `scripts/record-streams-cases.ts`.
+- **CCR is launched as `next-ai-gateway.js` directly,** not `ccr
+  serve`: the management layer spawns the gateway as a child whose
+  core port it derives from `PORT`, which collides with the service
+  port under test ports. The gateway runtime is the same pinned
+  package code; static-key auth via env, JSON provider config via
+  `GATEWAY_CONFIG_PATH`.
+- **`tests/process/replays/openai/tool_call.sse`** holds the verbatim
+  events of `tests/fixtures/streams/openai/tool_call.sse` (the OpenAI
+  Go SDK streamaccumulator recording) re-framed with the blank-line
+  event separator the SSE spec uses: the fixture lost its blank lines
+  on extraction — it is the only non-blank-separated `.sse` in the
+  corpus — and spec-compliant upstream readers (CCR, free-claude-code)
+  parsed the whole file as one event and dropped every chunk.
+  babelgate tolerated the single-newline framing. Event payloads are
+  byte-identical; no fixture was edited.
+- **Recorder (`npm run record:streams`) gained `RECORD_OUT_DIR`** plus
+  four replay-only cases gated on it (`reasoning`,
+  `reasoning_tool_call` via `OPENROUTER_API_KEY` →
+  `https://openrouter.ai/api`, and `thinking`, `thinking_tool_call`
+  via `includeThoughts`), so a default run cannot write new files into
+  the oracle dir. Two pre-existing ts-node compile errors on main were
+  fixed so the recorder can run at all: `providerSetups` returned a
+  `Record<Provider,…>` without the `responses` key (now `Partial`), and
+  `expectedEventsFromWire`'s switch did not cover `responses` (now a
+  default throw).
+- **Files outside the Files block:** `tests/process/harness.ts`
+  (`GatewayUnderTest.start` gains a `models` map — competitor provider
+  configs list model names and live mode needs real ones);
+  `tests/process/binary.process.test.ts` (the one existing caller
+  passes the same mock names); `tests/process/scenarios/types.ts` and
+  `tests/process/scenarios/client.ts` (the scenario type plus the
+  turn-runner/reasoning helpers the Files block's scenario modules
+  need — the block names only the three scenario files);
+  `scripts/record-streams.ts`, `scripts/record-streams-cases.ts`,
+  `scripts/record-streams-reasoning-cases.ts` and
+  `scripts/stream-fixture-events.ts` (the `RECORD_OUT_DIR` override +
+  the reasoning cases split into their own module —
+  record-streams-cases.ts was already over the ~400-line convention —
+  + the two compile fixes above); and `docs/decisions.md` (this
+  entry).

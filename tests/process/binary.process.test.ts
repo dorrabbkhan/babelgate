@@ -57,6 +57,7 @@ async function withGateway(
     upstream: upstream.url,
     port: await freePort(),
     workDir: dir,
+    models: { openai: "openai/mock-chat", gemini: "gemini/mock-gem" },
   });
   try {
     await fn({ gw, upstream, workDir: dir });

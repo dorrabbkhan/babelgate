@@ -18,6 +18,10 @@
  *                                      case; RECORD_TWINS=none → no twins)
  *   RECORD_OVERWRITE=1               — allow rewriting files that already
  *                                      exist (default: never overwrite)
+ *   RECORD_OUT_DIR=<dir>             — output root (default
+ *                                      tests/fixtures/streams); the v1.6
+ *                                      conformance replays record under
+ *                                      tests/process/replays
  *   RECORD_<PROVIDER>_MODEL          — model override per provider
  *   OLLAMA_MIDSTREAM_KILL            — opt-in shell command run ONCE,
  *                                      mid-stream, to kill the running model
@@ -40,7 +44,7 @@
  */
 import { exec } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { providerSetups, type ProviderRecording } from "./record-streams-cases";
 import {
   buildFixtureJson,
@@ -48,7 +52,10 @@ import {
 } from "./stream-fixture-events";
 import type { Provider } from "../src/transformers";
 
-const STREAMS_DIR = join(__dirname, "..", "tests", "fixtures", "streams");
+const STREAMS_DIR =
+  process.env.RECORD_OUT_DIR !== undefined && process.env.RECORD_OUT_DIR !== ""
+    ? resolve(__dirname, "..", process.env.RECORD_OUT_DIR)
+    : join(__dirname, "..", "tests", "fixtures", "streams");
 const DATE = new Date().toISOString().slice(0, 10);
 
 const RECORD_PROVIDERS = csv(process.env.RECORD_PROVIDERS);
@@ -232,7 +239,9 @@ async function main(): Promise<void> {
     "gemini",
   ] as Provider[]) {
     if (RECORD_PROVIDERS && !RECORD_PROVIDERS.includes(provider)) continue;
-    const rec = await setups[provider]();
+    const setup = setups[provider];
+    if (setup === undefined) continue;
+    const rec = await setup();
     if (typeof rec === "string") {
       console.log(`${provider}: skipped (${rec})`);
       continue;
