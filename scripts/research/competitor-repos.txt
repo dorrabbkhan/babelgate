@@ -1,0 +1,19 @@
+# Repos watched by scripts/research/competitor-check.sh (v1.6 spec §3.9).
+# One `owner/repo  label` per line; the label is a one-word role shown in
+# the report. The 2026-11-20 market-check table (docs/research/
+# 2026-11-20-market-check.md §1) plus the two clients and the provider
+# the v1.6 plan adds. Update when the landscape moves.
+dorrabbkhan/babelgate  self
+BerriAI/litellm  gateway
+maximhq/bifrost  gateway
+musistudio/claude-code-router  router
+cheaper-inference/OmniRoute  router
+Alishahryar1/free-claude-code  router
+farion1231/cc-switch  switcher
+agentgateway/agentgateway  gateway
+theagentrouter/agent-router  gateway
+Portkey-AI/gateway  gateway
+Kong/kong  gateway
+anthropics/claude-code  client
+openai/codex  client
+ollama/ollama  provider

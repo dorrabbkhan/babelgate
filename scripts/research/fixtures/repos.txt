@@ -1,0 +1,7 @@
+# Repo list for competitor-check.test.ts — same `owner/repo  label`
+# shape as scripts/research/competitor-repos.txt. Each slug must have a
+# recorded <owner>_<repo>.repo.json and .issues.json here (releases are
+# optional). Recorded with `gh api` on 2026-11-23.
+BerriAI/litellm  gateway
+tensorzero/tensorzero  gateway
+musistudio/claude-code-router  router
