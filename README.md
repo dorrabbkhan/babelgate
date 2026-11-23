@@ -235,6 +235,12 @@ verified end to end),
 [Continue](docs/recipes/continue.md),
 [Aider](docs/recipes/aider.md) and
 [Open WebUI](docs/recipes/open-webui.md).
+SDK and app recipes, each with a CI-checked example under
+`examples/sdk/`:
+[LangChain](docs/recipes/langchain.md),
+[LlamaIndex](docs/recipes/llamaindex.md),
+[Vercel AI SDK](docs/recipes/vercel-ai-sdk.md) and
+[Ollama-only apps on cloud models](docs/recipes/ollama-apps.md).
 
 ## The `babelgate` CLI
 
