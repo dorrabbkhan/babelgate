@@ -81,6 +81,7 @@ CHANGELOG.md, package.json version                                              
 | 6 | Installers, Homebrew formula, winget manifest | 5 | OWNER GATE (publishing) | Sonnet | Scripts and templates |
 | 7 | Preset tiers; free/cheap presets from provider docs; `babelgate presets` | — | | Sonnet | Config vocabulary, doc-cited values |
 | 8 | First run: `--provider`, `--preset codex`, key guidance, suggested models proven | 7 | | Opus | User-facing defaults; live proof per model |
+| 8a | Chat encoder never sends an empty assistant message (Codex → DeepSeek) | 8 | | Opus | Wire format; replayed history; found in Task 8's live run |
 | 9 | Circuit breaker | — | | Sonnet | Small state machine in one loop |
 | 10 | Response cache | 9 | | Opus | Keying correctness; stream replay; schema migration |
 | 11 | Recipes: Cursor, Continue, Aider, Open WebUI | 8 | | Sonnet | Copy, hand-verified |
@@ -227,6 +228,27 @@ Spec §3.3, E5, E11, conductor's call (c), Review Focus 2.
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.**
 - [ ] **Step 4 (live, conductor runs):** for each preset with a key available, run `scripts/gates/claude-code-edit.sh` and `codex-edit.sh` through `babelgate --provider <p>` on candidate models from the provider's docs; record passing models in `suggested` with the date. No passing model → no suggestion for that client. PR body: the table of tried models and results.
 - [ ] **Step 5:** `./scripts/check.sh` → PASS. **Commit** `feat: one-command first run with provider presets`.
+
+### Task 8a: Chat encoder never sends an empty assistant message
+
+Found by the conductor's Task 8 live run (2026-11-23, owner decision: fix before DeepSeek gets a Codex suggestion). Spec §3.3 (suggested models must be proven), v1.4 spec §3.3 (reasoning pass-back).
+
+**Evidence.** `codex exec` → babelgate `--preset codex --provider deepseek` (`deepseek-flash` and `deepseek-v4-pro`): turn 1 returns 200 with `finishReason: tool_call` (reasoning + a function call); turn 2 (Codex replays the history) gets upstream `400 invalid_request_error "Invalid assistant message: content, tool_calls or reasoning_content must be set"` on `POST https://api.deepseek.com/v1/chat/completions`. Intermittent (one of four runs passed with a 400 in between). Claude Code through the same preset passes. `src/transformers/adapters/openai.adapter.ts` `convertFromCanonicalMessage` always emits `{role:"assistant", content: null}` for an assistant message, then adds `reasoning_content` only when the reasoning parts survive (origin and `reasoning_passback`) and `tool_calls` only when present. So an assistant message whose only content was dropped reasoning, or an empty text, goes out with none of the three fields. DeepSeek rejects that per https://api-docs.deepseek.com/api/create-chat-completion; other Chat upstreams tolerate it.
+
+**Files:**
+- Modify: `src/transformers/adapters/openai.adapter.ts`, `src/transformers/adapters/openai.adapter.test.ts`, `docs/decisions.md`; in Step 5 only, `src/config/provider-presets.ts` and `src/config/provider-presets.test.ts` (DeepSeek `suggested`)
+- Modify only if the root cause is on the decode side: `src/transformers/adapters/responses.items.ts`, its test
+
+**Interfaces:**
+- No canonical change. No provider-specific branch: the rule holds for every Chat target.
+- First find which replayed shape produces the empty message (a reasoning-only assistant turn, an empty `output_text` message item next to a `function_call`, or both) with a decode→encode test built from the Responses input Codex sends on turn 2. Record the shape in the decisions entry.
+- Chat encode: an assistant message with no text, no tool calls and no surviving `reasoning_content` is not sent; the encoder records a `field_dropped` trace note at `messages[<i>]`. When an assistant text message is directly followed by an assistant tool-call message from the same turn, they merge into one Chat assistant message (`content` + `tool_calls`), the shape Chat defines.
+- Message order and tool-call/tool-result pairing stay valid after a drop (no orphan `tool` message).
+
+- [ ] **Step 1: Tests.** `"chat encode drops an assistant message left empty by dropped reasoning"`, `"chat encode merges assistant text and tool calls from one turn"`, `"responses turn-2 replay encodes to valid chat messages"` (asserts every assistant message has `content`, `tool_calls` or `reasoning_content`), `"empty assistant drop records a trace note"`.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `./scripts/check.sh` → PASS.
+- [ ] **Step 5 (live, conductor runs):** the Task 8 driver, `--preset codex --provider deepseek` on `deepseek-flash` and `deepseek-v4-pro`, three runs each; all must pass with no upstream 400. Claude Code on both re-run once (no regression). Then DeepSeek's `suggested` (claude-code and codex) is set from the models that passed with both clients, in a fix round on this PR, with the live table in decisions.md and the PR body.
+- **Commit** `fix(openai): never send an empty assistant message`.
 
 ### Task 9: Circuit breaker
 
