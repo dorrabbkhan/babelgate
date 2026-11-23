@@ -9100,3 +9100,113 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `src/observe/trace.ts`, `src/observe/emit.ts`,
   `src/observe/sinks/usage-queries.ts`,
   `src/services/stream-attempt.ts`, `docs/decisions.md`.
+
+## v1.6 Task 11 — recipes: Cursor, Continue, Aider, Open WebUI (spec §3.4)
+
+- **Four new recipe pages** under `docs/recipes/`, all on the OpenAI
+  client dialect (`http://localhost:3000/v1` — except Cursor, see the
+  reachability note below): Cursor (Settings → Models → OpenAI API key
+  + "Override OpenAI Base URL" at a public https URL), Continue
+  (`~/.continue/config.yaml` `provider: openai` + `apiBase` +
+  `capabilities: [tool_use]` for Agent mode), Aider
+  (`OPENAI_API_BASE`/`OPENAI_API_KEY` env + `openai/<model>`), and
+  Open WebUI in both connection modes — OpenAI (`/v1` URL +
+  auto-discovery through the merged `GET /v1/models`) and Ollama
+  (`GET /api/tags` + `POST /api/chat` only; pull/show/generate/version
+  are not served, so the page says model management stays at the
+  provider and OpenAI mode is the fallback when a verify step probes
+  them). Each page carries the `babelgate --provider openrouter-free
+  --preset openai-apps` first run, a "what works / what doesn't" list
+  linking the `docs/compatibility.md` cells, and model-name guidance
+  (env-only mode forwards the client's model unchanged; `MODEL_MAP`
+  renames).
+- **Cursor reachability (fix round 1, `docs/recipes/cursor.md`):**
+  Cursor's docs state custom-key requests are "routed through Cursor's
+  servers for final prompt building"
+  (cursor.com/help/models-and-usage/api-keys), so `localhost` is not
+  reachable from Cursor — the recipe's central instruction is now a
+  public https URL to port 3000 (any tunnel or reverse proxy; `/v1`
+  suffix kept), with `PROXY_API_KEY` set first and pasted into Cursor's
+  OpenAI key field since the instance is internet-exposed.
+- **Wire-format/doc evidence:** client config written against
+  cursor.com/help/models-and-usage/api-keys,
+  docs.continue.dev/customize/model-providers/top-level/openai +
+  docs.continue.dev/reference,
+  aider.chat/docs/llms/openai-compat.html +
+  aider.chat/docs/config/options.html, and
+  docs.openwebui.com/getting-started/quick-start/connect-a-provider
+  (all accessed 2026-11-23; cited on the pages).
+- **Hand verification is the conductor's Step 1** (one chat + one
+  tool/edit action per client on a free preset): the sandbox has no
+  clients or keys, so every page's "Verified" line states the docs it
+  was written against and marks the run as pending — the version and
+  date are filled in from the conductor's run, no claim made ahead of
+  it.
+- **`docs/recipes/claude-code.md`:** new "On a free preset
+  (`--provider`)" section (suggested model proven on the edit-task
+  gate; presets without one take `--model`), and the E11 note in the
+  `max_output_tokens` section — Claude Code 2.1.329 (release notes
+  2026-11-19) dropped its retry at a gateway `max_tokens` limit and
+  asks for `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; babelgate's clamp is
+  independent and `--provider` prints the matching export line
+  itself.
+- **`docs/recipes/codex.md`:** new "First run on a free preset"
+  section — `--preset codex --provider <preset>` prints
+  `BABELGATE_KEY`, writes the catalog under `~/.babelgate` and emits
+  the paste-ready `config.toml` block; missing key → named env var +
+  sign-up URL, exit before listen.
+- **`README.md` recipe index only:** the four recipes join the client
+  list after the Gemini CLI line; no other README change (full
+  restructure is Task 15).
+- **Files changed:** created `docs/recipes/cursor.md`,
+  `docs/recipes/continue.md`, `docs/recipes/aider.md`,
+  `docs/recipes/open-webui.md`; modified `docs/recipes/claude-code.md`,
+  `docs/recipes/codex.md`, `README.md`, `docs/decisions.md`.
+- **Hand-check results (fix round 2; owner run 2026-11-23, docs only —
+  same files as above):**
+  `docs/recipes/aider.md` — aider 0.86.2 on `babelgate --provider
+  cerebras --preset openai-apps`, `aider --model openai/gpt-oss-120b`:
+  one chat (reply streamed) and one edit applied to the file and
+  committed; aider reported its `whole` edit format, the model answered
+  diff-style and aider applied it anyway. No tool call exercised — the
+  page's tool claim is marked accordingly.
+  `docs/recipes/continue.md` — Continue CLI `cn` 1.5.47
+  (`@continuedev/cli`) on `--provider cerebras`, `gpt-oss-120b`: chat,
+  a list-files tool call and a file edit all worked; `cn` prompts for
+  an Anthropic key unless started with `cn --config
+  ~/.continue/config.yaml` (documented; never enter a provider key
+  there). The VS Code/JetBrains extension reads the same config file
+  but was not run — only the CLI is verified.
+  `docs/recipes/open-webui.md` — Open WebUI v0.13.4 on `--provider
+  cerebras` (Ollama-mode tool check on `gemini-free`). OpenAI mode:
+  chat works, `/v1/models` auto-discovery showed `gpt-oss-120b`, one
+  tool call works with the model's Function Calling on **Native**
+  (Default sends no `tools` field; the verify button doesn't test
+  tools). Ollama mode: the verify button **fails** with "Network
+  Problem" (it probes `GET /api/version`, not served); the saved
+  connection still chats over `POST /api/chat` — the proxy streamed
+  NDJSON, on-screen streaming not recorded. Ollama-mode tool calls not
+  verified and failed in one observed case: a tool result without
+  `tool_name` is rejected on a Gemini target with `400 Tool result ""
+  has no matching assistant tool call`
+  (`src/transformers/adapters/gemini.adapter.ts:968`;
+  `src/transformers/adapters/ollama.adapter.ts:168` sets the id only
+  when `tool_name` is non-empty); the same request with `tool_name`
+  returned 200 — hand-built requests, so Open WebUI omitting
+  `tool_name` is the likely cause, not confirmed. Prefix ID claim
+  marked not verified. `docs/recipes/cursor.md` — owner tried Cursor's
+  free plan (version not recorded) with a public tunnel and
+  `PROXY_API_KEY` (babelgate answered 401 without the key, 200 with it
+  locally), but Cursor refused the custom model ("model unavailable on
+  free, switch to an included model") before sending anything — the
+  page now states it is documented, not verified end to end; whether a
+  paid plan lifts the refusal is unknown. `openrouter-free` hit its
+  daily cap (`free-models-per-day`) during the check; all four pages
+  carry a Gotchas line pointing at another preset (`cerebras` with
+  `gpt-oss-120b`, `gemini-free` with `gemini-3.8-flash`).
+- **Follow-ups for the owner (from the 2026-11-23 check):** (a) make
+  `src/transformers/adapters/ollama.adapter.ts` pair an id-less tool
+  result with the earliest unmatched call by position, with tests;
+  (b) return a clear error for a non-JSON content type on `/api/chat`
+  (today: `Cannot read properties of undefined (reading 'think')`);
+  (c) recipes for Cline and Goose.

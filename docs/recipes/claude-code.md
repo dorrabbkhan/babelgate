@@ -35,6 +35,30 @@ than `UPSTREAM_STREAM_IDLE_MS` (300 s by default) and have its stream cut.
 The preset already raises the request timeout to `UPSTREAM_TIMEOUT_MS=600000`
 for `--target ollama`.
 
+## On a free preset (`--provider`)
+
+The shortest first run — no base URL or model to look up:
+
+```bash
+OPENROUTER_API_KEY=<key from https://openrouter.ai/keys> \
+  npx babelgate --preset claude-code --provider openrouter-free
+```
+
+`--provider` fills the target type, base URL, key env var and, where the
+preset declares one, `max_output_tokens` — your own env still wins. The
+preset's suggested model is used as the `--model` (proven on the
+edit-task gate before it was listed), so the run needs only the key.
+`babelgate presets` lists every preset with its tier, key env var and
+the docs it was verified against — `gemini-free`, `groq`, `nvidia-nim`
+and `cerebras` are the other free-tier entries, `deepseek` the cheap
+one, each "per <provider>'s docs on <date>", never a promised limit.
+Presets without a proven suggestion ship with no `claude-code` model;
+pass `--model` yourself for those.
+
+When the preset carries `max_output_tokens` (e.g. `cerebras`), the
+printed export block also carries `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
+(E11 — see "Keys with a spend limit" below).
+
 ## On OpenRouter (or any OpenAI-compatible backend)
 
 ```bash
@@ -82,6 +106,15 @@ providers:
 or in env-only/preset mode with `TARGET_MAX_OUTPUT_TOKENS=8000`. The cap
 is recorded on the trace (`maxTokensClamp`), so clamped requests are
 visible in the log and the UI.
+
+Set `CLAUDE_CODE_MAX_OUTPUT_TOKENS` to the same number in the client
+too. Since Claude Code 2.1.329 (release notes 2026-11-19) it no longer
+retries when a gateway model's `max_tokens` limit is hit and asks
+gateway users to set that variable; babelgate's per-target
+`max_output_tokens` still clamps independently, so the two knobs should
+match (E11). With `--provider` this is automatic — a preset that
+declares `max_output_tokens` makes the export block print
+`export CLAUDE_CODE_MAX_OUTPUT_TOKENS=<n>` itself.
 
 (The gate's passing runs used 8 000 and 16 000 — then via
 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`, Claude Code's own variable; capping at

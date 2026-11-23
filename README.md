@@ -229,6 +229,12 @@ Gemini CLI still works with paid API keys and enterprise licences
 (`GOOGLE_GEMINI_BASE_URL` + `GEMINI_API_KEY`) — Google moved individual
 users to Antigravity CLI, so the recipe is frozen:
 [docs/recipes/gemini-cli.md](docs/recipes/gemini-cli.md).
+More clients, one recipe page each:
+[Cursor](docs/recipes/cursor.md) (Cursor: setup documented, not
+verified end to end),
+[Continue](docs/recipes/continue.md),
+[Aider](docs/recipes/aider.md) and
+[Open WebUI](docs/recipes/open-webui.md).
 
 ## The `babelgate` CLI
 
