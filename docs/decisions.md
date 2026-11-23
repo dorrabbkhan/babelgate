@@ -9104,8 +9104,9 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
 ## v1.6 Task 11 — recipes: Cursor, Continue, Aider, Open WebUI (spec §3.4)
 
 - **Four new recipe pages** under `docs/recipes/`, all on the OpenAI
-  client dialect (`http://localhost:3000/v1`): Cursor (Settings →
-  Models → OpenAI API key + "Override OpenAI Base URL"), Continue
+  client dialect (`http://localhost:3000/v1` — except Cursor, see the
+  reachability note below): Cursor (Settings → Models → OpenAI API key
+  + "Override OpenAI Base URL" at a public https URL), Continue
   (`~/.continue/config.yaml` `provider: openai` + `apiBase` +
   `capabilities: [tool_use]` for Agent mode), Aider
   (`OPENAI_API_BASE`/`OPENAI_API_KEY` env + `openai/<model>`), and
@@ -9119,6 +9120,14 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   linking the `docs/compatibility.md` cells, and model-name guidance
   (env-only mode forwards the client's model unchanged; `MODEL_MAP`
   renames).
+- **Cursor reachability (fix round 1, `docs/recipes/cursor.md`):**
+  Cursor's docs state custom-key requests are "routed through Cursor's
+  servers for final prompt building"
+  (cursor.com/help/models-and-usage/api-keys), so `localhost` is not
+  reachable from Cursor — the recipe's central instruction is now a
+  public https URL to port 3000 (any tunnel or reverse proxy; `/v1`
+  suffix kept), with `PROXY_API_KEY` set first and pasted into Cursor's
+  OpenAI key field since the instance is internet-exposed.
 - **Wire-format/doc evidence:** client config written against
   cursor.com/help/models-and-usage/api-keys,
   docs.continue.dev/customize/model-providers/top-level/openai +

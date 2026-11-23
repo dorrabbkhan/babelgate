@@ -6,18 +6,36 @@ land on any provider you configured — Ollama, Gemini, an
 Anthropic-speaking endpoint, or a free preset — with streaming and tool
 calls translated as usual.
 
-You need: Node ≥ 20 (for `npx`), the Cursor desktop app, and a reachable
-target.
+**The override URL must be reachable from Cursor's servers, not just
+your machine.** Per Cursor's docs, requests sent with a custom key are
+"routed through Cursor's servers for final prompt building"
+([cursor.com/help/models-and-usage/api-keys](https://cursor.com/help/models-and-usage/api-keys)),
+so `http://localhost:3000/v1` never reaches your babelgate — the
+override must be a public https URL, for example a tunnel or a host you
+expose, and it still needs the `/v1` suffix. Because that puts
+babelgate on the internet, `PROXY_API_KEY` is required for this recipe,
+not optional.
+
+You need: Node ≥ 20 (for `npx`), the Cursor desktop app, a reachable
+target, and any tunnel or reverse proxy that gives Cursor a public
+https URL to port 3000.
 
 > **Verified:** written against Cursor's docs
 > ([cursor.com/help/models-and-usage/api-keys](https://cursor.com/help/models-and-usage/api-keys),
 > accessed 2026-11-23). The hand check — one chat and one edit/agent
 > action through babelgate on a free preset — is run by the conductor on
-> this recipe's PR; the client version and run date are filled in from it.
+> this recipe's PR; since `localhost` is unreachable from Cursor's
+> servers, that check has to go through a real public https URL. The
+> client version and run date are filled in from it.
 
 ## Start babelgate on a free preset
 
+Set `PROXY_API_KEY` first: the URL you hand to Cursor is public, so
+babelgate must authenticate clients. Never expose an instance without
+it.
+
 ```bash
+PROXY_API_KEY=<a long random string> \
 OPENROUTER_API_KEY=<key from https://openrouter.ai/keys> \
   npx babelgate --provider openrouter-free --preset openai-apps
 ```
@@ -29,24 +47,35 @@ verified against (`gemini-free`, `groq`, `nvidia-nim` and `cerebras` are
 the other free-tier entries — free tier per each provider's docs, dated
 on that row).
 
-The printed lines are the values to paste into Cursor:
+babelgate prints the local values:
 
 ```
 export OPENAI_BASE_URL=http://localhost:3000/v1
-export OPENAI_API_KEY=babelgate
+export OPENAI_API_KEY=<your PROXY_API_KEY>
 ```
 
-`babelgate` is a placeholder — with `PROXY_API_KEY` unset the proxy
-doesn't authenticate clients; with it set, paste that key instead.
+Those are not what you paste into Cursor. The key line is right — it's
+your `PROXY_API_KEY` — but the URL line is the address on *your*
+machine, and the request comes from Cursor's servers, where
+`localhost` means Cursor's own host. Paste your public https URL
+instead (`https://<your-host>/v1`); any tunnel or reverse proxy that
+forwards to port 3000 works.
 
 ## Point Cursor at it
 
 In Cursor Settings (`Ctrl+Shift+J` / `Cmd+Shift+J`) → **Models** →
 **API Keys**:
 
-1. Paste the key into the **OpenAI API Key** field and enable it.
-2. Enable **Override OpenAI Base URL** and set it to
-   `http://localhost:3000/v1` — the `/v1` is required; babelgate's
+1. Paste your `PROXY_API_KEY` into the **OpenAI API Key** field and
+   enable it — for this recipe that means the key you started babelgate
+   with, not the `babelgate` placeholder and never an upstream provider
+   key.
+2. Enable **Override OpenAI Base URL** and set it to your public https
+   URL — `https://<your-host>/v1`. It must be reachable from Cursor's
+   servers: custom-key requests are routed through them for final
+   prompt building (per
+   [Cursor's docs](https://cursor.com/help/models-and-usage/api-keys)),
+   so `localhost` does not work. The `/v1` is required — babelgate's
    OpenAI surface lives under it.
 3. Add a model under the model list and select it in chat. The name is
    forwarded to the target unchanged, so it must be a model the provider
@@ -86,6 +115,12 @@ here.
 - **Model names are per-provider.** `nvidia/nemotron-3-ultra-550b-a55b:free`
   means nothing to a Gemini target; keep one config per provider or use
   `MODEL_MAP` on the babelgate side.
-- **`PROXY_API_KEY`** travels in Cursor's OpenAI key field if you enable
-  client auth — don't paste an upstream provider key there; upstream
-  keys live in babelgate's environment only.
+- **`PROXY_API_KEY` is required, not optional.** The override URL is
+  public, so an unauthenticated babelgate is an open relay to your
+  upstream keys' spend — set the key before you expose the port and
+  paste it into Cursor's OpenAI key field. Don't paste an upstream
+  provider key there; upstream keys live in babelgate's environment
+  only.
+- **Prompts transit Cursor's servers.** That's how the custom-key path
+  is built (per the doc linked above) — the public URL moves the
+  delivery point, not the request path.
