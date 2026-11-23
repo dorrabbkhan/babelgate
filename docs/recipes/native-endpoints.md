@@ -50,6 +50,7 @@ applied in the source format's JSON before the request is forwarded:
 | `url_images` | Fetched and inlined as bytes (`media.fetch`/`media.allow_private` guard applies) |
 | `documents` | Refused with a 400 in the client's dialect naming the field — never silently dropped |
 | `stream_usage` | Usage requested where the format allows; otherwise estimated and flagged |
+| `json_schema` | `response_format.type:"json_schema"` sent as `{type:"json_object"}` plus a system line carrying the schema (`response_format_downgraded` note); also applied on the canonical path's Chat encode |
 
 For an endpoint we haven't preset, declare the same vocabulary yourself
 on a `type: anthropic` or `type: openai` provider and opt in with
@@ -119,7 +120,8 @@ but the rest of the gateway still works:
   are recorded as usual; the inspector marks the request
   `pass-through · <preset>` and lists each gap fix's note
   (`tool_choice_dropped`, `cache_control_dropped`,
-  `count_tokens_estimated`, `usage_estimated`, `url_image_inlined`).
+  `count_tokens_estimated`, `usage_estimated`, `url_image_inlined`,
+  `response_format_downgraded`).
 - **Client auth, model-name rewriting** (`PROXY_API_KEY`, routes and
   aliases) — replies keep the name the client asked for.
 - **Reasoning** stays bound to its origin: signed thinking goes back to

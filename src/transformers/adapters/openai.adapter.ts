@@ -628,20 +628,53 @@ export function fromCanonicalRequest(
   // through by reference — never cloned or rewritten.
   if (request.responseFormat !== undefined) {
     const rf = request.responseFormat;
-    (result as { response_format?: unknown }).response_format =
-      rf.type === "json_object"
-        ? { type: "json_object" }
-        : {
-            type: "json_schema",
-            json_schema: {
-              name: rf.name,
-              schema: rf.schema,
-              ...(rf.strict !== undefined && { strict: rf.strict }),
-              ...(rf.description !== undefined && {
-                description: rf.description,
-              }),
-            },
-          };
+    // v1.6 Task 8b (v1.5 spec §3.3 gap vocabulary): an attempt entry
+    // declaring the `json_schema` gap has no schema-output mode —
+    // DeepSeek answers 400 "This response_format type is unavailable
+    // now" and documents only {type:"json_object"} for JSON Output,
+    // which also requires the word "json" in the prompt
+    // (https://api-docs.deepseek.com/guides/json_mode, verified
+    // 2026-11-23). The schema is not dropped silently: a
+    // `response_format_downgraded` note plus one appended
+    // system-message line naming the expected JSON shape — the schema
+    // JSON is the "example of the desired JSON format" the guide asks
+    // for and the line supplies the required word.
+    if (
+      rf.type === "json_schema" &&
+      currentAttempt()?.gaps?.includes("json_schema") === true
+    ) {
+      (result as { response_format?: unknown }).response_format = {
+        type: "json_object",
+      };
+      messages.push({
+        role: "system",
+        content: jsonSchemaSystemLine(rf.schema),
+      });
+      recordNote(
+        {
+          stage: "encode",
+          adapter: "openai",
+          code: "response_format_downgraded",
+          path: "response_format",
+        },
+        'Downgrading response_format "json_schema" to "json_object" (target declares the json_schema gap)',
+      );
+    } else {
+      (result as { response_format?: unknown }).response_format =
+        rf.type === "json_object"
+          ? { type: "json_object" }
+          : {
+              type: "json_schema",
+              json_schema: {
+                name: rf.name,
+                schema: rf.schema,
+                ...(rf.strict !== undefined && { strict: rf.strict }),
+                ...(rf.description !== undefined && {
+                  description: rf.description,
+                }),
+              },
+            };
+    }
   }
 
   if (request.stream !== undefined) {
@@ -1413,6 +1446,20 @@ function walkJson(
 }
 
 /**
+ * The one system-message line a `json_schema` gap appends in place
+ * of the schema field (v1.6 Task 8b): the schema JSON is the
+ * "example of the desired JSON format" DeepSeek's JSON Output guide
+ * asks for, and the line supplies the required word "json"
+ * (https://api-docs.deepseek.com/guides/json_mode). Shared by the
+ * canonical-path encode and the pass-through patchGaps.
+ */
+function jsonSchemaSystemLine(schema: unknown): string {
+  return `Respond with JSON matching this schema: ${
+    JSON.stringify(schema) ?? "{}"
+  }`;
+}
+
+/**
  * Chat Completions-dialect gap fixes for pass-through bodies (v1.5
  * spec §3.3, Task 9) — same two-pass protocol as the anthropic
  * adapter's patchGaps (see gap-fixes.ts): pass one strips/rewrites
@@ -1470,6 +1517,29 @@ export function patchGaps(
     if (opts.include_usage !== true) {
       out.stream_options = { ...opts, include_usage: true };
     }
+  }
+
+  // json_schema: the upstream has no schema-output mode (DeepSeek
+  // 400s "This response_format type is unavailable now") — send
+  // json_object, the only documented alternative, and carry the
+  // schema as a system line (same fix the canonical-path encode
+  // applies; https://api-docs.deepseek.com/guides/json_mode).
+  if (
+    gaps.includes("json_schema") &&
+    isObj(out.response_format) &&
+    out.response_format.type === "json_schema"
+  ) {
+    const schema = isObj(out.response_format.json_schema)
+      ? out.response_format.json_schema.schema
+      : undefined;
+    out.response_format = { type: "json_object" };
+    if (Array.isArray(out.messages)) {
+      out.messages.push({
+        role: "system",
+        content: jsonSchemaSystemLine(schema),
+      });
+    }
+    note("response_format_downgraded", "response_format");
   }
 
   const wantDocuments = gaps.includes("documents");

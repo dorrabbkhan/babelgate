@@ -5,10 +5,12 @@ import { z } from "zod";
  * v1.6 spec §3.3).
  *
  * A provider entry may declare `gaps:` from a fixed vocabulary — each
- * gap names one thing the upstream's Anthropic-compatible endpoint
- * does not do, and each has exactly one fix (§3.3's table), applied
- * by the source format's `patchGaps`/`applyGapFixes` before the
- * pass-through forward (or to the reply). The vocabulary is per gap,
+ * gap names one thing the upstream's same-format endpoint
+ * (Anthropic- or OpenAI-compatible) does not do, and each has
+ * exactly one fix (§3.3's table), applied by the source format's
+ * `patchGaps`/`applyGapFixes` before the pass-through forward (or to
+ * the reply), or by the target adapter's encode on the canonical
+ * path (`json_schema`, v1.6 Task 8b). The vocabulary is per gap,
  * never per provider pair.
  *
  * `PROVIDER_PRESETS` names endpoints that fill `type`, `base_url`,
@@ -30,6 +32,7 @@ export const GAPS = [
   "url_images",
   "documents",
   "stream_usage",
+  "json_schema",
 ] as const;
 
 export type Gap = (typeof GAPS)[number];
@@ -350,7 +353,13 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
    * (OpenAI) = https://api.deepseek.com`, `DEEPSEEK_API_KEY`); the
    * /v1 path is the documented OpenAI-compat alias, and
    * docs/recipes/openai-compatible-providers.md already ships this
-   * base_url.
+   * base_url. Gap verified 2026-11-23 against
+   * https://api-docs.deepseek.com/guides/json_mode: JSON Output
+   * documents only `response_format {type:"json_object"}` and
+   * requires the word "json" in the prompt; `json_schema` answers
+   * 400 "This response_format type is unavailable now" (Task 8
+   * live run), so `json_schema` is declared and the encoder sends
+   * `json_object` plus a system line carrying the schema.
    */
   deepseek: {
     type: "openai",
@@ -358,7 +367,7 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
     base_url: "https://api.deepseek.com",
     api_key_env: "DEEPSEEK_API_KEY",
     signup_url: "https://platform.deepseek.com/api_keys",
-    gaps: [],
+    gaps: ["json_schema"],
     // Proven on the edit task through `--provider deepseek`,
     // 2026-11-23 (conductor live run, v1.6 Task 8a Step 5).
     suggested: {
@@ -366,7 +375,7 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
       codex: "deepseek-flash",
     },
     docs: "https://api-docs.deepseek.com/quick_start/quick_start",
-    verified: "2026-11-22",
+    verified: "2026-11-23",
   },
 };
 

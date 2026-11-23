@@ -218,6 +218,19 @@ describe("Environment Configuration", () => {
     expect(config.registry.get("openai").preset).toBe("groq");
   });
 
+  it("TARGET_PRESET supplies the preset's declared gaps", () => {
+    // v1.6 Task 8b: the `--provider` env path carries the preset's
+    // gaps onto the entry, like the yaml loader's merge.
+    process.env.TARGET_API = "openai";
+    process.env.TARGET_PRESET = "deepseek";
+    process.env.DEEPSEEK_API_KEY = "k";
+    unsetEnv("TARGET_API_KEY_ENV");
+
+    const config = loadConfig();
+
+    expect(config.registry.get("openai").gaps).toEqual(["json_schema"]);
+  });
+
   it("a keyless preset needs no api key", () => {
     process.env.TARGET_API = "anthropic";
     process.env.TARGET_PRESET = "ollama-anthropic";

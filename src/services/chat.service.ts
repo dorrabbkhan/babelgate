@@ -109,6 +109,7 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
           {
             providerName: target.provider,
             upstreamModel: target.model,
+            gaps: entry.gaps,
           },
           async () => {
             // §3.4: a `type: responses` entry on a responses source is

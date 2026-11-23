@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { logger } from "../utils/logger";
 import type { BodySnapshot, RequestTrace, TranslationNote } from "./trace";
+import type { Gap } from "../config/provider-presets";
 
 /**
  * The per-request trace scope (spec §3.1): observeMiddleware opens it
@@ -30,6 +31,13 @@ export function currentTrace(): RequestTrace | undefined {
 export type AttemptContext = {
   providerName: string;
   upstreamModel: string;
+  /**
+   * The attempt entry's declared upstream gaps (v1.6 Task 8b, v1.5
+   * spec §3.3): set by the services so the target adapter's encode
+   * can apply gap fixes on the canonical path too — pass-through
+   * bodies go through the source format's `patchGaps` instead.
+   */
+  gaps?: readonly Gap[];
 };
 
 const attemptStorage = new AsyncLocalStorage<AttemptContext>();
