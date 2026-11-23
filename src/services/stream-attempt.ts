@@ -82,6 +82,7 @@ export function attemptStreamTarget(
     const attempt: AttemptContext = {
       providerName: target.provider,
       upstreamModel: target.model,
+      gaps: entry.gaps,
     };
     return runWithAttempt(attempt, async () => {
       const raw = adapters[entry.type].createStreamDecoder(target.model);

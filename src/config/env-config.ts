@@ -225,6 +225,9 @@ export function loadConfig(): EnvConfig {
       ...(targetPresetName !== undefined && targetPresetName !== ""
         ? { preset: targetPresetName as PresetName }
         : {}),
+      // The env path carries the preset's declared gaps too (v1.6
+      // Task 8b) — the yaml loader merges them the same way.
+      ...(targetPreset === undefined ? {} : { gaps: [...targetPreset.gaps] }),
       contextWindow: targetContextWindow,
       ...(targetMaxOutputTokens === undefined
         ? {}

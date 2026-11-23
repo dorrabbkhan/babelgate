@@ -6,6 +6,7 @@ import {
   fromCanonicalResponse,
   fromCanonicalModelList,
   documentFilename,
+  patchGaps,
 } from './openai.adapter';
 import { toCanonicalRequest as anthropicToCanonicalRequest } from './anthropic.adapter';
 import { fromCanonicalRequest as anthropicFromCanonical } from './anthropic.adapter';
@@ -1780,5 +1781,99 @@ describe('empty assistant messages (v1.6 Task 8a)', () => {
       code: 'field_dropped',
       path: 'messages[1]',
     });
+  });
+});
+
+// ===== v1.6 Task 8b: json_schema gap (v1.5 spec §3.3 vocabulary) =====
+
+describe('json_schema gap (v1.6 Task 8b)', () => {
+  const ATTEMPT = { providerName: 'deep', upstreamModel: 'deepseek-flash' };
+  const SCHEMA = {
+    type: 'object',
+    properties: { answer: { type: 'string' } },
+    required: ['answer'],
+  } as const;
+  const CANONICAL: CanonicalRequest = {
+    model: 'deepseek-flash',
+    messages: [{ role: 'user', content: 'hi' }],
+    responseFormat: {
+      type: 'json_schema',
+      name: 'answer',
+      schema: SCHEMA,
+      strict: true,
+    },
+  };
+
+  it('json_schema gap sends json_object with a schema line and a note', () => {
+    const trace = traced(() => {
+      const wire = runWithAttempt(
+        { ...ATTEMPT, gaps: ['json_schema'] },
+        () => fromCanonicalRequest(CANONICAL),
+      ) as unknown as {
+        response_format: unknown;
+        messages: Array<Record<string, unknown>>;
+      };
+      expect(wire.response_format).toEqual({ type: 'json_object' });
+      // The schema is not dropped silently: one system line names
+      // the expected JSON shape (and supplies the "json" word
+      // DeepSeek's JSON Output requires).
+      expect(wire.messages.at(-1)).toEqual({
+        role: 'system',
+        content: `Respond with JSON matching this schema: ${JSON.stringify(SCHEMA)}`,
+      });
+    });
+    expect(trace.notes).toContainEqual({
+      stage: 'encode',
+      adapter: 'openai',
+      code: 'response_format_downgraded',
+      path: 'response_format',
+    });
+  });
+
+  it('provider without the gap keeps json_schema unchanged', () => {
+    for (const gaps of [undefined, []] as const) {
+      const wire = runWithAttempt({ ...ATTEMPT, gaps }, () =>
+        fromCanonicalRequest(CANONICAL),
+      ) as unknown as {
+        response_format: unknown;
+        messages: unknown[];
+      };
+      expect(wire.response_format).toEqual({
+        type: 'json_schema',
+        json_schema: { name: 'answer', schema: SCHEMA, strict: true },
+      });
+      expect(wire.messages).toHaveLength(1);
+    }
+  });
+
+  it('json_schema gap rewrites a pass-through chat body', () => {
+    const body = {
+      model: 'deepseek-flash',
+      messages: [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'hi' },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'answer', schema: SCHEMA, strict: true },
+      },
+    };
+    const out = patchGaps(body, ['json_schema']);
+    expect(out.body.response_format).toEqual({ type: 'json_object' });
+    const messages = out.body.messages as Array<Record<string, unknown>>;
+    expect(messages.at(-1)).toEqual({
+      role: 'system',
+      content: `Respond with JSON matching this schema: ${JSON.stringify(SCHEMA)}`,
+    });
+    expect(out.notes).toContainEqual({
+      stage: 'encode',
+      adapter: 'openai',
+      code: 'response_format_downgraded',
+      path: 'response_format',
+    });
+    // No gap declared — the body is byte-identical.
+    const same = patchGaps(body, []);
+    expect(same.body).toEqual(body);
+    expect(same.notes).toHaveLength(0);
   });
 });

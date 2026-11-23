@@ -8855,3 +8855,62 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `tests/contracts/encoder-stability.test.ts`,
   `src/config/provider-presets.ts`,
   `src/config/provider-presets.test.ts`, `docs/decisions.md`.
+
+## v1.6 Task 8b — `json_schema` gap for providers without schema output (v1.5 spec §3.3)
+
+- **New gap `json_schema`** in the §3.3 vocabulary, declared on the
+  `deepseek` preset. Wire-format evidence, verified 2026-11-23
+  against https://api-docs.deepseek.com/guides/json_mode: DeepSeek's
+  JSON Output documents only `response_format {type:"json_object"}`
+  and requires the word "json" in the system or user prompt plus an
+  example of the desired JSON format; `json_schema` answers 400
+  "This response_format type is unavailable now" (observed live in
+  the Task 8 conductor run, 2 side requests per Claude Code run).
+  `deepseek-anthropic` is out of scope — its endpoint is the
+  Anthropic shim, whose requests never carry Chat `response_format`.
+- **The fix** (one fix per gap, in the openai adapter): a Chat
+  request with `response_format.type === "json_schema"` is sent as
+  `{type:"json_object"}`; a `response_format_downgraded` trace note
+  at `response_format` keeps the downgrade visible, and one system
+  message is appended to the end of `messages` —
+  `Respond with JSON matching this schema: <schema JSON>`. The
+  schema JSON is the "example of the desired JSON format" the guide
+  asks for and the line supplies the required word. Appending (not
+  merging into the client's system message) is the literal
+  "appended" the plan names, leaves the client's bytes untouched,
+  and is valid wherever Chat accepts a system role.
+- **How gaps reach the canonical path.** The live failure was on
+  `--provider deepseek` — a `tier:"cheap"` preset that never implies
+  `passthrough`, so `patchGaps`/`applyGapFixes` (pass-through only)
+  never ran. `AttemptContext` gains `gaps` (the same ambient
+  mechanism that already carries `providerName`/`upstreamModel` to
+  encoders without changing adapter signatures); the services set
+  it from `entry.gaps`, and the Chat encoder downgrades inside its
+  existing `response_format` block. `patchGaps` gained the same fix
+  for an `openai` pass-through entry declaring the gap (a yaml
+  `passthrough: true` opt-in), sharing `jsonSchemaSystemLine`. An
+  entry without the gap is byte-identical on both paths.
+- **Env path carried no gaps.** `--provider <preset>` recorded only
+  `preset` on the entry; `loadConfig` now copies
+  `PROVIDER_PRESETS[TARGET_PRESET].gaps` onto the entry, the same
+  merge yaml-config does — without it the declared gap never reached
+  either fix site on the path that produced the bug.
+- **Files outside the Files block:**
+  `src/observe/context.ts` — `AttemptContext.gaps` (the transport
+  the plan's adapter-side fix needed; alternatives were a
+  `ProviderAdapter` signature change, a canonical.types.ts interface
+  change, which rule 4 reserves for named canonical work);
+  `src/services/chat.service.ts` and
+  `src/services/stream-attempt.ts` — set `gaps: entry.gaps` in the
+  attempt scope they already open around encode;
+  `src/config/env-config.ts` — copy preset gaps onto the env-only
+  provider entry (above); `src/config/env-config.test.ts` — pins
+  that merge.
+- **Files changed:** modified `src/config/provider-presets.ts`,
+  `src/config/provider-presets.test.ts`,
+  `src/transformers/adapters/openai.adapter.ts`,
+  `src/transformers/adapters/openai.adapter.test.ts`,
+  `src/observe/context.ts`, `src/services/chat.service.ts`,
+  `src/services/stream-attempt.ts`, `src/config/env-config.ts`,
+  `src/config/env-config.test.ts`,
+  `docs/recipes/native-endpoints.md`, `docs/decisions.md`.

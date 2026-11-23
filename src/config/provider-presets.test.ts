@@ -124,6 +124,12 @@ describe("provider preset tiers (v1.6 spec §3.3)", () => {
     }
   });
 
+  it("deepseek preset declares the json_schema gap", () => {
+    // v1.6 Task 8b: DeepSeek documents only {type:"json_object"} for
+    // response_format (https://api-docs.deepseek.com/guides/json_mode).
+    expect(PROVIDER_PRESETS.deepseek.gaps).toContain("json_schema");
+  });
+
   it("live-proven presets carry their edit-task model", () => {
     expect(PROVIDER_PRESETS["openrouter-free"].suggested).toEqual({
       "claude-code": "nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -141,6 +147,7 @@ describe("provider preset tiers (v1.6 spec §3.3)", () => {
       "claude-code": "deepseek-flash",
       codex: "deepseek-flash",
     });
+    expect(PROVIDER_PRESETS.deepseek.gaps).toEqual(["json_schema"]);
     expect(PROVIDER_PRESETS.cerebras.max_output_tokens).toBe(32768);
     for (const name of PRESET_NAMES) {
       if (name === "cerebras") continue;
