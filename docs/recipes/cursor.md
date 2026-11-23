@@ -20,13 +20,16 @@ You need: Node ≥ 20 (for `npx`), the Cursor desktop app, a reachable
 target, and any tunnel or reverse proxy that gives Cursor a public
 https URL to port 3000.
 
-> **Verified:** written against Cursor's docs
+> **Not verified end to end:** written against Cursor's docs
 > ([cursor.com/help/models-and-usage/api-keys](https://cursor.com/help/models-and-usage/api-keys),
-> accessed 2026-11-23). The hand check — one chat and one edit/agent
-> action through babelgate on a free preset — is run by the conductor on
-> this recipe's PR; since `localhost` is unreachable from Cursor's
-> servers, that check has to go through a real public https URL. The
-> client version and run date are filled in from it.
+> accessed 2026-11-23). The owner tried this on Cursor's free plan on
+> 2026-11-23 with a public tunnel and `PROXY_API_KEY` set — babelgate
+> answered 401 without the key and 200 with it locally — but Cursor
+> refused the custom model with "model unavailable on free, switch to
+> an included model" before sending any request: nothing reached
+> babelgate. Whether a paid plan lifts that refusal is unknown, so the
+> setup below is documented, not verified end to end (Cursor version
+> not recorded).
 
 ## Start babelgate on a free preset
 
@@ -124,3 +127,8 @@ here.
 - **Prompts transit Cursor's servers.** That's how the custom-key path
   is built (per the doc linked above) — the public URL moves the
   delivery point, not the request path.
+- **Free presets can hit their daily cap.** A cap error (OpenRouter
+  free: `free-models-per-day` — `openrouter-free` hit its cap during
+  the 2026-11-23 check) comes back through babelgate with the preset
+  hint; use another preset, e.g. `cerebras` with `gpt-oss-120b` or
+  `gemini-free` with `gemini-3.8-flash`.

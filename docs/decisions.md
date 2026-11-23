@@ -9162,3 +9162,51 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `docs/recipes/continue.md`, `docs/recipes/aider.md`,
   `docs/recipes/open-webui.md`; modified `docs/recipes/claude-code.md`,
   `docs/recipes/codex.md`, `README.md`, `docs/decisions.md`.
+- **Hand-check results (fix round 2; owner run 2026-11-23, docs only —
+  same files as above):**
+  `docs/recipes/aider.md` — aider 0.86.2 on `babelgate --provider
+  cerebras --preset openai-apps`, `aider --model openai/gpt-oss-120b`:
+  one chat (reply streamed) and one edit applied to the file and
+  committed; aider reported its `whole` edit format, the model answered
+  diff-style and aider applied it anyway. No tool call exercised — the
+  page's tool claim is marked accordingly.
+  `docs/recipes/continue.md` — Continue CLI `cn` 1.5.47
+  (`@continuedev/cli`) on `--provider cerebras`, `gpt-oss-120b`: chat,
+  a list-files tool call and a file edit all worked; `cn` prompts for
+  an Anthropic key unless started with `cn --config
+  ~/.continue/config.yaml` (documented; never enter a provider key
+  there). The VS Code/JetBrains extension reads the same config file
+  but was not run — only the CLI is verified.
+  `docs/recipes/open-webui.md` — Open WebUI v0.13.4 on `--provider
+  cerebras` (Ollama-mode tool check on `gemini-free`). OpenAI mode:
+  chat works, `/v1/models` auto-discovery showed `gpt-oss-120b`, one
+  tool call works with the model's Function Calling on **Native**
+  (Default sends no `tools` field; the verify button doesn't test
+  tools). Ollama mode: the verify button **fails** with "Network
+  Problem" (it probes `GET /api/version`, not served); the saved
+  connection still chats over `POST /api/chat` — the proxy streamed
+  NDJSON, on-screen streaming not recorded. Ollama-mode tool calls not
+  verified and failed in one observed case: a tool result without
+  `tool_name` is rejected on a Gemini target with `400 Tool result ""
+  has no matching assistant tool call`
+  (`src/transformers/adapters/gemini.adapter.ts:968`;
+  `src/transformers/adapters/ollama.adapter.ts:168` sets the id only
+  when `tool_name` is non-empty); the same request with `tool_name`
+  returned 200 — hand-built requests, so Open WebUI omitting
+  `tool_name` is the likely cause, not confirmed. Prefix ID claim
+  marked not verified. `docs/recipes/cursor.md` — owner tried Cursor's
+  free plan (version not recorded) with a public tunnel and
+  `PROXY_API_KEY` (babelgate answered 401 without the key, 200 with it
+  locally), but Cursor refused the custom model ("model unavailable on
+  free, switch to an included model") before sending anything — the
+  page now states it is documented, not verified end to end; whether a
+  paid plan lifts the refusal is unknown. `openrouter-free` hit its
+  daily cap (`free-models-per-day`) during the check; all four pages
+  carry a Gotchas line pointing at another preset (`cerebras` with
+  `gpt-oss-120b`, `gemini-free` with `gemini-3.8-flash`).
+- **Follow-ups for the owner (from the 2026-11-23 check):** (a) make
+  `src/transformers/adapters/ollama.adapter.ts` pair an id-less tool
+  result with the earliest unmatched call by position, with tests;
+  (b) return a clear error for a non-JSON content type on `/api/chat`
+  (today: `Cannot read properties of undefined (reading 'think')`);
+  (c) recipes for Cline and Goose.

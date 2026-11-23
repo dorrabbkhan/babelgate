@@ -5,15 +5,18 @@ Edit, Apply and Agent modes can run against babelgate's OpenAI surface —
 on any provider behind it, free presets included — with streaming and
 tool calls translated as usual.
 
-You need: Node ≥ 20 (for `npx`), the Continue extension (VS Code or
-JetBrains), and a reachable target.
+You need: Node ≥ 20 (for `npx`), the Continue CLI (`cn`, npm
+`@continuedev/cli`) — the VS Code/JetBrains extension reads the same
+config file but was not verified — and a reachable target.
 
-> **Verified:** written against Continue's docs
+> **Verified:** the Continue CLI `cn` 1.5.47 (npm `@continuedev/cli`)
+> through `babelgate --provider cerebras`, model `gpt-oss-120b`,
+> 2026-11-23 — chat, one tool call (list files) and one file edit all
+> worked. Written against Continue's docs
 > ([docs.continue.dev/customize/model-providers/top-level/openai](https://docs.continue.dev/customize/model-providers/top-level/openai)
-> and [docs.continue.dev/reference](https://docs.continue.dev/reference),
-> accessed 2026-11-23). The hand check — one chat and one edit/agent
-> action through babelgate on a free preset — is run by the conductor on
-> this recipe's PR; the client version and run date are filled in from it.
+> and [docs.continue.dev/reference](https://docs.continue.dev/reference)).
+> The VS Code/JetBrains extension reads the same `config.yaml` but was
+> not run; only the CLI is verified.
 
 ## Start babelgate on a free preset
 
@@ -60,6 +63,12 @@ models:
   ([`tools`](../compatibility.md#tool-calls-tools),
   [`stream_tools`](../compatibility.md#tool-calls-streaming-stream_tools)).
 
+Start the CLI with `cn --config ~/.continue/config.yaml` — without the
+flag `cn` doesn't read the file and instead prompts for an Anthropic
+key. Never enter a provider key at that prompt: upstream keys live in
+babelgate's environment, and the `apiKey:` above is babelgate's
+`PROXY_API_KEY` (or the `babelgate` placeholder) only.
+
 ## What works, what doesn't
 
 - **Chat and Edit** — streamed `POST /v1/chat/completions` on any target
@@ -88,3 +97,8 @@ models:
   Responses API for some model families (`useResponsesApi`); babelgate
   serves `POST /v1/responses` too, so either path is covered
   ([responses row](../compatibility.md#plain-request-plain)).
+- **Free presets can hit their daily cap.** A cap error (OpenRouter
+  free: `free-models-per-day` — `openrouter-free` hit its cap during
+  the 2026-11-23 check) comes back through babelgate with the preset
+  hint; use another preset, e.g. `cerebras` with `gpt-oss-120b` or
+  `gemini-free` with `gemini-3.8-flash`.
