@@ -37,6 +37,8 @@ export interface RequestRow {
   passthrough?: boolean;
   /** The shim preset that relayed — pass-through rows only (v1.5 §3.3). */
   preset?: string;
+  /** Set only on a response-cache hit row — absent elsewhere (v1.6 §3.5). */
+  cacheHit?: boolean;
   costUsd: number | null;
   wouldCostUsd: number | null;
   costEstimated: boolean;
@@ -109,6 +111,7 @@ function toRequestRow(raw: RawRow): RequestRow {
     reasoningTokens: raw.reasoning_tokens as number | null,
     ...(raw.passthrough === 1 ? { passthrough: true } : {}),
     ...(typeof raw.preset === "string" ? { preset: raw.preset } : {}),
+    ...(raw.cache_hit === 1 ? { cacheHit: true } : {}),
     costUsd: raw.cost_usd as number | null,
     wouldCostUsd: raw.would_cost_usd as number | null,
     costEstimated: raw.cost_estimated === 1,
@@ -156,6 +159,7 @@ export function traceToRow(trace: RequestTrace): RequestRow {
     reasoningTokens: trace.reasoningTokens ?? null,
     ...(trace.passthrough === true ? { passthrough: true } : {}),
     ...(trace.preset !== undefined ? { preset: trace.preset } : {}),
+    ...(trace.cacheHit === true ? { cacheHit: true } : {}),
     costUsd: trace.costUsd,
     wouldCostUsd: trace.wouldCostUsd ?? null,
     costEstimated: trace.costEstimated,

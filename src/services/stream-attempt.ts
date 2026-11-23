@@ -134,6 +134,75 @@ export function attemptStreamTarget(
 }
 
 /**
+ * The event-level transform chain `observedDecoder` applies after
+ * recording (§3.6 custom-call raise first — a custom call's raw input
+ * must never be parsed as JSON — then the §3.7 repair transform when
+ * the entry opted in). Exported for the §3.5 response cache: a stream
+ * hit replays stored pre-transform events through the same chain, so
+ * the replay is what a live decode would have produced.
+ */
+export function streamEventTransforms(
+  canonical: CanonicalRequest,
+  repair: boolean,
+): (events: CanonicalStreamEvent[]) => CanonicalStreamEvent[] {
+  const customTransform = createCustomCallTransform(canonical, "responses");
+  const repairTransform = repair ? createRepairTransform() : undefined;
+  const transforms: ((e: CanonicalStreamEvent) => CanonicalStreamEvent[])[] =
+    repairTransform === undefined
+      ? [customTransform]
+      : [customTransform, repairTransform];
+  return (events) => transforms.reduce((evts, t) => evts.flatMap(t), events);
+}
+
+/**
+ * §3.5 + §3.7: reassemble the ORIGINAL (pre-transform) events — the
+ * inspector ring's canonical response (snapshot is a no-op with the
+ * ring off) and the tool-call diagnostics the trace always gets. A
+ * stream that ended mid-flight or on an error event doesn't
+ * reassemble; its held calls were already released with a diagnostic
+ * by the repair transform, and the wire tap still shows what the
+ * upstream sent. Shared by `finishStreamTrace` and the §3.5
+ * response-cache replay paths, whose stored events are the same
+ * pre-transform sequence `observed` holds here.
+ */
+export function snapshotStreamResponse(
+  requestedModel: string,
+  canonical: CanonicalRequest,
+  observed: CanonicalStreamEvent[],
+): void {
+  try {
+    const canonicalResp: CanonicalResponse =
+      reassembleStream(observed);
+    canonicalResp.model = requestedModel;
+    // §3.6: the observed calls carry the lowered names — raise them
+    // for the ring's canonical snapshot and the tool-call
+    // diagnostics, matching what the client received.
+    const raised = raiseCustomCalls(canonicalResp, canonical, "responses");
+    snapshot("response.canonical", raised);
+    const trace = currentTrace();
+    if (trace !== undefined) {
+      // Dedupe against diagnostics the repair transform already
+      // recorded for held calls released at a terminal event.
+      const seen = new Set(
+        trace.diagnostics.map(
+          (d) => `${d.toolCallId} ${d.code} ${d.detail ?? ""}`,
+        ),
+      );
+      for (const d of diagnoseToolCalls(
+        raised.message.toolCalls ?? [],
+        canonical.tools,
+      )) {
+        if (!seen.has(`${d.toolCallId} ${d.code} ${d.detail ?? ""}`)) {
+          trace.diagnostics.push(d);
+        }
+      }
+    }
+  } catch {
+    // partial or errored streams have no canonical response
+  }
+}
+
+/**
  * Wrap the target decoder so every canonical event it produces lands
  * in `observed` (usage, finish reason, reassembly and tool-call
  * diagnostics all read it; chunk contents are never logged, §3.2).
@@ -145,6 +214,8 @@ export function attemptStreamTarget(
  * and released merged (repaired when possible) before each end. The
  * transforms sit AFTER the recording wrapper so `observed` — and the
  * diagnostics computed from it — see the original arguments.
+ * `streamEventTransforms` owns the chain itself so the §3.5 response
+ * cache can replay stored pre-transform events through it.
  */
 export function observedDecoder(
   decoder: StreamDecoder,
@@ -165,14 +236,7 @@ export function observedDecoder(
     },
   };
 
-  const customTransform = createCustomCallTransform(canonical, "responses");
-  const repairTransform = repair ? createRepairTransform() : undefined;
-  const transforms: ((e: CanonicalStreamEvent) => CanonicalStreamEvent[])[] =
-    repairTransform === undefined
-      ? [customTransform]
-      : [customTransform, repairTransform];
-  const apply = (events: CanonicalStreamEvent[]): CanonicalStreamEvent[] =>
-    transforms.reduce((evts, t) => evts.flatMap(t), events);
+  const apply = streamEventTransforms(canonical, repair);
   const pipelineDecoder: StreamDecoder = {
     feed: (chunk) => apply(recordingDecoder.feed(chunk)),
     end: () => apply(recordingDecoder.end()),
@@ -211,43 +275,7 @@ export async function finishStreamTrace(opts: {
     clientStatus,
   } = opts;
   result.value.upstreamAc.abort();
-  // §3.5 + §3.7: reassemble the ORIGINAL events — the inspector
-  // ring's canonical response (snapshot is a no-op with the ring
-  // off) and the tool-call diagnostics the trace always gets. A
-  // stream that ended mid-flight or on an error event doesn't
-  // reassemble; its held calls were already released with a
-  // diagnostic by the repair transform, and the wire tap still
-  // shows what the upstream sent.
-  try {
-    const canonicalResp: CanonicalResponse =
-      reassembleStream(observed);
-    canonicalResp.model = requestedModel;
-    // §3.6: the observed calls carry the lowered names — raise them
-    // for the ring's canonical snapshot and the tool-call
-    // diagnostics, matching what the client received.
-    const raised = raiseCustomCalls(canonicalResp, canonical, "responses");
-    snapshot("response.canonical", raised);
-    const trace = currentTrace();
-    if (trace !== undefined) {
-      // Dedupe against diagnostics the repair transform already
-      // recorded for held calls released at a terminal event.
-      const seen = new Set(
-        trace.diagnostics.map(
-          (d) => `${d.toolCallId} ${d.code} ${d.detail ?? ""}`,
-        ),
-      );
-      for (const d of diagnoseToolCalls(
-        raised.message.toolCalls ?? [],
-        canonical.tools,
-      )) {
-        if (!seen.has(`${d.toolCallId} ${d.code} ${d.detail ?? ""}`)) {
-          trace.diagnostics.push(d);
-        }
-      }
-    }
-  } catch {
-    // partial or errored streams have no canonical response
-  }
+  snapshotStreamResponse(requestedModel, canonical, observed);
   const last = observed.at(-1);
   const usageEvent = observed.find((e) => e.type === "usage");
   const status = signal.aborted

@@ -11,6 +11,7 @@ import { parseTarget } from "../routing/rules";
 import { ConfigurationError } from "../utils/errors";
 import {
   circuitBreakerDisabled,
+  parseCache,
   parseMedia,
   parseObserve,
   type GatewayConfig,
@@ -302,6 +303,8 @@ export function loadYamlConfig(
           ]),
         );
 
+  const cache = parseCache(env, file.cache);
+
   return {
     port: env.PORT ? parseInt(env.PORT, 10) : 3000,
     proxyApiKey: env.PROXY_API_KEY || undefined,
@@ -326,5 +329,8 @@ export function loadYamlConfig(
     ...(circuitBreakerDisabled(env)
       ? {}
       : { breakers: createBreakers(breakerCfg) }),
+    // §3.5: the `cache:` section, off by default — `CACHE` on/off wins
+    // over `cache.enabled`.
+    ...(cache === undefined ? {} : { cache }),
   };
 }

@@ -95,6 +95,11 @@ export interface RequestTrace extends RouteLogRecord {
    * pass-through marker can name it.
    */
   preset?: string;
+  /**
+   * v1.6 §3.5: set only when the reply came from the response cache —
+   * the usage row marks `cache_hit = 1` and the hit prices at $0.
+   */
+  cacheHit?: boolean;
   /** canonical error kind, never a message body */
   errorType?: CanonicalErrorKind | string;
   cacheReadTokens?: number;

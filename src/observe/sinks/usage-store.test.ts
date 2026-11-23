@@ -293,7 +293,7 @@ INSERT INTO requests (
     const version = db
       .prepare("SELECT MAX(version) AS v FROM schema_version")
       .get() as { v: number };
-    expect(version.v).toBe(3);
+    expect(version.v).toBe(4);
     db.close();
 
     // The pre-existing row survives with NULLs for the new columns.
@@ -302,6 +302,7 @@ INSERT INTO requests (
     expect(old?.reasoningTokens).toBeNull();
     expect(old?.passthrough).toBeUndefined();
     expect(old?.preset).toBeUndefined();
+    expect(old?.cacheHit).toBeUndefined();
     const added = store.getRequest("new-row");
     expect(added?.reasoningTokens).toBe(77);
     expect(added?.passthrough).toBe(true);
@@ -323,7 +324,7 @@ INSERT INTO requests (
     const version = db
       .prepare("SELECT MAX(version) AS v FROM schema_version")
       .get() as { v: number };
-    expect(version.v).toBe(3);
+    expect(version.v).toBe(4);
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",

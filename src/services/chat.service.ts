@@ -13,18 +13,11 @@ import {
   snapshot,
 } from "../observe/context";
 import { finishTrace } from "../observe/emit";
-import {
-  diagnoseToolCalls,
-  repairArguments,
-} from "../observe/tool-diagnostics";
-import { raiseCustomCalls } from "../transformers/custom-tools";
 import type {
   CanonicalRequest,
   CanonicalResponse,
 } from "../types/canonical.types";
-import { canonicalResponseSchema } from "../types/canonical.schema";
 import { UpstreamError, ValidationError } from "../utils/errors";
-import { logger } from "../utils/logger";
 import { postJson } from "./http-client";
 import {
   attemptTargets,
@@ -52,6 +45,12 @@ import {
   MEDIA_DEFAULTS,
 } from "./media-inline";
 import { MEDIA_SUPPORT } from "../transformers";
+import {
+  encodeResponseForClient,
+  probeRequestCache,
+  serveCacheHit,
+} from "./chat-cache.service";
+import { isCacheableResponse } from "./response-cache";
 
 /** Everything a chat service needs — explicit inputs, no globals. */
 export interface ChatInput {
@@ -89,6 +88,14 @@ export interface ChatInput {
 export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
   const { source, canonical, requestedModel, plan, config, requestId } =
     input;
+
+  // §3.5: an enabled cache answers before any upstream call — the
+  // stored reply is re-shaped and encoded exactly as a fresh decode.
+  const cached = probeRequestCache(input);
+  if (cached !== undefined) {
+    const hit = await serveCacheHit(input, cached);
+    if (hit !== undefined) return hit;
+  }
 
   const hops: Hop[] = [];
   const attemptCtx: AttemptCtx = {
@@ -219,6 +226,10 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
   // it below throws.
   snapshot("response.wire", result.value.body);
 
+  // §3.5: the winning target's key — undefined when the request is
+  // never cached (cache off, temperature > 0 without ignore).
+  const winKey = config.cache?.key(result.target, canonical);
+
   // Target → Canonical → Source. §3.5: replies carry the model name the
   // client asked for, not the routed name sent upstream. A throwing
   // decode or source encode after a won attempt is still traced.
@@ -239,64 +250,28 @@ export async function proxyChat(input: ChatInput): Promise<ProxyResult> {
           result.target.model,
         ),
     );
+
+    // §3.5: stash the pristine decode (upstream model, lowered calls,
+    // original arguments) — a later hit re-shapes it for its own
+    // client exactly as the encode below does for this one.
+    const storable =
+      winKey !== undefined && isCacheableResponse(canonicalResp)
+        ? structuredClone(canonicalResp)
+        : undefined;
+
     canonicalResp.model = requestedModel;
-
-    // §3.6: calls to lowered custom/namespace tools are raised back
-    // to the client's form (custom: true raw input, {name, namespace})
-    // before diagnostics and the source encode — a no-op when the
-    // request declared neither.
-    canonicalResp = raiseCustomCalls(canonicalResp, canonical, source);
-
-    // §3.5 + §3.7: the ring's response.canonical shows the ORIGINAL
-    // arguments — snapshot() stores the object by reference, so a deep
-    // copy is taken before the repair loop rewrites them (skipped when
-    // the ring is off: snapshot() would no-op anyway).
-    const preRepair =
-      currentTrace()?.bodies === undefined
-        ? canonicalResp
-        : structuredClone(canonicalResp);
-
-    // §3.7: diagnose on the decoded (original) arguments; repair is
-    // opt-in per provider and rewrites them before the client encode,
-    // so fixed arguments are what the client receives. Diagnostics and
-    // repairs land on the ambient trace — the recordNote pattern.
-    {
-      const trace = currentTrace();
-      const calls = canonicalResp.message.toolCalls ?? [];
-      trace?.diagnostics.push(
-        ...diagnoseToolCalls(calls, canonical.tools),
-      );
-      if (result.entry.repairToolCalls === true) {
-        for (const call of calls) {
-          // §3.6: a custom call's arguments are raw input — never
-          // parsed as JSON, never repaired.
-          if (call.custom === true) continue;
-          const repair = repairArguments(call.function.arguments);
-          if (repair !== undefined) {
-            call.function.arguments = repair.args;
-            trace?.repairs.push({
-              toolCallId: call.id,
-              steps: repair.steps,
-            });
-          }
-        }
-      }
+    const encoded = encodeResponseForClient(
+      canonicalResp,
+      canonical,
+      source,
+      result.entry.repairToolCalls === true,
+      requestId,
+    );
+    body = encoded.body;
+    canonicalResp = encoded.response;
+    if (storable !== undefined) {
+      config.cache!.set(winKey!, { response: storable });
     }
-
-    // Adapter bug detection (non-production only): canonical response
-    // should always be schema-valid
-    if (process.env.NODE_ENV !== "production") {
-      const respParsed = canonicalResponseSchema.safeParse(canonicalResp);
-      if (!respParsed.success) {
-        logger.error(
-          { requestId, issues: respParsed.error.issues },
-          "Canonical response failed schema validation — adapter bug",
-        );
-      }
-    }
-
-    body = adapters[source].fromCanonicalResponse(canonicalResp);
-    snapshot("response.canonical", preRepair);
   } catch (err) {
     await finishTrace({
       reason: plan.reason,

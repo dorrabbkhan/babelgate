@@ -9022,3 +9022,81 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `src/services/gap-fixes.test.ts`,
   `src/config/yaml-config.test.ts`,
   `src/config/env-config.test.ts`, `docs/decisions.md`.
+
+## v1.6 Task 10 — opt-in exact-match response cache (spec §3.5, Review Focus 3)
+
+- **The cache rides `GatewayConfig.cache`**, built in
+  `loadConfig`/`loadYamlConfig` (`cache:` section, `CACHE=on` env —
+  env wins over `cache.enabled`); absent field = no cache, off by
+  default. `src/services/response-cache.ts` exports
+  `createResponseCache(cfg, now?)` (LRU by `max_entries`, TTL by
+  `ttl_ms`, `set()` deep-copies via `structuredClone`), `cacheKey`
+  (sha256 of a stable JSON of provider+model+every canonical field
+  except `stream` and client metadata), `probeCache`, the entry
+  conversions `entryResponse`/`entryEvents`, and the never-cache
+  rules `isCacheableResponse`/`isCacheableEvents`.
+- **The key's `model` is the routed model** (`target.model`), never
+  the client-asked name, and `stream` is out of the key — a unary
+  win can serve a stream request (`{response}` replays as the event
+  sequence that would have produced it) and vice versa
+  (`{events}` folds back with `reassembleStream`). A hit is
+  re-shaped by the asking source's adapter, so a reply cached by an
+  OpenAI client replays in Ollama format.
+- **Stored entries are pre-client-shaping**: the pristine decode
+  (upstream model name, lowered custom calls, original tool
+  arguments) or the pre-transform observed event sequence. A hit
+  re-runs `raiseCustomCalls`/diagnostics/repair through the shared
+  `encodeResponseForClient` (unary) or `streamEventTransforms`
+  (stream), so each client gets exactly the shaping a live decode
+  would have given it.
+- **The probe filters pass-through targets** (`isPassthrough`) and
+  skips `deferredValidation` requests and responses-lite bodies that
+  fail `assertBridgeableBody` — a relay or owed-400 request never
+  sees the store. Never stored: `config.temperature > 0` (unless
+  `ignore_temperature`), errors/errored-or-truncated streams, and
+  `finishReason: "length"` while tool calls were cut short.
+- **Hit headers:** `x-babelgate-cache: hit`,
+  `x-babelgate-attempts: 0` (no upstream call). The trace marks
+  `cacheHit: true`; `priceTrace` short-circuits to `costUsd = 0`;
+  usage-store migration `version: 4` adds `cache_hit INTEGER`
+  (1 on hit rows, NULL elsewhere).
+- **Replay failure falls back to the upstream path** only before
+  any bytes/events reach the client (poisoned entry, throwing
+  encode); a mid-replay throw propagates like a live stream's own
+  error — there is no second stream after a partial one.
+- **Ambiguity resolved:** `tool_choice` testing against Ollama can
+  only use `"auto"` vs unset (Ollama 400s on other values) — the
+  `requests differing only in tool_choice miss` test uses that pair.
+- **Files outside the Files block:**
+  `src/services/chat-cache.service.ts` — created: the hit path
+  (`probeRequestCache`, `serveCacheHit`,
+  `encodeResponseForClient`) split out of
+  `src/services/chat.service.ts`, which the feature pushed past
+  the ~400-line file rule;
+  `src/observe/emit.ts` — `TraceFinish` carries `cacheHit`;
+  `priceTrace` returns `costUsd = 0` on `trace.cacheHit === true`
+  (the hit consumed no upstream tokens);
+  `src/observe/sinks/usage-queries.ts` — `RequestRow.cacheHit` and
+  the `cache_hit = 1`/`trace.cacheHit` row mapping (read side of
+  the migration the task names);
+  `src/services/stream-attempt.ts` — `streamEventTransforms`
+  extracted from `observedDecoder` and `snapshotStreamResponse`
+  extracted from `finishStreamTrace`, so a stream cache hit replays
+  stored pre-transform events through the same chain and records
+  the same ring snapshot + diagnostics;
+  `src/observe/sinks/usage-store.test.ts` — the migration test's
+  `MAX(version)` expectation becomes 4 (the task's required
+  migration) and the pre-v4 row gains the `cache_hit` NULL check.
+- **Files changed:** created `src/services/response-cache.ts`,
+  `src/services/response-cache.test.ts`,
+  `src/services/chat-cache.service.ts`; modified
+  `src/services/chat.service.ts`,
+  `src/services/chat-stream.service.ts`,
+  `src/services/canonical-stream.service.ts`,
+  `src/config/gateway.schema.ts`, `src/config/yaml-config.ts`,
+  `src/config/env-config.ts`,
+  `src/observe/sinks/usage-store.ts`,
+  `src/observe/sinks/usage-store.test.ts`,
+  `src/observe/trace.ts`, `src/observe/emit.ts`,
+  `src/observe/sinks/usage-queries.ts`,
+  `src/services/stream-attempt.ts`, `docs/decisions.md`.

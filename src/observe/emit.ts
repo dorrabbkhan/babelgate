@@ -40,6 +40,7 @@ export type TraceFinish = Pick<
       | "maxTokensClamp"
       | "ttfbMs"
       | "costEstimated"
+      | "cacheHit"
     >
   >;
 
@@ -195,6 +196,12 @@ export function emitTrace(
  */
 async function priceTrace(trace: RequestTrace): Promise<void> {
   try {
+    // §3.5: a cache hit consumed no upstream tokens — the row marks it
+    // at $0, never a computed price.
+    if (trace.cacheHit === true) {
+      trace.costUsd = 0;
+      return;
+    }
     const config = getConfig();
     const okHop =
       trace.winner === undefined
