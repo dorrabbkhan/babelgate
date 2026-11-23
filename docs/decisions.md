@@ -9100,3 +9100,56 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `src/observe/trace.ts`, `src/observe/emit.ts`,
   `src/observe/sinks/usage-queries.ts`,
   `src/services/stream-attempt.ts`, `docs/decisions.md`.
+
+## v1.6 Task 11 — recipes: Cursor, Continue, Aider, Open WebUI (spec §3.4)
+
+- **Four new recipe pages** under `docs/recipes/`, all on the OpenAI
+  client dialect (`http://localhost:3000/v1`): Cursor (Settings →
+  Models → OpenAI API key + "Override OpenAI Base URL"), Continue
+  (`~/.continue/config.yaml` `provider: openai` + `apiBase` +
+  `capabilities: [tool_use]` for Agent mode), Aider
+  (`OPENAI_API_BASE`/`OPENAI_API_KEY` env + `openai/<model>`), and
+  Open WebUI in both connection modes — OpenAI (`/v1` URL +
+  auto-discovery through the merged `GET /v1/models`) and Ollama
+  (`GET /api/tags` + `POST /api/chat` only; pull/show/generate/version
+  are not served, so the page says model management stays at the
+  provider and OpenAI mode is the fallback when a verify step probes
+  them). Each page carries the `babelgate --provider openrouter-free
+  --preset openai-apps` first run, a "what works / what doesn't" list
+  linking the `docs/compatibility.md` cells, and model-name guidance
+  (env-only mode forwards the client's model unchanged; `MODEL_MAP`
+  renames).
+- **Wire-format/doc evidence:** client config written against
+  cursor.com/help/models-and-usage/api-keys,
+  docs.continue.dev/customize/model-providers/top-level/openai +
+  docs.continue.dev/reference,
+  aider.chat/docs/llms/openai-compat.html +
+  aider.chat/docs/config/options.html, and
+  docs.openwebui.com/getting-started/quick-start/connect-a-provider
+  (all accessed 2026-11-23; cited on the pages).
+- **Hand verification is the conductor's Step 1** (one chat + one
+  tool/edit action per client on a free preset): the sandbox has no
+  clients or keys, so every page's "Verified" line states the docs it
+  was written against and marks the run as pending — the version and
+  date are filled in from the conductor's run, no claim made ahead of
+  it.
+- **`docs/recipes/claude-code.md`:** new "On a free preset
+  (`--provider`)" section (suggested model proven on the edit-task
+  gate; presets without one take `--model`), and the E11 note in the
+  `max_output_tokens` section — Claude Code 2.1.329 (release notes
+  2026-11-19) dropped its retry at a gateway `max_tokens` limit and
+  asks for `CLAUDE_CODE_MAX_OUTPUT_TOKENS`; babelgate's clamp is
+  independent and `--provider` prints the matching export line
+  itself.
+- **`docs/recipes/codex.md`:** new "First run on a free preset"
+  section — `--preset codex --provider <preset>` prints
+  `BABELGATE_KEY`, writes the catalog under `~/.babelgate` and emits
+  the paste-ready `config.toml` block; missing key → named env var +
+  sign-up URL, exit before listen.
+- **`README.md` recipe index only:** the four recipes join the client
+  list after the Gemini CLI line; no other README change (full
+  restructure is Task 15).
+- **Files changed:** created `docs/recipes/cursor.md`,
+  `docs/recipes/continue.md`, `docs/recipes/aider.md`,
+  `docs/recipes/open-webui.md`; modified `docs/recipes/claude-code.md`,
+  `docs/recipes/codex.md`, `README.md`, `docs/decisions.md`.

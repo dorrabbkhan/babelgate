@@ -9,6 +9,29 @@ backend — with streaming, tool calls and reasoning intact.
 You need: Node ≥ 20 (for `npx`), the `codex` CLI (tested: codex-cli
 0.171.0), and a reachable target.
 
+## First run on a free preset (`--provider`)
+
+The shortest path — one command prints everything:
+
+```bash
+OPENROUTER_API_KEY=<key from https://openrouter.ai/keys> \
+  npx babelgate --preset codex --provider openrouter-free
+```
+
+`--provider` fills the target type, base URL, key env var and the
+provider's output-token cap (your env still wins); `--preset codex`
+prints `export BABELGATE_KEY=…`, writes the model catalog Codex needs to
+`~/.babelgate/codex-model-catalog.json` (nothing else outside
+`~/.babelgate`), and prints the `config.toml` block to paste — the same
+block as below with `base_url`, `wire_api = "responses"` and
+`model_catalog_json` already filled in. The `model` line is the preset's
+suggested codex model, proven on the edit-task gate before it was
+listed. `babelgate presets` lists every preset — free-tier rows name
+the provider docs and their verification date.
+
+Missing the key? The error names the env var and the sign-up URL, then
+exits before listening. Then read on for what the pieces do.
+
 ## Point Codex at babelgate
 
 `~/.codex/config.toml`:
