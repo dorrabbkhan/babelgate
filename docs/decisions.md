@@ -9465,3 +9465,68 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `tests/process/conformance.process.test.ts`, which also dropped the
   dead `verdict.pass ? "pending" : "pending"` ternary and the
   `CONFORMANCE_REPLAY=1` repro var nothing reads).
+
+**Fix round 2 — fair-comparison reporting (D9):**
+
+- **`babelgate-default` gateway** (`tests/process/gateways/babelgate.ts`,
+  registered in `tests/process/conformance.process.test.ts`): same
+  binary, unchanged default config — `reasoning_passback` unset —
+  selected only via `CONFORMANCE_GATEWAYS` (default `test:process`
+  still runs `babelgate` alone, 10/10, no skips). Its measured
+  result: `differs` on the two `multi-turn-reasoning:*->openai`
+  passback observations and `fail` on the two
+  `thinking-after-tool:*->openai` carry-back cells — the documented
+  tool-call rule applies to our own defaults too.
+- **Every pass rule now names the doc that requires it**
+  (`PassRule { check, doc?, note? }` in
+  `tests/process/scenarios/types.ts`, populated by all three scenario
+  modules; URLs live once in `DOC` in
+  `tests/process/scenarios/client.ts`). A competitor verdict whose
+  rule has no `doc` is recorded as `differs` (observation), never
+  `fail` — `cellResult` in `conformance.process.test.ts`; babelgate's
+  own assertions still fail the suite on any rule.
+- **Undocumented checks reclassified from the docs:** reasoning
+  passback on a plain multi-turn chat with no tool call is an
+  observation — DeepSeek's guide excludes earlier `reasoning_content`
+  from the next turn's context, OpenRouter frames preservation around
+  tool calling, and Gemini documents `thoughtSignature` only on
+  `functionCall` parts (URLs in the report's Rules section).
+  free-claude-code `multi-turn-reasoning:responses->openai` moved
+  fail → differs accordingly.
+- **CCR documented settings:** v3.1.6 documents no reasoning or
+  transformer option for `openai_chat_completions` /
+  `gemini_generate_content` providers — checked the package
+  `README.md` and the docs source `docs/src/content/docs/en/configuration/providers.md`
+  at tag `v3.1.6` (published at https://ccrdesk.top/en/configuration/providers/).
+  The report's Configuration section says so with the URL checked;
+  the runtime's `openaiChatReasoningSplit` / `deepseekThinking` keys
+  are undocumented at this tag, so none is set.
+- **Report** (`docs/research/2026-11-24-conformance-run.md`,
+  superseding the deleted 11-23 file): adds a Configuration section
+  (every non-default setting per gateway with its doc — babelgate's
+  `reasoning_passback: true`, free-claude-code's
+  `reasoning_history_format: "reasoning_content"`, CCR's
+  "none documented"), a Rules section (check + doc URL per
+  scenario/upstream), one-line failing cells (gateway, scenario,
+  exact missing-field path, rule URL), a `differs` Observed
+  differences section, and a "Live confirmation" list limited to
+  actual `fail` cells. Full shape dumps moved to the new sibling
+  `docs/research/2026-11-24-conformance-run.shapes.md` — 5-column
+  table separator fixed.
+- **Scripts:** `scripts/research/conformance-run.sh` defaults to all
+  four gateways; `scripts/research/conformance-live.sh` accepts
+  `babelgate-default`.
+- **Files outside the Files block (this round):**
+  `tests/process/scenarios/types.ts`,
+  `tests/process/scenarios/client.ts`,
+  `tests/process/scenarios/thinking-after-tool.ts`,
+  `tests/process/scenarios/streamed-tool-args.ts`,
+  `tests/process/scenarios/multi-turn-reasoning.ts`,
+  `tests/process/gateways/babelgate.ts`,
+  `tests/process/conformance.process.test.ts`,
+  `scripts/research/conformance-run.sh`,
+  `scripts/research/conformance-live.sh`,
+  `docs/research/2026-11-24-conformance-run.md`,
+  `docs/research/2026-11-24-conformance-run.shapes.md`,
+  `docs/research/2026-11-23-conformance-run.md` (removed — superseded
+  by the 11-24 run), and `docs/decisions.md` (this entry).

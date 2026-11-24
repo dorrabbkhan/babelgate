@@ -81,9 +81,32 @@ export interface TurnResult {
   upstream: UpstreamRequest[];
 }
 
+/**
+ * One pass rule a scenario checks and the doc that requires it —
+ * every "fail" the report prints must hold up publicly (D9). A rule
+ * with no `doc` is an observation: no provider doc requires the
+ * behaviour, so it renders as `differs`, never a failure.
+ */
+export interface PassRule {
+  /** What is checked — one line for the report's Rules section. */
+  check: string;
+  /** Doc URL that requires the behaviour. Absent = observation only. */
+  doc?: string;
+  /** For undocumented checks: the counter-evidence (e.g. DeepSeek's
+   * reasoning guide excluding earlier reasoning_content from context). */
+  note?: string;
+}
+
 export interface ScenarioVerdict {
   pass: boolean;
   reason?: string;
+  /** The rule the failure is judged under — undefined only where the
+   * failure precedes any rule (defensive; treated as required). */
+  rule?: PassRule;
+  /** The exact missing or extra field path for the report's
+   * one-line failing cell (e.g. `messages[1] (assistant) carries no
+   * reasoning field`). */
+  detail?: string;
   /** Shapes only — never prompt or completion text. */
   evidence: { request: Shape; response: Shape };
 }
@@ -107,6 +130,9 @@ export interface Scenario {
    * like mock-upstream.ts (replays root before the streams corpus).
    */
   replay: string;
+  /** The pass rules the assert checks, in order — each cites the doc
+   * that requires it, or carries `note` when none does (observation). */
+  rules: PassRule[];
   turns: ScenarioTurn[];
   assert(results: TurnResult[]): ScenarioVerdict;
 }

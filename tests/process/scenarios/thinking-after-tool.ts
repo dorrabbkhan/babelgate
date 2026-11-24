@@ -6,7 +6,7 @@
  * wire rules and the client stream has a valid thinking block before
  * text.
  *
- * Wire rules cited for the upstream-request check:
+ * Wire rules cited for the upstream-request check (also in `rules`):
  * - OpenRouter Chat: `reasoning` / `reasoning_details` on a message —
  *   https://openrouter.ai/docs/use-cases/reasoning-tokens
  * - DeepSeek Chat: `reasoning_content` on the assistant message —
@@ -16,11 +16,14 @@
  */
 import {
   anthropicAssistantContent,
+  clientReasoningMissDetail,
   clientStreamHasReasoningBeforeText,
+  DOC,
+  reasoningMissDetail,
   responsesOutputItems,
   upstreamCarriesReasoning,
 } from "./client";
-import type { Scenario, TurnResult } from "./types";
+import type { PassRule, Scenario, TurnResult } from "./types";
 import { shape } from "./types";
 
 const TOOL_RESULT = "15 degrees Celsius, partly cloudy";
@@ -102,10 +105,40 @@ function build(
   client: "anthropic" | "responses",
   upstream: "openai" | "gemini",
 ): Scenario {
+  // In assert order — each failing verdict names its rule.
+  const statusRule: PassRule = {
+    check:
+      "every turn returns HTTP 200 with the client dialect's event stream",
+    doc:
+      client === "anthropic" ? DOC.anthropicStream : DOC.responsesStream,
+  };
+  const carryRule: PassRule = {
+    check:
+      upstream === "openai"
+        ? "turn 2 upstream request carries reasoning back on the tool-call turn (messages[].reasoning / reasoning_content / reasoning_details)"
+        : "turn 2 upstream request carries the thought signature on the tool-call turn (contents[].parts[] functionCall.thoughtSignature / thought:true)",
+    doc:
+      upstream === "openai"
+        ? DOC.openrouterReasoning
+        : DOC.geminiThoughtSignatures,
+  };
+  const streamRule: PassRule =
+    client === "anthropic"
+      ? {
+          check:
+            "turn 2 client stream has a signed thinking block before text",
+          doc: DOC.anthropicThinking,
+        }
+      : {
+          check:
+            "turn 2 client stream has a reasoning item before the message",
+          doc: DOC.openaiReasoning,
+        };
   return {
     name: `thinking-after-tool:${client}->${upstream}`,
     client,
     upstream,
+    rules: [statusRule, carryRule, streamRule],
     // recorded by the conductor (npm run record:streams,
     // RECORD_OUT_DIR=tests/process/replays): OpenRouter reasoning +
     // tool call, or Gemini includeThoughts + functionCall
@@ -152,6 +185,8 @@ function build(
         return {
           pass: false,
           reason: `turn 1 status ${results[0]?.status}`,
+          rule: statusRule,
+          detail: `turn 1 client response HTTP ${results[0]?.status}`,
           evidence,
         };
       }
@@ -159,6 +194,8 @@ function build(
         return {
           pass: false,
           reason: `turn 2 status ${turn2.status}`,
+          rule: statusRule,
+          detail: `turn 2 client response HTTP ${turn2.status}`,
           evidence,
         };
       }
@@ -169,6 +206,8 @@ function build(
           pass: false,
           reason:
             "turn 2 upstream request carries no reasoning field per the target's wire rules",
+          rule: carryRule,
+          detail: reasoningMissDetail(upReq, upstream),
           evidence,
         };
       }
@@ -177,6 +216,8 @@ function build(
           pass: false,
           reason:
             "turn 2 client stream has no signed thinking block before text",
+          rule: streamRule,
+          detail: clientReasoningMissDetail(client),
           evidence,
         };
       }

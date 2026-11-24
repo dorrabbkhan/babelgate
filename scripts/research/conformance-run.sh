@@ -20,7 +20,7 @@ cd "$(git rev-parse --show-toplevel)"
 report="docs/research/$(date +%F)-conformance-run.md"
 results="tmp/conformance/results.json"
 skip_install=0
-gateways="babelgate,ccr,free-claude-code"
+gateways="babelgate,babelgate-default,ccr,free-claude-code"
 while [ $# -gt 0 ]; do
   case "$1" in
     --report) report="$2"; shift 2 ;;

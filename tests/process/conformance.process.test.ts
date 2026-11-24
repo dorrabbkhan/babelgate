@@ -8,7 +8,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { babelgateGateway } from "./gateways/babelgate";
+import {
+  babelgateGateway,
+  babelgateDefaultGateway,
+} from "./gateways/babelgate";
 import { ccrGateway, ccrClientHeaders, CCR_VERSION } from "./gateways/ccr";
 import {
   fccGateway,
@@ -55,6 +58,10 @@ const GATEWAYS: Record<string, GatewaySpec> = {
     adapter: babelgateGateway,
     models: { openai: "openai/mock-chat", gemini: "gemini/mock-gem" },
   },
+  "babelgate-default": {
+    adapter: babelgateDefaultGateway,
+    models: { openai: "openai/mock-chat", gemini: "gemini/mock-gem" },
+  },
   ccr: {
     adapter: ccrGateway,
     models: { openai: "mock-chat", gemini: "mock-gem" },
@@ -69,8 +76,46 @@ const GATEWAYS: Record<string, GatewaySpec> = {
 
 const GATEWAY_VERSIONS: Record<string, string> = {
   babelgate: `local build (${process.env.BABELGATE_BIN ?? "node dist/cli.js"})`,
+  "babelgate-default": `local build (${process.env.BABELGATE_BIN ?? "node dist/cli.js"})`,
   ccr: `@musistudio/claude-code-router ${CCR_VERSION} (npm, --ignore-scripts)`,
   "free-claude-code": `Alishahryar1/free-claude-code ${FCC_TAG} (${FCC_COMMIT.slice(0, 12)}, uv sync --frozen)`,
+};
+
+/**
+ * Non-default settings the run used, per gateway — the report's
+ * Configuration section (D9: every claim must disclose how the
+ * gateway was configured). A gateway absent from the list ran its
+ * stock defaults.
+ */
+const GATEWAY_CONFIG_NOTES: Record<string, string[]> = {
+  babelgate: [
+    "`reasoning_passback: true` on the mock `openai` and `ollama` " +
+      "provider entries — the spec §3.3 opt-in for Chat " +
+      "`reasoning_content` passback (docs/recipes/codex.md). " +
+      "Everything else is the stock default config.",
+  ],
+  "babelgate-default": [
+    "unchanged default config — `reasoning_passback` unset on every " +
+      "provider entry (its spec §3.3 default is off).",
+  ],
+  ccr: [
+    "no reasoning or transformer option is set — v3.1.6 documents " +
+      "none for `openai_chat_completions` or `gemini_generate_content` " +
+      "providers: checked the package `README.md` and the docs source " +
+      "`docs/src/content/docs/en/configuration/providers.md` at tag " +
+      "`v3.1.6` (https://github.com/musistudio/claude-code-router/tree/v3.1.6" +
+      " — published as https://ccrdesk.top/en/configuration/providers/). " +
+      "The provider entries carry `name`, `type`, `apikey`, `baseurl` " +
+      "and `models` only.",
+  ],
+  "free-claude-code": [
+    "`reasoning_history_format: \"reasoning_content\"` on the custom " +
+      "provider (its default is `\"disabled\"` — " +
+      "`src/free_claude_code/config/custom_providers.py` at " +
+      `${FCC_TAG}, https://github.com/Alishahryar1/free-claude-code) ` +
+      "— the DeepSeek wire field for replaying reasoning " +
+      "(https://api-docs.deepseek.com/guides/reasoning_model).",
+  ],
 };
 
 const selected = (process.env.CONFORMANCE_GATEWAYS ?? "babelgate")
@@ -93,14 +138,48 @@ interface Cell {
   scenario: string;
   client: Scenario["client"];
   upstream: Scenario["upstream"];
-  result: "pass" | "fail" | "not supported";
+  /**
+   * "fail" only when a doc-cited rule broke (D9); a broken rule with
+   * no citing doc is "differs" — an observation, never a failure.
+   * `babelgate` stays exact: any broken rule is a failure for it.
+   */
+  result: "pass" | "fail" | "differs" | "not supported";
   reason?: string;
+  /** The exact missing/extra field path for the one-line cell. */
+  detail?: string;
+  /** The doc URL the broken rule cites, when it cites one. */
+  ruleDoc?: string;
   evidence?: { request: unknown; response: unknown };
-  /** "mock-only, unconfirmed" until conformance-live.sh confirms. */
-  live: "pending" | "confirmed" | "not supported";
+  /** "mock-only, unconfirmed" until conformance-live.sh confirms;
+   * "n/a" on observations — nothing is claimed, nothing to confirm. */
+  live: "pending" | "confirmed" | "not supported" | "n/a";
 }
 const cells: Cell[] = [];
 const record = (cell: Cell): void => void cells.push(cell);
+
+/**
+ * Competitor-facing classification (D9): a check counts as a failure
+ * only when its rule cites a doc that requires the behaviour. For
+ * `babelgate` itself the gate stays at least as exact — every broken
+ * rule fails it (our own spec is stricter than public docs).
+ */
+function cellResult(
+  gateway: string,
+  verdict: { pass: boolean; rule?: { doc?: string } },
+): Cell["result"] {
+  if (verdict.pass) return "pass";
+  if (gateway !== "babelgate" && verdict.rule?.doc === undefined) {
+    return "differs";
+  }
+  return "fail";
+}
+
+/** The vitest side of the same rule: `babelgate` asserts on every
+ * broken rule; the rest only on doc-cited ones — an observation
+ * ("differs") does not fail the suite. */
+function assertable(result: Cell["result"], pass: boolean): boolean {
+  return result === "differs" ? true : pass;
+}
 
 /** The mock routes a scenario needs — one replay file answers every
  * turn's upstream call in its dialect. */
@@ -153,7 +232,7 @@ function liveModel(
   if (model === undefined) return undefined;
   // babelgate routes by "<provider>/<model>"; the others forward the
   // bare upstream model name.
-  return gateway === "babelgate" ? `${upstream}/${model}` : model;
+  return gateway.startsWith("babelgate") ? `${upstream}/${model}` : model;
 }
 
 function modelsFor(
@@ -282,18 +361,21 @@ describe("conformance (spec §3.10)", () => {
           );
         }
         const { verdict } = await runScenario(spec, gatewayName, scenario);
+        const result = cellResult(gatewayName, verdict);
         record({
           gateway: gatewayName,
           scenario: scenario.name,
           client: scenario.client,
           upstream: scenario.upstream,
-          result: verdict.pass ? "pass" : "fail",
+          result,
           reason: verdict.reason,
+          detail: verdict.detail,
+          ruleDoc: verdict.rule?.doc,
           evidence: verdict.evidence,
-          live: "pending",
+          live: result === "differs" ? "n/a" : "pending",
         });
         expect(
-          verdict.pass,
+          assertable(result, verdict.pass),
           verdict.reason
             ? `${verdict.reason}\nevidence: ${JSON.stringify(verdict.evidence)}`
             : JSON.stringify(verdict.evidence),
@@ -318,6 +400,7 @@ function renderReport(): string {
       if (!cell) return "—";
       if (cell.result === "not supported") return `not supported`;
       if (cell.result === "pass") return "pass (mock)";
+      if (cell.result === "differs") return "differs (observed)";
       if (cell.reason?.startsWith("replay ")) return "replay pending";
       return cell.live === "confirmed"
         ? "fail (live-confirmed)"
@@ -329,9 +412,11 @@ function renderReport(): string {
     `# Conformance run — ${RUN_DATE} — DRAFT`,
     "",
     "Draft per spec §3.10/D9: private to the PR; publishing decisions",
-    "are the owner's. Competitor failures are mock-only, unconfirmed",
-    "until scripts/research/conformance-live.sh confirms them against",
-    "the live provider.",
+    "are the owner's. A \"fail\" is only ever a check a cited provider",
+    "doc requires; a check no doc requires is reported as an",
+    "observation (`differs`), never a failure. Failures are mock-only,",
+    "unconfirmed until scripts/research/conformance-live.sh confirms",
+    "them against the live provider.",
     "",
     "## Versions",
     "",
@@ -339,23 +424,72 @@ function renderReport(): string {
   for (const g of gatewayNames) {
     lines.push(`- ${g}: ${GATEWAY_VERSIONS[g] ?? "unknown"}`);
   }
-  lines.push("", `## Scenario × gateway`, "", `| scenario | ${gatewayNames.join(" | ")} |`);
-  lines.push(`| ${gatewayNames.map(() => "---").join(" | ")} |`);
+  lines.push(
+    "",
+    "## Configuration",
+    "",
+    "Every non-default setting the run used, per gateway, with the",
+    "doc that documents it.",
+    "",
+  );
+  for (const g of gatewayNames) {
+    for (const note of GATEWAY_CONFIG_NOTES[g] ?? [
+      "stock defaults — nothing non-default configured.",
+    ]) {
+      lines.push(`- ${g}: ${note}`);
+    }
+  }
+  lines.push(
+    "",
+    "## Rules",
+    "",
+    "Per scenario, what is checked and the doc that requires it. A",
+    "rule with no citing doc is an observation: it can produce",
+    "`differs`, never `fail`.",
+    "",
+  );
+  for (const s of ALL_SCENARIOS) {
+    lines.push(`- ${s.name}`);
+    for (const r of s.rules) {
+      lines.push(`  - ${r.check}${r.doc !== undefined ? ` (${r.doc})` : ` — ${r.note ?? "no doc cited"}`}`);
+    }
+  }
+  lines.push(
+    "",
+    `## Scenario × gateway`,
+    "",
+    `| scenario | ${gatewayNames.join(" | ")} |`,
+  );
+  lines.push(
+    `| ${["---", ...gatewayNames.map(() => "---")].join(" | ")} |`,
+  );
   lines.push(...rows);
-  lines.push("", "## Failing cells (shapes only)", "");
+  lines.push("", "## Failing cells", "");
   const failures = cells.filter((c) => c.result === "fail");
   if (failures.length === 0) {
     lines.push("- none");
   }
   for (const f of failures) {
     lines.push(
-      `- ${f.gateway} / ${f.scenario}: ${f.reason ?? "failed"}`,
+      `- ${f.gateway} / ${f.scenario}: ${f.reason ?? "failed"}` +
+        `${f.detail ? ` — ${f.detail}` : ""}` +
+        `${f.ruleDoc ? ` (rule: ${f.ruleDoc})` : ""}`,
       `  - repro: CONFORMANCE_GATEWAYS=${f.gateway} npm run test:process -- conformance.process.test.ts`,
     );
-    if (f.evidence !== undefined) {
+  }
+  const differs = cells.filter((c) => c.result === "differs");
+  if (differs.length > 0) {
+    lines.push(
+      "",
+      "## Observed differences",
+      "",
+      "Not failures — no cited doc requires the behaviour (Rules).",
+      "",
+    );
+    for (const d of differs) {
       lines.push(
-        `  - request shape: \`${JSON.stringify(f.evidence.request)}\``,
-        `  - response shape: \`${JSON.stringify(f.evidence.response)}\``,
+        `- ${d.gateway} / ${d.scenario}: differs — ` +
+          `${d.reason ?? "differed"}${d.detail ? ` (${d.detail})` : ""}`,
       );
     }
   }
@@ -380,11 +514,38 @@ function renderReport(): string {
     "## Reproduce",
     "",
     "```sh",
-    "CONFORMANCE_GATEWAYS=babelgate,ccr,free-claude-code npm run test:process -- conformance.process.test.ts",
+    "CONFORMANCE_GATEWAYS=babelgate,babelgate-default,ccr,free-claude-code npm run test:process -- conformance.process.test.ts",
     "scripts/research/conformance-run.sh   # installs pinned competitors, runs, rewrites this report",
     "```",
     "",
   );
+  return lines.join("\n");
+}
+
+/** The evidence appendix — full shape dumps for every non-pass cell
+ * (shapes only, `<string:N>`), kept out of the readable report. */
+function renderShapes(): string {
+  const lines: string[] = [
+    `# Conformance run — ${RUN_DATE} — evidence shapes (appendix)`,
+    "",
+    "Shapes only (`<string:N>`), never prompt or completion text. One",
+    "entry per non-pass cell of the same-date conformance-run report.",
+    "",
+  ];
+  for (const c of cells.filter(
+    (c) => c.result === "fail" || c.result === "differs",
+  )) {
+    lines.push(`## ${c.gateway} / ${c.scenario} (${c.result})`, "");
+    if (c.evidence !== undefined) {
+      lines.push(
+        `- request shape: \`${JSON.stringify(c.evidence.request)}\``,
+        `- response shape: \`${JSON.stringify(c.evidence.response)}\``,
+        "",
+      );
+    } else {
+      lines.push("- no evidence recorded", "");
+    }
+  }
   return lines.join("\n");
 }
 
@@ -403,5 +564,11 @@ afterAll(() => {
   }
   if (REPORT_PATH) {
     writeFileSync(REPORT_PATH, renderReport());
+    // Full shape dumps live beside the report — the report itself
+    // stays a one-line-per-cell read (fix round 2).
+    writeFileSync(
+      REPORT_PATH.replace(/\.md$/, "") + ".shapes.md",
+      renderShapes(),
+    );
   }
 });

@@ -10,8 +10,12 @@
  * Responses as `response.function_call_arguments.delta`
  * (https://platform.openai.com/docs/api-reference/responses-streaming).
  */
-import { anthropicAssistantContent, responsesOutputItems } from "./client";
-import type { Scenario, TurnResult } from "./types";
+import {
+  anthropicAssistantContent,
+  DOC,
+  responsesOutputItems,
+} from "./client";
+import type { PassRule, Scenario, TurnResult } from "./types";
 import { shape } from "./types";
 
 const TOOLS_ANTHROPIC = [
@@ -70,6 +74,8 @@ function responsesToolCalls(r: TurnResult): {
 function verdict(
   results: TurnResult[],
   calls: { count: number; inputs: unknown[] },
+  statusRule: PassRule,
+  argsRule: PassRule,
 ): ReturnType<Scenario["assert"]> {
   const last = results[results.length - 1];
   const evidence = {
@@ -80,12 +86,22 @@ function verdict(
     }),
   };
   if (last?.status !== 200) {
-    return { pass: false, reason: `client got HTTP ${last?.status}`, evidence };
+    return {
+      pass: false,
+      reason: `client got HTTP ${last?.status}`,
+      rule: statusRule,
+      detail: `client response HTTP ${last?.status}`,
+      evidence,
+    };
   }
   if (calls.count !== 1) {
     return {
       pass: false,
       reason: `expected exactly one tool call, got ${calls.count}`,
+      rule: argsRule,
+      detail:
+        `client stream carries ${calls.count} tool_use/function_call ` +
+        `items (expected exactly 1)`,
       evidence,
     };
   }
@@ -95,6 +111,11 @@ function verdict(
       pass: false,
       reason:
         "concatenated tool-call arguments do not parse as the recorded JSON",
+      rule: argsRule,
+      detail:
+        `concatenated input_json_delta.partial_json / ` +
+        `function_call_arguments.delta does not parse as the recorded ` +
+        `JSON {"location":"Paris"}`,
       evidence,
     };
   }
@@ -102,10 +123,24 @@ function verdict(
 }
 
 function build(client: "anthropic" | "responses"): Scenario {
+  const clientDoc =
+    client === "anthropic" ? DOC.anthropicStream : DOC.responsesStream;
+  const statusRule: PassRule = {
+    check: "the client request returns HTTP 200 with the dialect's event stream",
+    doc: clientDoc,
+  };
+  const argsRule: PassRule = {
+    check:
+      "the client stream carries exactly one tool call whose concatenated " +
+      "arguments parse as the recorded JSON (upstream streams them as " +
+      ">=5 deltas)",
+    doc: clientDoc,
+  };
   return {
     name: `streamed-tool-args:${client}->openai`,
     client,
     upstream: "openai",
+    rules: [statusRule, argsRule],
     // tests/process/replays/openai/tool_call.sse — recorded bytes
     // from gpt-4o-mini (npm run record:streams,
     // RECORD_OUT_DIR=tests/process/replays, 2026-11-23): the
@@ -139,6 +174,8 @@ function build(client: "anthropic" | "responses"): Scenario {
         client === "anthropic"
           ? anthropicToolCalls(results[0])
           : responsesToolCalls(results[0]),
+        statusRule,
+        argsRule,
       ),
   };
 }

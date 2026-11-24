@@ -9,8 +9,17 @@ const REPO = join(__dirname, "..", "..", "..");
 /**
  * Every provider type points at the same mock upstream — the request's
  * model name picks the target dialect ("openai/m", "gemini/m", …).
+ *
+ * `reasoningPassback` is the only knob the run varies (§3.3 makes
+ * reasoning_content passback opt-in): the `babelgate` gateway opts in
+ * — the scenarios assert reasoning goes back — and `babelgate-default`
+ * runs the unchanged default config so the report discloses and
+ * measures both.
  */
-export function babelgateYaml(upstream: string): string {
+export function babelgateYaml(
+  upstream: string,
+  opts: { reasoningPassback?: boolean } = {},
+): string {
   const lines = ["default: openai", "providers:"];
   for (const provider of [
     "openai",
@@ -20,10 +29,10 @@ export function babelgateYaml(upstream: string): string {
     "responses",
   ]) {
     lines.push(`  ${provider}:`, `    type: ${provider}`, `    base_url: ${upstream}`);
-    // §3.3: reasoning_content reaches an openai/ollama target only
-    // with the entry's reasoning_passback opt-in — the conformance
-    // scenarios assert it goes back, so the mock entries set it.
-    if (provider === "openai" || provider === "ollama") {
+    if (
+      opts.reasoningPassback === true &&
+      (provider === "openai" || provider === "ollama")
+    ) {
       lines.push(`    reasoning_passback: true`);
     }
     // the mock ignores auth — api_key_env is only schema-required
@@ -59,51 +68,66 @@ export function stopChild(child: ChildProcess): Promise<void> {
   });
 }
 
-export const babelgateGateway: GatewayUnderTest = {
-  name: "babelgate",
-  async start({ upstream, port, workDir }): Promise<RunningGateway> {
-    mkdirSync(workDir, { recursive: true });
-    const configPath = join(workDir, "babelgate.yaml");
-    writeFileSync(configPath, babelgateYaml(upstream));
+function makeBabelgateGateway(
+  name: string,
+  opts: { reasoningPassback?: boolean } = {},
+): GatewayUnderTest {
+  return {
+    name,
+    async start({ upstream, port, workDir }): Promise<RunningGateway> {
+      mkdirSync(workDir, { recursive: true });
+      const configPath = join(workDir, "babelgate.yaml");
+      writeFileSync(configPath, babelgateYaml(upstream, opts));
 
-    const { cmd, args } = gatewayCommand();
-    const child = spawn(cmd, [...args, "--config", configPath], {
-      cwd: workDir,
-      env: {
-        ...process.env,
-        // HOME is the data root (~/.babelgate); the suite always gives
-        // it a space in the path (Review Focus 5). USERPROFILE must be
-        // the same directory: on Windows os.homedir() reads USERPROFILE,
-        // not HOME, so without it the binary writes under the runner's
-        // real profile.
-        HOME: workDir,
-        USERPROFILE: workDir,
-        PORT: String(port),
-        BABELGATE_MOCK_KEY: "mock-key",
-        NODE_ENV: "production",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const stderr: Buffer[] = [];
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.stdout.on("data", () => {});
+      const { cmd, args } = gatewayCommand();
+      const child = spawn(cmd, [...args, "--config", configPath], {
+        cwd: workDir,
+        env: {
+          ...process.env,
+          // HOME is the data root (~/.babelgate); the suite always gives
+          // it a space in the path (Review Focus 5). USERPROFILE must be
+          // the same directory: on Windows os.homedir() reads USERPROFILE,
+          // not HOME, so without it the binary writes under the runner's
+          // real profile.
+          HOME: workDir,
+          USERPROFILE: workDir,
+          PORT: String(port),
+          BABELGATE_MOCK_KEY: "mock-key",
+          NODE_ENV: "production",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      const stderr: Buffer[] = [];
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      child.stdout.on("data", () => {});
 
-    const base = `http://127.0.0.1:${port}`;
-    const running: RunningGateway = {
-      anthropicBase: base,
-      responsesBase: `${base}/v1`,
-      openaiBase: `${base}/v1`,
-      stop: () => stopChild(child),
-    };
-    try {
-      await waitHealthy(base, 20_000);
-    } catch (err) {
-      await running.stop();
-      throw new Error(
-        `babelgate failed to start: ${String(err)}\n` +
-          `stderr: ${Buffer.concat(stderr).toString("utf8")}`,
-      );
-    }
-    return running;
-  },
-};
+      const base = `http://127.0.0.1:${port}`;
+      const running: RunningGateway = {
+        anthropicBase: base,
+        responsesBase: `${base}/v1`,
+        openaiBase: `${base}/v1`,
+        stop: () => stopChild(child),
+      };
+      try {
+        await waitHealthy(base, 20_000);
+      } catch (err) {
+        await running.stop();
+        throw new Error(
+          `${name} failed to start: ${String(err)}\n` +
+            `stderr: ${Buffer.concat(stderr).toString("utf8")}`,
+        );
+      }
+      return running;
+    },
+  };
+}
+
+/** The opted-in config: `reasoning_passback: true` on openai/ollama. */
+export const babelgateGateway: GatewayUnderTest = makeBabelgateGateway(
+  "babelgate",
+  { reasoningPassback: true },
+);
+
+/** The unchanged default config — measured like a competitor. */
+export const babelgateDefaultGateway: GatewayUnderTest =
+  makeBabelgateGateway("babelgate-default");

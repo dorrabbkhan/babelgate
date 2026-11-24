@@ -205,6 +205,31 @@ export function jsonBody(result: TurnResult): unknown {
  *   (https://ai.google.dev/gemini-api/docs/thinking)
  */
 
+/* Doc URLs the pass rules cite — one constant per rule so the
+ * scenario modules and the report's Rules section cannot drift. */
+export const DOC = {
+  /** Anthropic streamed Messages contract (event sequence, 2xx). */
+  anthropicStream: "https://docs.anthropic.com/en/api/messages-streaming",
+  /** Anthropic extended thinking: signed thinking blocks, echo-back. */
+  anthropicThinking:
+    "https://platform.claude.com/docs/en/build-with-claude/extended-thinking",
+  /** Responses streaming contract. */
+  responsesStream:
+    "https://platform.openai.com/docs/api-reference/responses-streaming",
+  /** OpenAI reasoning guide: `reasoning` request param; reasoning
+   * items are part of a Responses `output`. */
+  openaiReasoning: "https://platform.openai.com/docs/guides/reasoning",
+  /** OpenRouter: preserve reasoning_details/reasoning across tool use;
+   * "the Responses API ... always returns `reasoning` items in `output`". */
+  openrouterReasoning: "https://openrouter.ai/docs/use-cases/reasoning-tokens",
+  /** DeepSeek reasoning guide: earlier reasoning_content is NOT part
+   * of the next turn's context (cited as counter-evidence only). */
+  deepseekReasoning: "https://api-docs.deepseek.com/guides/reasoning_model",
+  /** Gemini thought signatures on functionCall parts. */
+  geminiThoughtSignatures:
+    "https://ai.google.dev/gemini-api/docs/thought-signatures",
+} as const;
+
 const REASONING_MESSAGE_FIELDS = [
   "reasoning_content",
   "reasoning_details",
@@ -316,4 +341,77 @@ export function clientStreamHasReasoningBeforeText(
     }
   }
   return false;
+}
+
+/**
+ * The exact field path where a recorded upstream request should have
+ * carried reasoning — for the report's one-line failing cell. Mirrors
+ * `upstreamCarriesReasoning`'s expectations.
+ */
+export function reasoningMissDetail(
+  req: { body: unknown } | undefined,
+  dialect: "openai" | "gemini",
+): string {
+  const body =
+    req !== undefined && typeof req.body === "object" && req.body !== null
+      ? (req.body as Record<string, unknown>)
+      : undefined;
+  if (body === undefined) {
+    return "upstream turn produced no JSON request body to inspect";
+  }
+  if (dialect === "openai") {
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const m = messages[i];
+      if (
+        typeof m === "object" &&
+        m !== null &&
+        (m as { role?: unknown }).role === "assistant"
+      ) {
+        return (
+          `messages[${i}] (assistant) carries no ` +
+          `reasoning/reasoning_content/reasoning_details field`
+        );
+      }
+    }
+    return "messages[] has no assistant turn to carry reasoning fields";
+  }
+  const contents = Array.isArray(body.contents) ? body.contents : [];
+  for (let i = contents.length - 1; i >= 0; i -= 1) {
+    const c = contents[i];
+    if (typeof c !== "object" || c === null) continue;
+    const parts = Array.isArray((c as { parts?: unknown[] }).parts)
+      ? (c as { parts: unknown[] }).parts
+      : [];
+    const fc = parts.findIndex(
+      (p) =>
+        typeof p === "object" &&
+        p !== null &&
+        ((p as Record<string, unknown>).functionCall !== undefined ||
+          (p as Record<string, unknown>).function_call !== undefined),
+    );
+    if (fc >= 0) {
+      return (
+        `contents[${i}].parts[${fc}] functionCall has no ` +
+        `thoughtSignature`
+      );
+    }
+    if ((c as { role?: unknown }).role === "model") {
+      return (
+        `contents[${i}] (model turn) has no part with thought:true ` +
+        `or thoughtSignature`
+      );
+    }
+  }
+  return "contents[] has no model turn at all";
+}
+
+/** The field path a client stream's reasoning block should occupy —
+ * per dialect, for the report's one-line failing cell. */
+export function clientReasoningMissDetail(
+  client: "anthropic" | "responses",
+): string {
+  return client === "anthropic"
+    ? "client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block"
+    : "client SSE: no output_item.done{type:reasoning, encrypted_content|summary|content} before the first message item";
 }

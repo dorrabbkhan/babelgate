@@ -12,15 +12,26 @@
  *   https://api-docs.deepseek.com/guides/reasoning_model
  * - Gemini: `thought` / `thoughtSignature` on a model part —
  *   https://ai.google.dev/gemini-api/docs/thinking
+ *
+ * The upstream-passback check is an OBSERVATION for competitor
+ * verdicts (`rules` leaves its `doc` unset): no provider doc requires
+ * reasoning passback on a plain multi-turn chat with no tool call —
+ * DeepSeek's guide excludes earlier reasoning_content from the next
+ * turn's context, and OpenRouter frames preservation around tool
+ * calling. babelgate's own assert is unchanged (its spec requires it
+ * when reasoning_passback is on).
  */
 import {
   anthropicAssistantContent,
+  clientReasoningMissDetail,
   clientStreamHasReasoningBeforeText,
+  DOC,
+  reasoningMissDetail,
   responsesOutputItems,
   upstreamCarriesReasoning,
 } from "./client";
 import type { AnthropicBlock } from "./client";
-import type { Scenario, TurnResult } from "./types";
+import type { PassRule, Scenario, TurnResult } from "./types";
 import { shape } from "./types";
 
 const QUESTIONS = [
@@ -94,10 +105,49 @@ function build(
           reasoning: { effort: "low" },
           input: QUESTIONS[0],
         };
+  // In assert order — each failing verdict names its rule. The
+  // upstream-passback rule deliberately has no `doc`: nothing public
+  // requires it here, so a miss reports as `differs`, never "fail".
+  const statusRule: PassRule = {
+    check:
+      "every turn returns HTTP 200 with the client dialect's event stream",
+    doc:
+      client === "anthropic" ? DOC.anthropicStream : DOC.responsesStream,
+  };
+  const streamRule: PassRule =
+    client === "anthropic"
+      ? {
+          check:
+            "every turn's client stream has a signed thinking block before text",
+          doc: DOC.anthropicThinking,
+        }
+      : {
+          check:
+            "every turn's client stream has a reasoning item before the message",
+          doc: DOC.openaiReasoning,
+        };
+  const passbackRule: PassRule = {
+    check:
+      upstream === "openai"
+        ? "every upstream request from turn 2 on carries reasoning back (messages[].reasoning / reasoning_content / reasoning_details)"
+        : "every upstream request from turn 2 on carries the thought signature (contents[].parts[] thoughtSignature / thought:true)",
+    note:
+      upstream === "openai"
+        ? `observation only — no provider doc requires reasoning passback ` +
+          `on a plain multi-turn chat with no tool call: DeepSeek's reasoning ` +
+          `guide excludes earlier reasoning_content from the next turn's ` +
+          `context (${DOC.deepseekReasoning}); OpenRouter frames preservation ` +
+          `around tool calling (${DOC.openrouterReasoning})`
+        : `observation only — Gemini documents thoughtSignature only on ` +
+          `functionCall parts (${DOC.geminiThoughtSignatures}); no doc ` +
+          `requires resending signatures on a plain multi-turn chat ` +
+          `with no tool call`,
+  };
   return {
     name: `multi-turn-reasoning:${client}->${upstream}`,
     client,
     upstream,
+    rules: [statusRule, streamRule, passbackRule],
     // recorded by the conductor: OpenRouter reasoning, or Gemini
     // includeThoughts — every turn's upstream call gets the same body
     replay:
@@ -124,6 +174,8 @@ function build(
           return {
             pass: false,
             reason: `turn ${i + 1} status ${t.status}`,
+            rule: statusRule,
+            detail: `turn ${i + 1} client response HTTP ${t.status}`,
             evidence,
           };
         }
@@ -131,6 +183,8 @@ function build(
           return {
             pass: false,
             reason: `turn ${i + 1} client stream carries no reasoning block`,
+            rule: streamRule,
+            detail: `turn ${i + 1} ${clientReasoningMissDetail(client)}`,
             evidence,
           };
         }
@@ -139,9 +193,12 @@ function build(
             upstreamCarriesReasoning(r, upstream),
           );
           if (!carried) {
+            const miss = t.upstream.find((r) => r.body !== undefined);
             return {
               pass: false,
               reason: `turn ${i + 1} upstream request dropped the reasoning block`,
+              rule: passbackRule,
+              detail: `turn ${i + 1} ${reasoningMissDetail(miss, upstream)}`,
               evidence,
             };
           }
