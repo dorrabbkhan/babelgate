@@ -64,6 +64,7 @@ scripts/research/competitor-check.sh, competitor-repos.txt                      
 tests/process/gateways/{ccr,free-claude-code}.ts, tests/process/scenarios/*.ts, tests/process/replays/*, scripts/research/conformance-run.sh   NEW (T13b)
 tests/process/scenarios/{thinking-after-tool,multi-turn-reasoning,inputs.test}.ts, scripts/research/passback-tokens.ts   (T13d)
 scripts/conductor/{judge-checks.ts,judge.test.ts,app-env.sh,session-env.sh}, .claude/settings.json   (T13e)
+scripts/research/{conformance-spy.ts,conformance-verdict.ts}, tests/process/conformance.process.test.ts, tests/process/gateways/free-claude-code.ts   (T13f)
 ui/src/screens/{Routing,Usage,Requests}.tsx                                              breaker, cache, free label (T14)
 README.md, docs/launch/v1.6-launch.md, docs/launch/listings.md, docs/support.md, .github/FUNDING.yml (patch), scripts/demo/*.tape   (T15)
 site/index.html, site/style.css, scripts/site/build-site.ts, docs/conductor/patches/v1.6-task16-pages.patch   NEW (T16)
@@ -95,8 +96,9 @@ CHANGELOG.md, package.json version                                              
 | 13c | OpenRouter and DeepSeek presets pass reasoning back | 13b | | Sonnet | Preset data plus one merge rule; conductor runs the live check |
 | 13d | Conformance: live model keeps prior reasoning; Responses scenarios send real user items | 13c | | Sonnet | Test inputs and one script default; conductor runs the live re-run |
 | 13e | Conductor tooling: judge.sh "tests beside each"; PATH guard for hook and scripts | — | | Sonnet | Conductor scripts with seeded tests |
+| 13f | Conformance tooling: spy-log race, `differs` verdict label, free-claude-code live output | 13d | | Sonnet | Test tooling with seeded tests; conductor runs the live re-check |
 | 14 | UI: breaker state, cache hits, free-tier label | 7, 9, 10 | | Sonnet | UI over existing data |
-| 15 | Launch readiness: README, post, listings, hygiene, Sponsors/support, demo | 6, 8, 11, 12, 13b, 13c, 13d | OWNER REVIEW | Sonnet | Copy; owner reviews |
+| 15 | Launch readiness: README, post, listings, hygiene, Sponsors/support, demo | 6, 8, 11, 12, 13b, 13c, 13d, 13f | OWNER REVIEW | Sonnet | Copy; owner reviews |
 | 16 | Landing page + Pages patch | 15 | OWNER REVIEW | Sonnet | Static page from approved mockup |
 | 17 | Live cases; gates E and F | 2, 6, 8, 14 | OWNER REVIEW | Opus | Judges release evidence |
 | 18 | CHANGELOG, `1.6.0`; gate G | 5, 6, 16, 17 | OWNER GATE | Sonnet | Release chore |
@@ -445,6 +447,29 @@ Found in Task 13c's run (2026-11-24). Conductor tooling only; no product code.
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `npx vitest run scripts/conductor` and `./scripts/check.sh` → PASS.
 - [ ] **Step 5 (conductor):** re-run `judge.sh 183 v1.6 13c` and confirm the `files-block` FLAG is gone. Open a new session, check that `printenv CONDUCTOR_ACTOR` prints the bot, and check that `scripts/conductor/as-app.sh gh api user` works without the manual PATH strip.
 - **Commit** `fix(conductor): judge.sh tests-beside-each; PATH guard`.
+
+### Task 13f: Conformance tooling: spy-log race, `differs` verdict label, free-claude-code live output
+
+Found by the conductor in Task 13d's live step (2026-11-24, PR #185). Spec §3.10, D9. Test and research tooling only; no product code.
+
+**Evidence.**
+1. **Spy-log race.** `scripts/research/conformance-spy.ts` appends an exchange's log line in `up.on("end")`, after the upstream response ends. `runScenario` in `tests/process/conformance.process.test.ts` re-reads the log as soon as the client stream completes. A gateway can end the client stream before the spy's `end` fires, so that turn gets no upstream requests. The comment there ("the spy writes before forwarding") does not match the code. Seen once in 41 runs: `babelgate-preset multi-turn-reasoning:responses->openai` reported "turn 2 upstream request dropped the reasoning block", while the spy log's turn-2 body carried a non-empty `reasoning_content`. Two reruns passed. The race can only add false "dropped"/"no reasoning field" failures (a missing turn-1 entry turns the client-side rule into n/a, never into a failure). Every 13d live-confirmed failure was checked against its spy log and stands.
+2. **`differs` printed as PASS.** `scripts/research/conformance-verdict.ts` returns `pass` whenever vitest exited 0, before it reads the verdict file. A `differs` result (an observation rule; vitest passes) is therefore printed `PASS (live)`. Seen on `babelgate-default multi-turn-reasoning:{anthropic,responses}->openai`.
+3. **free-claude-code live mode never reaches the upstream.** Every FCC live cell got HTTP 400 on turn 1 in 13d, and 503 in 13b, with no upstream call in the spy log. The FCC adapter keeps the gateway's output only when startup fails, so the cause can't be seen.
+
+**Files:**
+- Modify: `scripts/research/conformance-spy.ts`, `scripts/research/conformance-verdict.ts`, `tests/process/conformance.process.test.ts`, `tests/process/gateways/free-claude-code.ts`, tests beside each (create the test file where none exists), `docs/research/2026-11-24-conformance-run.md` (the Task 13d amendment's "known tooling limits" and any cell the Step 5 re-check changes), `docs/decisions.md`
+
+**Changes:**
+- Spy: count in-flight exchanges (incremented when a request arrives, decremented after its log line is written, on every path: end, error, aborted, forward error). `GET /__inflight` returns `{"inflight": <n>}`.
+- Test, live mode only: before re-reading the spy log for a turn, wait until `/__inflight` reports 0 (poll every 50 ms, at most 10 s). On timeout, the turn's verdict is INCONCLUSIVE ("spy still had an exchange in flight"), never a failure. Fix the stale comment. Mock mode is unchanged.
+- Verdict: read the verdict file before the vitest status. `differs` → `DIFFERS (observed) — <reason>`; `pass` → `PASS (live)`; `not supported` → `NOT SUPPORTED`; the CONFIRMED and INCONCLUSIVE rules stay exactly as they are. A vitest exit of 0 with no verdict file stays `PASS (live)`.
+- FCC adapter, live mode only (`CONFORMANCE_LIVE_UPSTREAM` set): write the gateway's stdout and stderr to `tmp/conformance/live/<gateway>-<scenario>.gateway.log`, with the same key redaction as the spy. Never log request or response bodies. If the cause of the 400 is the adapter's config (model id, provider config, headers), fix it there. If the cause is in free-claude-code itself → STOP: the owner decides whether it is a reportable upstream bug.
+
+- [ ] **Step 1: Tests.** `"spy reports in-flight exchanges until the log line is written"` (a stub upstream that holds its response open: `/__inflight` is 1 while it is held and 0 after the line is on disk), `"spy in-flight returns to 0 when the upstream errors"`, `"live turn waits for the spy before reading upstream requests"` (a stub spy that writes the log line 300 ms after the client stream ends: the turn still sees its request), `"differs verdict prints DIFFERS, not PASS"`, `"pass verdict still prints PASS"`, `"confirmed failure rule unchanged"` (the existing CONFIRMED cases keep their exact output).
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `npm run build && npm run test:process` (babelgate only, all cells pass) and `./scripts/check.sh` → PASS.
+- [ ] **Step 5 (live, conductor runs):** re-run every cell that 13d recorded as live-confirmed or `differs` for babelgate-default and ccr, plus every free-claude-code OpenRouter cell, once each, on `deepseek/deepseek-v4.1-flash`. Read each FCC gateway log. A result that changes from the 13d table goes in the report and the PR body (D9). The conductor hands the results to a fix session that updates the report.
+- **Commit** `fix(conformance): spy in-flight wait; differs label; FCC live log`.
 
 ### Task 14: UI: breaker state, cache hits, free-tier label
 
