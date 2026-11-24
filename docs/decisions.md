@@ -9814,5 +9814,32 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   input defect and the live cells under the r1-0528 blind spot; both
   are re-run by the conductor's Step 5 on the new model, and the
   docs record which cells changed (old and new model, date).
+- **Step 5 results (conductor, 2026-11-24):** mock re-run — every
+  cell's verdict unchanged from the 13b draft (request shapes only).
+  Live re-run on `deepseek/deepseek-v4.1-flash` — changed cells:
+  `ccr / multi-turn-reasoning:anthropic->openai` moved `fail
+  (mock-only, unconfirmed)` → `fail (live-confirmed 2026-11-24)`;
+  `ccr / streamed-tool-args:responses->openai` confirmed live;
+  every `babelgate`/`babelgate-preset` (opt-in) OpenRouter cell
+  passes live; `babelgate-default` and `ccr`
+  `thinking-after-tool:{anthropic,responses}->openai` and `ccr
+  multi-turn-reasoning:responses->openai` stay live-confirmed.
+  Passback: `passback-tokens.ts` on the `babelgate-preset`
+  `thinking-after-tool:anthropic->openai` spy log, two runs,
+  provider Wafer — `prompt_tokens` none 349 / `reasoning_content`
+  359 / `reasoning` 359. Not confirmable: every `*->gemini` cell
+  (429/503, 504 at the gateway; retry after 20 minutes still 429)
+  and every `free-claude-code` cell (HTTP 400 on turn 1, no
+  upstream call; 503 in the 13b run) — those keep their mock
+  values. Known tooling limits recorded in the report, not fixed
+  here: the spy-log timing race (`conformance-spy.ts` writes on
+  upstream `end`, `conformance.process.test.ts` re-reads on client
+  completion — the ~line-363 comment "the spy writes before
+  forwarding" does not match the code; observed once on
+  `babelgate-preset multi-turn-reasoning:responses->openai`, two
+  reruns passed, and every live-confirmed failure was re-checked
+  against its spy log) and the verdict mislabel
+  (`conformance-verdict.ts` prints `PASS (live)` for a verdict file
+  whose result is `differs`).
 - **Files outside the Files block:** none — every file named above
   is in the task's Files block.
