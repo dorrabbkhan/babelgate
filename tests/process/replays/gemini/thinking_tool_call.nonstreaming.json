@@ -1,0 +1,43 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "**Paris Weather Request Processing**\n\nOkay, so the user wants the weather in Paris. Simple enough. I have the `get_weather` tool, and I know it takes a `location` argument. Therefore, the most straightforward and efficient path here is to generate a call to `get_weather` with the `location` parameter set to \"Paris\". I'll format that call correctly and then return the output. That should give the user exactly what they're looking for, no extraneous steps needed. Let's get that done.\n\n\n",
+            "thought": true
+          },
+          {
+            "functionCall": {
+              "name": "get_weather",
+              "args": {
+                "location": "Paris"
+              },
+              "id": "call_13197350802583635779"
+            },
+            "thoughtSignature": "EtACCs0CAWkUfRP7F9bqXht1yJR6sSwczC8h0CylnRHD5FDv6NK6KM9lTFmK2BVvTf+Bx0EBKuoUvNe4wSnKMGw0gZJirQHUCZve22CHis5Tzc+fpsryqNi/2GGNRmSrsDNRSsNkV0ki+7Jm2ED8huephzseHessfnyd6GlcyoFAZEQsMHvRoqPLzG4ieKfLdueCDuOB1NsduCw0AdTPX0g9COCBK0gJhn2WSU8vA8tFI2dXfvLzUP5jBU/n2o7suu01JTa0Dn8wUbnz6Fkiu07fDAktqHhJRDewELfXoD+YYVI3iEjqOlg8UTImtJ89L/BFaXnePTDqB2Pv6hpjK8PR3QMCCXVvBOhmQSm4j67Gx1JmZLfYzdbxC3s2uzseQJhBTQgdwezrDGd3MkjV5SB9ZlfwBtRQruBpKBmUVRiT7nqR4BiESiYOV6yMLp5rpokg"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0,
+      "finishMessage": "Model generated function call(s)."
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 59,
+    "candidatesTokenCount": 16,
+    "totalTokenCount": 122,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 59
+      }
+    ],
+    "thoughtsTokenCount": 47,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.6-flash",
+  "responseId": "Bt8Ea5sxoNzGzQ_224ToAQ"
+}

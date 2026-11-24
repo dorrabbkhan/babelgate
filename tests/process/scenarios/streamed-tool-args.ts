@@ -1,0 +1,186 @@
+/**
+ * streamed-tool-args (v1.6 plan Task 13b): the upstream streams one
+ * tool call's arguments in >= 5 deltas (the recorded
+ * `openai/tool_call.sse` — 5 non-empty argument chunks). Pass: the
+ * client stream carries exactly one tool call whose concatenated
+ * arguments parse as the recorded JSON. Wire rules: Chat Completions
+ * streams `tool_calls[].function.arguments` as string fragments
+ * (https://platform.openai.com/docs/api-reference/chat-streaming);
+ * Anthropic streams them as `input_json_delta.partial_json` and
+ * Responses as `response.function_call_arguments.delta`
+ * (https://platform.openai.com/docs/api-reference/responses-streaming).
+ */
+import {
+  anthropicAssistantContent,
+  DOC,
+  responsesOutputItems,
+} from "./client";
+import type { PassRule, Scenario, TurnResult } from "./types";
+import { shape } from "./types";
+
+const TOOLS_ANTHROPIC = [
+  {
+    name: "get_weather",
+    description: "Get the weather",
+    input_schema: {
+      type: "object",
+      properties: { location: { type: "string" } },
+    },
+  },
+];
+
+const TOOLS_RESPONSES = [
+  {
+    type: "function",
+    name: "get_weather",
+    description: "Get the weather",
+    parameters: {
+      type: "object",
+      properties: { location: { type: "string" } },
+    },
+  },
+];
+
+/** The recorded arguments in tests/process/replays/openai/tool_call.sse. */
+const RECORDED_ARGS = { location: "Paris" };
+
+function anthropicToolCalls(r: TurnResult): {
+  count: number;
+  inputs: unknown[];
+} {
+  // Non-stream reply: the message content directly.
+  const blocks = anthropicAssistantContent(r.body);
+  const toolCalls = blocks.filter((b) => b.type === "tool_use");
+  return { count: toolCalls.length, inputs: toolCalls.map((b) => b.input) };
+}
+
+function responsesToolCalls(r: TurnResult): {
+  count: number;
+  inputs: unknown[];
+} {
+  const calls = responsesOutputItems(r.body).filter(
+    (i) => i?.type === "function_call",
+  );
+  const inputs = calls.map((c) => {
+    try {
+      return JSON.parse(c.arguments ?? "");
+    } catch {
+      return c.arguments;
+    }
+  });
+  return { count: calls.length, inputs };
+}
+
+function verdict(
+  results: TurnResult[],
+  calls: { count: number; inputs: unknown[] },
+  statusRule: PassRule,
+  argsRule: PassRule,
+): ReturnType<Scenario["assert"]> {
+  const last = results[results.length - 1];
+  const evidence = {
+    request: shape({ status: last?.status, events: last?.sseEvents }),
+    response: shape({
+      toolCallCount: calls.count,
+      inputs: calls.inputs,
+    }),
+  };
+  if (last?.status !== 200) {
+    return {
+      pass: false,
+      reason: `client got HTTP ${last?.status}`,
+      rule: statusRule,
+      detail: `client response HTTP ${last?.status}`,
+      evidence,
+    };
+  }
+  if (calls.count !== 1) {
+    return {
+      pass: false,
+      reason: `expected exactly one tool call, got ${calls.count}`,
+      rule: argsRule,
+      detail:
+        `client stream carries ${calls.count} tool_use/function_call ` +
+        `items (expected exactly 1)`,
+      evidence,
+    };
+  }
+  const args = calls.inputs[0];
+  if (JSON.stringify(args) !== JSON.stringify(RECORDED_ARGS)) {
+    return {
+      pass: false,
+      reason:
+        "concatenated tool-call arguments do not parse as the recorded JSON",
+      rule: argsRule,
+      detail:
+        `concatenated input_json_delta.partial_json / ` +
+        `function_call_arguments.delta does not parse as the recorded ` +
+        `JSON {"location":"Paris"}`,
+      evidence,
+    };
+  }
+  return { pass: true, evidence };
+}
+
+function build(client: "anthropic" | "responses"): Scenario {
+  const clientDoc =
+    client === "anthropic" ? DOC.anthropicStream : DOC.responsesStream;
+  const statusRule: PassRule = {
+    check: "the client request returns HTTP 200 with the dialect's event stream",
+    doc: clientDoc,
+  };
+  const argsRule: PassRule = {
+    check:
+      "the client stream carries exactly one tool call whose concatenated " +
+      "arguments parse as the recorded JSON (upstream streams them as " +
+      ">=5 deltas)",
+    doc: clientDoc,
+  };
+  return {
+    name: `streamed-tool-args:${client}->openai`,
+    client,
+    upstream: "openai",
+    rules: [statusRule, argsRule],
+    // tests/process/replays/openai/tool_call.sse — recorded bytes
+    // from gpt-4o-mini (npm run record:streams,
+    // RECORD_OUT_DIR=tests/process/replays, 2026-11-23): the
+    // arguments stream as 5 non-empty deltas
+    // `{"` `location` `":"` `Paris` `"}` — the plan's >= 5.
+    replay: "openai/tool_call.sse",
+    turns: [
+      {
+        request:
+          client === "anthropic"
+            ? {
+                model: "$MODEL",
+                max_tokens: 128,
+                stream: true,
+                messages: [
+                  { role: "user", content: "What is the weather in Paris?" },
+                ],
+                tools: TOOLS_ANTHROPIC,
+              }
+            : {
+                model: "$MODEL",
+                stream: true,
+                input: "What is the weather in Paris?",
+                tools: TOOLS_RESPONSES,
+              },
+      },
+    ],
+    assert: (results) =>
+      verdict(
+        results,
+        client === "anthropic"
+          ? anthropicToolCalls(results[0])
+          : responsesToolCalls(results[0]),
+        statusRule,
+        argsRule,
+      ),
+  };
+}
+
+// Upstream: "openai" only — the Gemini wire format sends functionCall
+// args as one complete `args` object, never as >=5 argument deltas, so
+// no gemini variant exists (there is nothing to split).
+export const scenarios: Scenario[] = [build("anthropic"), build("responses")];

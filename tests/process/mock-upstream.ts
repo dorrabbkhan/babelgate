@@ -17,6 +17,10 @@ export interface MockRoute {
     status: number;
     headers: Record<string, string>;
     bodyFile: string;
+    /** The 502 error body when bodyFile isn't on disk — e.g. a
+     * non-streaming twin the conductor has not recorded yet (the
+     * mock never substitutes a different replay for it). */
+    missingBodyFile?: string;
   };
 }
 
@@ -25,6 +29,13 @@ export interface RecordedRequest {
   url: string;
   headers: Record<string, string | string[] | undefined>;
   body: string;
+  /** Absolute path of the body file this request was served — lets
+   * the verdict read the upstream response bytes (mock mode only;
+   * unset when no route matched or the file was missing). */
+  responseFile?: string;
+  /** Shape-only response summary — set in live mode by the spy's
+   * JSONL entry (never the response text). */
+  response?: { hasReasoning?: boolean };
 }
 
 export interface RunningMockUpstream {
@@ -98,7 +109,24 @@ export function startMockUpstream(
         );
         return;
       }
-      const file = resolveBodyFile(route.reply.bodyFile);
+      let file: string;
+      try {
+        file = resolveBodyFile(route.reply.bodyFile);
+      } catch (err) {
+        // A replay the run has not recorded yet is a clear 502 — never
+        // a different replay standing in for it (fix round 3: a
+        // non-streaming call must never get SSE bytes).
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            error:
+              route.reply.missingBodyFile ??
+              (err instanceof Error ? err.message : String(err)),
+          }),
+        );
+        return;
+      }
+      requests[requests.length - 1].responseFile = file;
       const headers = { ...route.reply.headers };
       if (
         !hasHeader(headers, "content-length") &&

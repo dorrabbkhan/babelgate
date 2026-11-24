@@ -9336,3 +9336,366 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   (Step 1 names `scripts/research/fixtures/` for the recorded `gh api`
   JSON but the Files block does not list it); and `docs/decisions.md`
   (this entry).
+
+## v1.6 Task 13b — competitor conformance run (spec §3.10, D9)
+
+- **What shipped:** a generalization of the §3.2 process harness — a
+  `GatewayUnderTest` per gateway (babelgate, CCR 3.1.6, free-claude-code
+  v6.15.0/e8806fb, installed pinned under gitignored `tmp/` by
+  `scripts/research/conformance-run.sh`) — three replay-backed
+  scenarios (`thinking-after-tool`, `streamed-tool-args`,
+  `multi-turn-reasoning`), `conformance.process.test.ts` driven by
+  `CONFORMANCE_GATEWAYS` (default `babelgate` only; no skipped tests),
+  `scripts/research/conformance-live.sh` for live confirmation, and the
+  draft report. Evidence is shape-only (`<string:N>`), never prompt or
+  completion text.
+- **Reasoning pass-rule citations (the request field that carries
+  reasoning back, per upstream docs):** OpenRouter Chat `reasoning` /
+  `reasoning_details` —
+  https://openrouter.ai/docs/use-cases/reasoning-tokens; DeepSeek Chat
+  `reasoning_content` — https://api-docs.deepseek.com/guides/reasoning_model;
+  Gemini `thought` / `thoughtSignature` on a model part —
+  https://ai.google.dev/gemini-api/docs/thinking. Anthropic client side:
+  signed thinking blocks —
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking.
+  The same URLs sit in code comments in
+  `tests/process/scenarios/client.ts`, the three scenario modules and
+  `scripts/record-streams-cases.ts`.
+- **CCR is launched as `next-ai-gateway.js` directly,** not `ccr
+  serve`: the management layer spawns the gateway as a child whose
+  core port it derives from `PORT`, which collides with the service
+  port under test ports. The gateway runtime is the same pinned
+  package code; static-key auth via env, JSON provider config via
+  `GATEWAY_CONFIG_PATH`.
+- **`tests/process/replays/openai/tool_call.sse`** holds the verbatim
+  events of `tests/fixtures/streams/openai/tool_call.sse` (the OpenAI
+  Go SDK streamaccumulator recording) re-framed with the blank-line
+  event separator the SSE spec uses: the fixture lost its blank lines
+  on extraction — it is the only non-blank-separated `.sse` in the
+  corpus — and spec-compliant upstream readers (CCR, free-claude-code)
+  parsed the whole file as one event and dropped every chunk.
+  babelgate tolerated the single-newline framing. Event payloads are
+  byte-identical; no fixture was edited.
+- **Recorder (`npm run record:streams`) gained `RECORD_OUT_DIR`** plus
+  four replay-only cases gated on it (`reasoning`,
+  `reasoning_tool_call` via `OPENROUTER_API_KEY` →
+  `https://openrouter.ai/api`, and `thinking`, `thinking_tool_call`
+  via `includeThoughts`), so a default run cannot write new files into
+  the oracle dir. Two pre-existing ts-node compile errors on main were
+  fixed so the recorder can run at all: `providerSetups` returned a
+  `Record<Provider,…>` without the `responses` key (now `Partial`), and
+  `expectedEventsFromWire`'s switch did not cover `responses` (now a
+  default throw).
+- **Files outside the Files block:** `tests/process/harness.ts`
+  (`GatewayUnderTest.start` gains a `models` map — competitor provider
+  configs list model names and live mode needs real ones);
+  `tests/process/binary.process.test.ts` (the one existing caller
+  passes the same mock names); `tests/process/scenarios/types.ts` and
+  `tests/process/scenarios/client.ts` (the scenario type plus the
+  turn-runner/reasoning helpers the Files block's scenario modules
+  need — the block names only the three scenario files);
+  `scripts/record-streams.ts`, `scripts/record-streams-cases.ts`,
+  `scripts/record-streams-reasoning-cases.ts` and
+  `scripts/stream-fixture-events.ts` (the `RECORD_OUT_DIR` override +
+  the reasoning cases split into their own module —
+  record-streams-cases.ts was already over the ~400-line convention —
+  + the two compile fixes above); and `docs/decisions.md` (this
+  entry).
+
+**Fix round — conductor-recorded replays committed (recorded
+2026-11-23):**
+
+- **Recorded models:** `deepseek/deepseek-r1-0528` via OpenRouter
+  (`tests/process/replays/openai/reasoning.sse` + `.json`,
+  `tests/process/replays/openai/reasoning_tool_call.sse` + `.json`),
+  `gemini-3.5-flash` — wire `modelVersion` `gemini-3.6-flash`
+  (`tests/process/replays/gemini/thinking.sse` + `.json`,
+  `tests/process/replays/gemini/thinking_tool_call.sse` + `.json`),
+  `gpt-4o-mini` (`tests/process/replays/openai/tool_call.sse`). All
+  committed byte-for-byte from the conductor's recording.
+- **`scripts/record-streams-reasoning-cases.ts`:** Gemini
+  `thinkingConfig` is now `{ thinkingLevel: "high", includeThoughts:
+  true }` — on `gemini-3.5-flash`, `thinkingBudget: 1024` returned 180
+  thought tokens but 0 thought parts; `thinkingLevel: "high"` returns a
+  streamed `thought: true` part
+  (https://ai.google.dev/gemini-api/docs/thinking).
+- **`scripts/record-streams-cases.ts`:** the OpenRouter default moved
+  `deepseek/deepseek-r1` → `deepseek/deepseek-r1-0528` — the bare name
+  is no longer in `/api/v1/models` (first recording run: HTTP 404).
+- **`scripts/research/conformance-live.sh`:** same dead OpenRouter
+  default fixed (`deepseek/deepseek-r1-0528`); the Gemini live default
+  moved to `gemini-3.5-flash`, the model the replays were recorded on
+  (`gemini-2.5-flash` answered "no longer available to new users" for
+  the recording key). The shared recorder default
+  `RECORD_GEMINI_MODEL`'s `gemini-2.5-flash` is unchanged — the oracle
+  fixtures were recorded on it.
+- **`tests/process/replays/openai/tool_call.sse` replaced:** the
+  re-framed fixture copy became the fresh `gpt-4o-mini` recording (5
+  non-empty argument deltas — `{"` `location` `":"` `Paris` `"}` —
+  meeting the plan's ≥ 5); spec §3.10 asks for recorded bytes.
+  `tests/process/scenarios/streamed-tool-args.ts` reads
+  `{location: "Paris"}` from those bytes. Task 4's
+  `tests/process/replays/openai/tool_call.json` (the binary suite's
+  non-streaming wire body) is untouched — the name does not collide
+  with the scenario's `.sse`.
+- **`tests/process/gateways/babelgate.ts`** (outside the Files block):
+  the mock `openai`/`ollama` entries set `reasoning_passback: true` —
+  spec §3.3 makes Chat `reasoning_content` passback opt-in, and the
+  scenarios assert the upstream request carries reasoning back. The
+  mock route regex in `tests/process/conformance.process.test.ts`
+  became `/[gG]enerateContent/` — `/generateContent/` never matched
+  the streamed `:streamGenerateContent` path (every gemini scenario
+  404'd).
+- **Pass rules unchanged on the real bytes:** a Gemini forced tool
+  call returns a `functionCall` part with `thoughtSignature` and no
+  thought-summary part (three identical recordings), so the reasoning
+  a client must carry back is that signature
+  (https://ai.google.dev/gemini-api/docs/thought-signatures). The
+  existing rules already accept it: babelgate transports it as a
+  `bg1.` envelope on a trailing signed thinking block / a
+  signature-only `reasoning` item with `encrypted_content`, and the
+  gemini encoder re-emits it as the `functionCall` part's
+  `thoughtSignature`. No adapter changes were needed.
+- **Report:** `docs/research/2026-11-23-conformance-run.md`
+  regenerated from a real `conformance-run.sh` run — babelgate 10/10
+  pass; ccr 8 fail, free-claude-code 3 fail (all "mock-only,
+  unconfirmed"), 4 not-supported; each failing cell's
+  `conformance-live.sh` command is listed under "Live confirmation"
+  (generated by `renderReport` in
+  `tests/process/conformance.process.test.ts`, which also dropped the
+  dead `verdict.pass ? "pending" : "pending"` ternary and the
+  `CONFORMANCE_REPLAY=1` repro var nothing reads).
+
+**Fix round 2 — fair-comparison reporting (D9):**
+
+- **`babelgate-default` gateway** (`tests/process/gateways/babelgate.ts`,
+  registered in `tests/process/conformance.process.test.ts`): same
+  binary, unchanged default config — `reasoning_passback` unset —
+  selected only via `CONFORMANCE_GATEWAYS` (default `test:process`
+  still runs `babelgate` alone, 10/10, no skips). Its measured
+  result: `differs` on the two `multi-turn-reasoning:*->openai`
+  passback observations and `fail` on the two
+  `thinking-after-tool:*->openai` carry-back cells — the documented
+  tool-call rule applies to our own defaults too.
+- **Every pass rule now names the doc that requires it**
+  (`PassRule { check, doc?, note? }` in
+  `tests/process/scenarios/types.ts`, populated by all three scenario
+  modules; URLs live once in `DOC` in
+  `tests/process/scenarios/client.ts`). A competitor verdict whose
+  rule has no `doc` is recorded as `differs` (observation), never
+  `fail` — `cellResult` in `conformance.process.test.ts`; babelgate's
+  own assertions still fail the suite on any rule.
+- **Undocumented checks reclassified from the docs:** reasoning
+  passback on a plain multi-turn chat with no tool call is an
+  observation — DeepSeek's guide excludes earlier `reasoning_content`
+  from the next turn's context, OpenRouter frames preservation around
+  tool calling, and Gemini documents `thoughtSignature` only on
+  `functionCall` parts (URLs in the report's Rules section).
+  free-claude-code `multi-turn-reasoning:responses->openai` moved
+  fail → differs accordingly.
+- **CCR documented settings:** v3.1.6 documents no reasoning or
+  transformer option for `openai_chat_completions` /
+  `gemini_generate_content` providers — checked the package
+  `README.md` and the docs source `docs/src/content/docs/en/configuration/providers.md`
+  at tag `v3.1.6` (published at https://ccrdesk.top/en/configuration/providers/).
+  The report's Configuration section says so with the URL checked;
+  the runtime's `openaiChatReasoningSplit` / `deepseekThinking` keys
+  are undocumented at this tag, so none is set.
+- **Report** (`docs/research/2026-11-24-conformance-run.md`,
+  superseding the deleted 11-23 file): adds a Configuration section
+  (every non-default setting per gateway with its doc — babelgate's
+  `reasoning_passback: true`, free-claude-code's
+  `reasoning_history_format: "reasoning_content"`, CCR's
+  "none documented"), a Rules section (check + doc URL per
+  scenario/upstream), one-line failing cells (gateway, scenario,
+  exact missing-field path, rule URL), a `differs` Observed
+  differences section, and a "Live confirmation" list limited to
+  actual `fail` cells. Full shape dumps moved to the new sibling
+  `docs/research/2026-11-24-conformance-run.shapes.md` — 5-column
+  table separator fixed.
+- **Scripts:** `scripts/research/conformance-run.sh` defaults to all
+  four gateways; `scripts/research/conformance-live.sh` accepts
+  `babelgate-default`.
+- **Files outside the Files block (this round):**
+  `tests/process/scenarios/types.ts`,
+  `tests/process/scenarios/client.ts`,
+  `tests/process/scenarios/thinking-after-tool.ts`,
+  `tests/process/scenarios/streamed-tool-args.ts`,
+  `tests/process/scenarios/multi-turn-reasoning.ts`,
+  `tests/process/gateways/babelgate.ts`,
+  `tests/process/conformance.process.test.ts`,
+  `scripts/research/conformance-run.sh`,
+  `scripts/research/conformance-live.sh`,
+  `docs/research/2026-11-24-conformance-run.md`,
+  `docs/research/2026-11-24-conformance-run.shapes.md`,
+  `docs/research/2026-11-23-conformance-run.md` (removed — superseded
+  by the 11-24 run), and `docs/decisions.md` (this entry).
+
+**Fix round 3 — the four conformance-tooling defects the conductor's
+live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`):**
+
+- **`scripts/research/conformance-spy.ts` (new)** — the spy is no
+  longer a heredoc generated inside `scripts/research/conformance-live.sh`;
+  it is a testable module (`createSpyServer`) launched by
+  `node -r ts-node/register/transpile-only` with the same `SPY_*` env
+  contract. Three defect fixes live here: (1) every
+  `key=`/`api_key=`/`access_token=` query value is replaced by
+  `<redacted>` in BOTH logged paths (`url`, `upstreamPath`) and the log
+  is never written from the injected forwarding path — the conductor
+  found a real Gemini key in the log when the gateway sends `?key=`
+  (CCR's Gemini calls); (2) forwarding now prepends the target's base
+  path (`https://openrouter.ai/api` + `/v1/chat/completions` →
+  `/api/v1/chat/completions` — the generated spy dropped `/api` and
+  every OpenAI-upstream live cell 404'd); (3) the spy buffers each
+  upstream response and logs a shape-only summary
+  `response: {hasReasoning}` per exchange — the verdict's client-side
+  rule needs to know whether the upstream actually sent reasoning in
+  that turn, and response text is never logged. `http` targets are
+  supported too (offline test target).
+- **`tests/process/scenarios/client.ts`** — `upstreamResponseHasReasoning`
+  reads response bytes (SSE `data:` payloads or a non-streaming JSON
+  body) per the dialect's wire rules: Chat `reasoning` /
+  `reasoning_content` / `reasoning_details` on `delta` or `message`
+  choices; Gemini `thought: true` parts or `thoughtSignature`. New
+  `UpstreamExchange`/`upstreamRequestFrom` build the verdict's view of
+  one upstream exchange — parsed request body plus whether its
+  response carried reasoning, from the spy summary (live) or the
+  served replay file (mock, via `responseFile`). `sendTurn` takes
+  `UpstreamExchange[]`. `clientStreamHasReasoningBeforeText` now also
+  counts `tool_use` (Anthropic) / `function_call` and
+  `function_call_arguments.delta` (Responses) as payload the reasoning
+  must precede — with one documented position: Gemini attaches
+  `thoughtSignature` to the `functionCall` part itself
+  (https://ai.google.dev/gemini-api/docs/thinking), so a
+  signature-carrying thinking block immediately after the tool_use
+  whose signature it carries satisfies the rule; an unsigned or
+  non-adjacent block still fails.
+- **`tests/process/scenarios/types.ts`** — `UpstreamRequest` gains
+  `responseHadReasoning?: boolean` — the verdict's per-turn "did the
+  upstream send reasoning" input; undefined (e.g. no route matched)
+  means the turn's client-side check is n/a.
+- **`tests/process/mock-upstream.ts`** — `MockRoute.reply` gains
+  `missingBodyFile` (a replay not yet recorded answers a clear 502 —
+  never a different replay standing in); `RecordedRequest` gains
+  `responseFile` (the absolute path served — lets the verdict read
+  the upstream response bytes) and `response` (the live spy's
+  shape-only summary).
+- **`tests/process/conformance.process.test.ts`** — `routesFor`
+  splits Gemini's `:streamGenerateContent` (recorded SSE, still
+  byte-for-byte) from `:generateContent` (the recorded
+  `.nonstreaming.json` twin; missing → 502 "non-streaming replay not
+  recorded: <path>" with the recording command). Chat stays one
+  streaming route: the recorded upstream request bodies show every
+  gateway sends `stream: true` to Chat (probed ccr, babelgate and
+  free-claude-code mock runs — the same bodies the live spy records),
+  so no Chat twin is needed; if the conductor's spy logs show a
+  `"stream":false` caller the same `RECORD_TWINS_ONLY` top-up applies.
+  The live re-slice now uses `upstreamRequestFrom` so the spy's
+  `response.hasReasoning` reaches the verdict. A new offline
+  regression test (`mock upstream gemini route split`) asserts
+  `:streamGenerateContent` gets the committed `.sse` byte-for-byte
+  and `:generateContent` never gets SSE.
+- **`tests/process/scenarios/thinking-after-tool.ts` and
+  `tests/process/scenarios/multi-turn-reasoning.ts`** — the
+  client-side reasoning check now applies only when that turn's
+  upstream response carried reasoning (`responseHadReasoning ===
+  true`), per the owner-approved rule: a gateway can only be
+  required to surface reasoning the upstream actually sent (Gemini
+  does not return thought parts on every turn — the live run failed
+  babelgate itself on this). With none, the turn's check is n/a. The
+  rule text names the conditional and the tool-call-signature
+  position; the doc citations are unchanged. On the committed
+  replays the upstream does send reasoning, so babelgate is still
+  required to emit the block — same strictness as before.
+- **`scripts/record-streams.ts`** — new `RECORD_TWINS_ONLY=1` top-up
+  mode. `RECORD_OVERWRITE`'s default skip guards a case whose wire
+  file exists, so a missing `<case>.nonstreaming.json` could never be
+  added later without re-recording (and rewriting) the committed
+  `.sse`/`.json` — which the task forbids. Twins-only mode never calls
+  the stream endpoint and never touches `<case>.<ext>`/`.json`; it
+  writes only the missing twin (`RECORD_TWINS`/`RECORD_CASES` still
+  filter). Recording command for the two Gemini twins (run by the
+  conductor):
+  `npm run record:streams RECORD_OUT_DIR=tests/process/replays RECORD_PROVIDERS=gemini RECORD_CASES=thinking,thinking_tool_call RECORD_TWINS_ONLY=1`
+- **`tests/process/scenarios/client.test.ts` and
+  `scripts/record-streams.test.ts` and
+  `scripts/research/conformance-spy.test.ts` (new)** — the offline
+  coverage each fix required: redaction + forwarded injected key +
+  base-path + shape-only response summary against a 127.0.0.1
+  target (fake key `AIzaFAKE123`, `SPYSECRET-REALKEY-…` never in the
+  log); reasoning detection on the committed replays plus the new
+  ordering cases; twins-only writes the missing twin only.
+- **New mock findings:** the conditional client-side rule now fails
+  `ccr / multi-turn-reasoning:{anthropic,responses}->openai` and
+  `free-claude-code / thinking-after-tool:anthropic->openai` +
+  `multi-turn-reasoning:anthropic->openai` — the recorded upstream
+  did send reasoning and the client stream surfaced none (mock-only,
+  unconfirmed — each cell's `conformance-live.sh` command is in the
+  report's Live confirmation list). The four `ccr / *->gemini` cells
+  failed `turn 1 status 502` until the conductor ran the recording
+  command above — the twins are committed in this same round (below);
+  live mode is unaffected (the spy forwards to the real provider).
+- **The two non-streaming Gemini twins are committed** — recorded by
+  the conductor on 2026-11-24 (`RECORD_TWINS_ONLY=1`,
+  `gemini-3.5-flash`, wire `modelVersion` `gemini-3.6-flash`), copied
+  in byte-for-byte (`cmp`-verified, no key material). With them the
+  mock run resolves the four `ccr / *->gemini` 502s: three cells now
+  pass and `multi-turn-reasoning:anthropic->gemini` fails a real
+  doc-cited rule (upstream sent reasoning, client stream surfaced
+  none) — matching the conductor's table.
+- **Every replay `.json` file this PR adds, one full path per
+  line:**
+  `tests/process/replays/gemini/thinking.json`
+  `tests/process/replays/gemini/thinking_tool_call.json`
+  `tests/process/replays/gemini/thinking.nonstreaming.json`
+  `tests/process/replays/gemini/thinking_tool_call.nonstreaming.json`
+  `tests/process/replays/openai/reasoning.json`
+  `tests/process/replays/openai/reasoning_tool_call.json`
+- **Live-verdict fix (`scripts/research/conformance-verdict.ts`,
+  new):** the first live confirmation printed `CONFIRMED FAILURE
+  (live)` for two runs that were transport failures — a gateway 504
+  on turn 2 (Gemini slow) and a vitest timeout. `conformance-live.sh`
+  now captures the vitest output and defers the verdict to the new
+  module: CONFIRMED only when every spy-log upstream exchange is 2xx,
+  every client turn is 2xx (per the scenario's own verdict file —
+  `CONFORMANCE_LIVE_VERDICT`, written by
+  `conformance.process.test.ts` before its assert), and the recorded
+  verdict is a `fail` under a rule that cites a provider doc. Every
+  other outcome — a timeout, no upstream call, an upstream non-2xx, a
+  test that died before the verdict, a client non-2xx, or a non-doc
+  check — is `INCONCLUSIVE — <cause>`, never a failure.
+  `conformance-verdict.test.ts` covers the recorded cases offline:
+  gateway 504 on all-2xx upstream, vitest timeout, upstream 429, no
+  upstream call, a crash before the verdict, a non-doc rule failure,
+  and a clean doc-cited rule failure.
+- **Report:** `docs/research/2026-11-24-conformance-run.md` carries
+  the live results — five cells `fail (live-confirmed 2026-11-24)`
+  (the two `thinking-after-tool:*->openai` cells on
+  babelgate-default and ccr, plus `ccr /
+  multi-turn-reasoning:responses->openai`), a live control note
+  (babelgate opt-in passed both `thinking-after-tool:*->openai`
+  cells; the `reasoning_content` 200 shows the field was accepted,
+  not used), and the inconclusive cells with causes (ccr
+  multi-turn-reasoning:anthropic->openai timed out; the Gemini cells
+  hit 429/503/timeouts on three attempts; free-claude-code is "not
+  confirmed" — a 503 on turn 1 with no upstream call in live mode,
+  cause undiagnosed).
+- **Files outside the Files block (this round), one full path per
+  line:**
+  `scripts/research/conformance-spy.ts`
+  `scripts/research/conformance-spy.test.ts`
+  `scripts/research/conformance-verdict.ts`
+  `scripts/research/conformance-verdict.test.ts`
+  `scripts/record-streams.ts`
+  `scripts/record-streams.test.ts`
+  `tests/process/mock-upstream.ts`
+  `tests/process/scenarios/client.ts`
+  `tests/process/scenarios/client.test.ts`
+  `tests/process/scenarios/types.ts`
+  `tests/process/scenarios/thinking-after-tool.ts`
+  `tests/process/scenarios/multi-turn-reasoning.ts`
+  `tests/process/conformance.process.test.ts`
+  `scripts/research/conformance-live.sh`
+  `docs/research/2026-11-24-conformance-run.md`
+  `docs/research/2026-11-24-conformance-run.shapes.md`
+  `docs/decisions.md` (this entry)

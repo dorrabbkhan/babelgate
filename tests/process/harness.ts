@@ -13,6 +13,13 @@ export interface GatewayUnderTest {
     upstream: string;
     port: number;
     workDir: string;
+    /**
+     * Model names per upstream dialect — the mock names in replay
+     * mode, the real provider models in live mode
+     * (conformance-live.sh). Gateways whose provider config lists
+     * models (CCR, free-claude-code) need them at start time.
+     */
+    models: Record<"openai" | "gemini", string>;
   }): Promise<RunningGateway>;
 }
 

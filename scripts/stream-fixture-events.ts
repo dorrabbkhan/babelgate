@@ -32,6 +32,8 @@ export function expectedEventsFromWire(
       return geminiEvents(wireText, model, ids);
     case "ollama":
       return ollamaEvents(wireText, model, ids);
+    default:
+      throw new Error(`no stream-fixture decoder for provider ${provider}`);
   }
 }
 
