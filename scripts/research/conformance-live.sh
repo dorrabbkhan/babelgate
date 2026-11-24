@@ -20,6 +20,13 @@
 # for the reasoning field, and each turn's client-side check applies
 # only when the upstream response carried reasoning.
 #
+# The verdict comes from scripts/research/conformance-verdict.ts:
+# CONFIRMED FAILURE only when every spy-log upstream exchange is 2xx,
+# every client turn is 2xx, and the scenario's recorded verdict
+# (CONFORMANCE_LIVE_VERDICT, written by the test) failed a rule that
+# cites a provider doc. A timeout, a gateway non-2xx, an upstream
+# non-2xx or no upstream call is INCONCLUSIVE — never a failure.
+#
 # Keys come from env, never from flags:
 #   openai upstream — OPENROUTER_API_KEY (target openrouter.ai/api,
 #                     model default deepseek/deepseek-r1-0528) or
@@ -103,6 +110,8 @@ model_var="CONFORMANCE_LIVE_MODEL_${upstream^^}"
 model="${!model_var:-${CONFORMANCE_LIVE_MODEL:-$model_default}}"
 spy_dir="tmp/conformance/live"
 spy_log="$spy_dir/$gateway-${scenario//[^A-Za-z0-9_.-]/_}.jsonl"
+verdict_file="$spy_dir/$gateway-${scenario//[^A-Za-z0-9_.-]/_}.verdict.json"
+vitest_out="$spy_dir/$gateway-${scenario//[^A-Za-z0-9_.-]/_}.vitest.log"
 spy_port="${CONFORMANCE_SPY_PORT:-4599}"
 spy_ts="scripts/research/conformance-spy.ts"
 
@@ -119,15 +128,19 @@ conformance-live dry run
     CONFORMANCE_GATEWAYS=$gateway \\
       CONFORMANCE_LIVE_UPSTREAM=http://127.0.0.1:$spy_port \\
       CONFORMANCE_LIVE_SPY_LOG=$spy_log \\
+      CONFORMANCE_LIVE_VERDICT=$verdict_file \\
       $model_var=$model \\
       npx vitest run --config vitest.process.config.ts \\
         tests/process/conformance.process.test.ts -t "$scenario"
+  vitest output: $vitest_out
+  verdict:       conformance-verdict.ts (CONFIRMED only on a doc-cited rule failure over all-2xx exchanges)
 EOF
   exit 0
 fi
 
 mkdir -p "$spy_dir"
 : > "$spy_log"
+rm -f "$verdict_file"
 spy_pid=""
 cleanup() {
   [ -n "$spy_pid" ] && kill "$spy_pid" 2>/dev/null || true
@@ -155,27 +168,19 @@ env \
   CONFORMANCE_GATEWAYS="$gateway" \
   CONFORMANCE_LIVE_UPSTREAM="http://127.0.0.1:$spy_port" \
   CONFORMANCE_LIVE_SPY_LOG="$spy_log" \
+  CONFORMANCE_LIVE_VERDICT="$verdict_file" \
   "$model_var"="$model" \
   npx vitest run --config vitest.process.config.ts \
-    tests/process/conformance.process.test.ts -t "$scenario"
-vitest_status=$?
+    tests/process/conformance.process.test.ts -t "$scenario" \
+    2>&1 | tee "$vitest_out"
+vitest_status=${PIPESTATUS[0]}
 set -e
 
-# Interpret the spy log: no upstream call or an upstream error means
-# the live run cannot confirm either direction.
-upstream_calls=$(grep -c '"method"' "$spy_log" 2>/dev/null || true)
-upstream_ok=$(grep -c '"upstreamStatus":2' "$spy_log" 2>/dev/null || true)
-if [ "$vitest_status" = 0 ]; then
-  echo "conformance-live: $gateway $scenario PASS (live)"
-  exit 0
-fi
-if [ "$upstream_calls" = 0 ]; then
-  echo "conformance-live: $gateway $scenario INCONCLUSIVE — gateway made no upstream call (spy log $spy_log)"
-  exit 1
-fi
-if [ "$upstream_ok" -lt "$upstream_calls" ]; then
-  echo "conformance-live: $gateway $scenario INCONCLUSIVE — upstream returned non-2xx (spy log $spy_log)"
-  exit 1
-fi
-echo "conformance-live: $gateway $scenario CONFIRMED FAILURE (live) — see $spy_log"
-exit 1
+# The verdict: CONFIRMED only for a doc-cited rule failure over
+# all-2xx exchanges; every other outcome INCONCLUSIVE with its cause
+# (scripts/research/conformance-verdict.ts).
+node -r ts-node/register/transpile-only \
+  scripts/research/conformance-verdict.ts \
+  --gateway "$gateway" --scenario "$scenario" \
+  --vitest-status "$vitest_status" --vitest-output "$vitest_out" \
+  --spy-log "$spy_log" --verdict "$verdict_file"

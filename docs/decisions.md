@@ -9632,17 +9632,60 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   did send reasoning and the client stream surfaced none (mock-only,
   unconfirmed — each cell's `conformance-live.sh` command is in the
   report's Live confirmation list). The four `ccr / *->gemini` cells
-  now fail `turn 1 status 502` — the recorded non-streaming twin is
-  pending until the conductor runs the command above; live mode is
-  unaffected (the spy forwards to the real provider).
-- **Pending replays (conductor records; committed files stay
-  byte-identical):**
+  failed `turn 1 status 502` until the conductor ran the recording
+  command above — the twins are committed in this same round (below);
+  live mode is unaffected (the spy forwards to the real provider).
+- **The two non-streaming Gemini twins are committed** — recorded by
+  the conductor on 2026-11-24 (`RECORD_TWINS_ONLY=1`,
+  `gemini-3.5-flash`, wire `modelVersion` `gemini-3.6-flash`), copied
+  in byte-for-byte (`cmp`-verified, no key material). With them the
+  mock run resolves the four `ccr / *->gemini` 502s: three cells now
+  pass and `multi-turn-reasoning:anthropic->gemini` fails a real
+  doc-cited rule (upstream sent reasoning, client stream surfaced
+  none) — matching the conductor's table.
+- **Every replay `.json` file this PR adds, one full path per
+  line:**
+  `tests/process/replays/gemini/thinking.json`
+  `tests/process/replays/gemini/thinking_tool_call.json`
   `tests/process/replays/gemini/thinking.nonstreaming.json`
   `tests/process/replays/gemini/thinking_tool_call.nonstreaming.json`
+  `tests/process/replays/openai/reasoning.json`
+  `tests/process/replays/openai/reasoning_tool_call.json`
+- **Live-verdict fix (`scripts/research/conformance-verdict.ts`,
+  new):** the first live confirmation printed `CONFIRMED FAILURE
+  (live)` for two runs that were transport failures — a gateway 504
+  on turn 2 (Gemini slow) and a vitest timeout. `conformance-live.sh`
+  now captures the vitest output and defers the verdict to the new
+  module: CONFIRMED only when every spy-log upstream exchange is 2xx,
+  every client turn is 2xx (per the scenario's own verdict file —
+  `CONFORMANCE_LIVE_VERDICT`, written by
+  `conformance.process.test.ts` before its assert), and the recorded
+  verdict is a `fail` under a rule that cites a provider doc. Every
+  other outcome — a timeout, no upstream call, an upstream non-2xx, a
+  test that died before the verdict, a client non-2xx, or a non-doc
+  check — is `INCONCLUSIVE — <cause>`, never a failure.
+  `conformance-verdict.test.ts` covers the recorded cases offline:
+  gateway 504 on all-2xx upstream, vitest timeout, upstream 429, no
+  upstream call, a crash before the verdict, a non-doc rule failure,
+  and a clean doc-cited rule failure.
+- **Report:** `docs/research/2026-11-24-conformance-run.md` carries
+  the live results — five cells `fail (live-confirmed 2026-11-24)`
+  (the two `thinking-after-tool:*->openai` cells on
+  babelgate-default and ccr, plus `ccr /
+  multi-turn-reasoning:responses->openai`), a live control note
+  (babelgate opt-in passed both `thinking-after-tool:*->openai`
+  cells; the `reasoning_content` 200 shows the field was accepted,
+  not used), and the inconclusive cells with causes (ccr
+  multi-turn-reasoning:anthropic->openai timed out; the Gemini cells
+  hit 429/503/timeouts on three attempts; free-claude-code is "not
+  confirmed" — a 503 on turn 1 with no upstream call in live mode,
+  cause undiagnosed).
 - **Files outside the Files block (this round), one full path per
   line:**
   `scripts/research/conformance-spy.ts`
   `scripts/research/conformance-spy.test.ts`
+  `scripts/research/conformance-verdict.ts`
+  `scripts/research/conformance-verdict.test.ts`
   `scripts/record-streams.ts`
   `scripts/record-streams.test.ts`
   `tests/process/mock-upstream.ts`

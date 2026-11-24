@@ -73,16 +73,16 @@ rule with no citing doc is an observation: it can produce
 
 | scenario | babelgate | babelgate-default | ccr | free-claude-code |
 | --- | --- | --- | --- | --- |
-| thinking-after-tool:anthropic->openai | pass (mock) | fail (mock-only, unconfirmed) | fail (mock-only, unconfirmed) | fail (mock-only, unconfirmed) |
-| thinking-after-tool:responses->openai | pass (mock) | fail (mock-only, unconfirmed) | fail (mock-only, unconfirmed) | pass (mock) |
-| thinking-after-tool:anthropic->gemini | pass (mock) | pass (mock) | fail (mock-only, unconfirmed) | not supported |
-| thinking-after-tool:responses->gemini | pass (mock) | pass (mock) | fail (mock-only, unconfirmed) | not supported |
+| thinking-after-tool:anthropic->openai | pass (mock) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (mock-only, unconfirmed) |
+| thinking-after-tool:responses->openai | pass (mock) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | pass (mock) |
+| thinking-after-tool:anthropic->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
+| thinking-after-tool:responses->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
 | streamed-tool-args:anthropic->openai | pass (mock) | pass (mock) | pass (mock) | pass (mock) |
 | streamed-tool-args:responses->openai | pass (mock) | pass (mock) | pass (mock) | pass (mock) |
 | multi-turn-reasoning:anthropic->openai | pass (mock) | differs (observed) | fail (mock-only, unconfirmed) | fail (mock-only, unconfirmed) |
-| multi-turn-reasoning:responses->openai | pass (mock) | differs (observed) | fail (mock-only, unconfirmed) | differs (observed) |
+| multi-turn-reasoning:responses->openai | pass (mock) | differs (observed) | fail (live-confirmed 2026-11-24) | differs (observed) |
 | multi-turn-reasoning:anthropic->gemini | pass (mock) | pass (mock) | fail (mock-only, unconfirmed) | not supported |
-| multi-turn-reasoning:responses->gemini | pass (mock) | pass (mock) | fail (mock-only, unconfirmed) | not supported |
+| multi-turn-reasoning:responses->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
 
 ## Failing cells
 
@@ -94,17 +94,11 @@ rule with no citing doc is an observation: it can produce
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
 - ccr / thinking-after-tool:responses->openai: turn 2 upstream request carries no reasoning field per the target's wire rules — messages[0] (assistant) carries no reasoning/reasoning_content/reasoning_details field (rule: https://openrouter.ai/docs/use-cases/reasoning-tokens)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / thinking-after-tool:anthropic->gemini: turn 1 status 502 — turn 1 client response HTTP 502 (rule: https://docs.anthropic.com/en/api/messages-streaming)
-  - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / thinking-after-tool:responses->gemini: turn 1 status 502 — turn 1 client response HTTP 502 (rule: https://platform.openai.com/docs/api-reference/responses-streaming)
-  - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
 - ccr / multi-turn-reasoning:anthropic->openai: turn 1 upstream response carried reasoning but the client stream has no reasoning block — turn 1 client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
 - ccr / multi-turn-reasoning:responses->openai: turn 1 upstream response carried reasoning but the client stream has no reasoning block — turn 1 client SSE: no output_item.done{type:reasoning, encrypted_content|summary|content} before the first message item (rule: https://platform.openai.com/docs/guides/reasoning)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / multi-turn-reasoning:anthropic->gemini: turn 1 status 502 — turn 1 client response HTTP 502 (rule: https://docs.anthropic.com/en/api/messages-streaming)
-  - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / multi-turn-reasoning:responses->gemini: turn 1 status 502 — turn 1 client response HTTP 502 (rule: https://platform.openai.com/docs/api-reference/responses-streaming)
+- ccr / multi-turn-reasoning:anthropic->gemini: turn 1 upstream response carried reasoning but the client stream has no reasoning block — turn 1 client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
 - free-claude-code / thinking-after-tool:anthropic->openai: turn 2 upstream response carried reasoning but the client stream has no reasoning block before text or tool call — client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
   - repro: CONFORMANCE_GATEWAYS=free-claude-code npm run test:process -- conformance.process.test.ts
@@ -125,14 +119,63 @@ Not failures — no cited doc requires the behaviour (Rules).
 - babelgate-default / thinking-after-tool:responses->openai: `scripts/research/conformance-live.sh babelgate-default "thinking-after-tool:responses->openai"`
 - ccr / thinking-after-tool:anthropic->openai: `scripts/research/conformance-live.sh ccr "thinking-after-tool:anthropic->openai"`
 - ccr / thinking-after-tool:responses->openai: `scripts/research/conformance-live.sh ccr "thinking-after-tool:responses->openai"`
-- ccr / thinking-after-tool:anthropic->gemini: `scripts/research/conformance-live.sh ccr "thinking-after-tool:anthropic->gemini"`
-- ccr / thinking-after-tool:responses->gemini: `scripts/research/conformance-live.sh ccr "thinking-after-tool:responses->gemini"`
 - ccr / multi-turn-reasoning:anthropic->openai: `scripts/research/conformance-live.sh ccr "multi-turn-reasoning:anthropic->openai"`
 - ccr / multi-turn-reasoning:responses->openai: `scripts/research/conformance-live.sh ccr "multi-turn-reasoning:responses->openai"`
 - ccr / multi-turn-reasoning:anthropic->gemini: `scripts/research/conformance-live.sh ccr "multi-turn-reasoning:anthropic->gemini"`
-- ccr / multi-turn-reasoning:responses->gemini: `scripts/research/conformance-live.sh ccr "multi-turn-reasoning:responses->gemini"`
 - free-claude-code / thinking-after-tool:anthropic->openai: `scripts/research/conformance-live.sh free-claude-code "thinking-after-tool:anthropic->openai"`
 - free-claude-code / multi-turn-reasoning:anthropic->openai: `scripts/research/conformance-live.sh free-claude-code "multi-turn-reasoning:anthropic->openai"`
+
+## Live confirmation (2026-11-24)
+
+Each failing mock cell was rerun against the live provider through
+the logging spy (`scripts/research/conformance-live.sh`). A cell is
+live-confirmed only when every upstream exchange returned 2xx, every
+client turn returned 2xx, and the scenario's verdict failed a rule
+that cites a provider doc; every other outcome is inconclusive.
+
+**fail (live-confirmed 2026-11-24):**
+
+- babelgate-default / thinking-after-tool:anthropic->openai: the
+  turn-2 upstream request's assistant message carries only
+  `content, role, tool_calls` — no reasoning field per
+  https://openrouter.ai/docs/use-cases/reasoning-tokens. Upstream
+  200.
+- babelgate-default / thinking-after-tool:responses->openai: same —
+  the turn-2 assistant message carries only `content, role,
+  tool_calls`. Upstream 200.
+- ccr / thinking-after-tool:anthropic->openai: same — the turn-2
+  assistant message carries only `content, role, tool_calls`.
+  Upstream 200.
+- ccr / thinking-after-tool:responses->openai: same — the turn-2
+  assistant message carries only `content, role, tool_calls`.
+  Upstream 200.
+- ccr / multi-turn-reasoning:responses->openai: turn 1 upstream
+  response carried reasoning but the client stream has no reasoning
+  block per https://platform.openai.com/docs/guides/reasoning.
+  Upstream 200.
+
+**Control (live):** babelgate (the `reasoning_passback` opt-in)
+passed `thinking-after-tool:{anthropic,responses}->openai` live —
+the turn-2 assistant message carries `reasoning_content` and
+OpenRouter answered 200 on every exchange. Limit: OpenRouter's doc
+names `reasoning_details`; a 200 shows the field was accepted, not
+that it was used.
+
+**INCONCLUSIVE — not confirmations, not failures:**
+
+- ccr / multi-turn-reasoning:anthropic->openai: the vitest run timed
+  out (60s) before a verdict.
+- ccr / multi-turn-reasoning:anthropic->gemini, and the babelgate
+  Gemini controls: Gemini returned 429/503 or timed out on three
+  attempts on 2026-11-24 — no clean upstream exchange to judge.
+- free-claude-code / thinking-after-tool:anthropic->openai and
+  multi-turn-reasoning:anthropic->openai: not confirmed — the
+  gateway returned 503 on turn 1 and made no upstream call in live
+  mode, while the same cells reach the mock. The cause is not
+  diagnosed and may be our live-mode adapter config.
+
+Everything else that fails on the mock stays "fail (mock-only,
+unconfirmed)".
 
 ## Not supported
 

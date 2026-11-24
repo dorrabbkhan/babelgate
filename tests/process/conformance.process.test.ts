@@ -255,6 +255,13 @@ function replayExists(replay: string): boolean {
  */
 const LIVE_UPSTREAM = process.env.CONFORMANCE_LIVE_UPSTREAM;
 const SPY_LOG = process.env.CONFORMANCE_LIVE_SPY_LOG;
+/**
+ * Live mode only: the file the scenario's own verdict is written to
+ * (scripts/research/conformance-verdict.ts reads it). Written before
+ * the assert so a failing verdict still lands; an absent file means
+ * the test never reached a verdict — INCONCLUSIVE, never CONFIRMED.
+ */
+const LIVE_VERDICT = process.env.CONFORMANCE_LIVE_VERDICT;
 
 function liveModel(
   gateway: string,
@@ -390,7 +397,11 @@ describe("conformance (spec §3.10)", () => {
               `(RECORD_OUT_DIR=tests/process/replays)`,
           );
         }
-        const { verdict } = await runScenario(spec, gatewayName, scenario);
+        const { verdict, results } = await runScenario(
+          spec,
+          gatewayName,
+          scenario,
+        );
         const result = cellResult(gatewayName, verdict);
         record({
           gateway: gatewayName,
@@ -404,6 +415,24 @@ describe("conformance (spec §3.10)", () => {
           evidence: verdict.evidence,
           live: result === "differs" ? "n/a" : "pending",
         });
+        if (LIVE_VERDICT !== undefined) {
+          // conformance-live.sh decides CONFIRMED vs INCONCLUSIVE
+          // from this: the client status per turn and the doc the
+          // broken rule cites — a transport failure can never
+          // confirm a wire-format finding.
+          writeFileSync(
+            LIVE_VERDICT,
+            JSON.stringify({
+              gateway: gatewayName,
+              scenario: scenario.name,
+              result,
+              pass: verdict.pass,
+              reason: verdict.reason,
+              ruleDoc: verdict.rule?.doc,
+              clientStatuses: results.map((r) => r.status),
+            }) + "\n",
+          );
+        }
         expect(
           assertable(result, verdict.pass),
           verdict.reason
