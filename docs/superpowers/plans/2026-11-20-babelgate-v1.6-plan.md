@@ -65,6 +65,7 @@ tests/process/gateways/{ccr,free-claude-code}.ts, tests/process/scenarios/*.ts, 
 tests/process/scenarios/{thinking-after-tool,multi-turn-reasoning,inputs.test}.ts, scripts/research/passback-tokens.ts   (T13d)
 scripts/conductor/{judge-checks.ts,judge.test.ts,app-env.sh,session-env.sh}, .claude/settings.json   (T13e)
 scripts/research/{conformance-spy.ts,conformance-verdict.ts}, tests/process/conformance.process.test.ts, tests/process/gateways/free-claude-code.ts   (T13f)
+docs/research/2026-11-24-conformance-run.md, tests/process/gateways/free-claude-code.ts (+ test), docs/decisions.md   (T13g)
 ui/src/screens/{Routing,Usage,Requests}.tsx                                              breaker, cache, free label (T14)
 README.md, docs/launch/v1.6-launch.md, docs/launch/listings.md, docs/support.md, .github/FUNDING.yml (patch), scripts/demo/*.tape   (T15)
 site/index.html, site/style.css, scripts/site/build-site.ts, docs/conductor/patches/v1.6-task16-pages.patch   NEW (T16)
@@ -97,8 +98,9 @@ CHANGELOG.md, package.json version                                              
 | 13d | Conformance: live model keeps prior reasoning; Responses scenarios send real user items | 13c | | Sonnet | Test inputs and one script default; conductor runs the live re-run |
 | 13e | Conductor tooling: judge.sh "tests beside each"; PATH guard for hook and scripts | — | | Sonnet | Conductor scripts with seeded tests |
 | 13f | Conformance tooling: spy-log race, `differs` verdict label, free-claude-code live output | 13d | | Sonnet | Test tooling with seeded tests; conductor runs the live re-check |
+| 13g | Conformance: free-claude-code results repeated and diagnosed | 13f | OWNER REVIEW (claims about another project) | Opus | Judges evidence that becomes public claims |
 | 14 | UI: breaker state, cache hits, free-tier label | 7, 9, 10 | | Sonnet | UI over existing data |
-| 15 | Launch readiness: README, post, listings, hygiene, Sponsors/support, demo | 6, 8, 11, 12, 13b, 13c, 13d, 13f | OWNER REVIEW | Sonnet | Copy; owner reviews |
+| 15 | Launch readiness: README, post, listings, hygiene, Sponsors/support, demo | 6, 8, 11, 12, 13b, 13c, 13d, 13f, 13g | OWNER REVIEW | Sonnet | Copy; owner reviews |
 | 16 | Landing page + Pages patch | 15 | OWNER REVIEW | Sonnet | Static page from approved mockup |
 | 17 | Live cases; gates E and F | 2, 6, 8, 14 | OWNER REVIEW | Opus | Judges release evidence |
 | 18 | CHANGELOG, `1.6.0`; gate G | 5, 6, 16, 17 | OWNER GATE | Sonnet | Release chore |
@@ -470,6 +472,29 @@ Found by the conductor in Task 13d's live step (2026-11-24, PR #185). Spec §3.1
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `npm run build && npm run test:process` (babelgate only, all cells pass) and `./scripts/check.sh` → PASS.
 - [ ] **Step 5 (live, conductor runs):** re-run every cell that 13d recorded as live-confirmed or `differs` for babelgate-default and ccr, plus every free-claude-code OpenRouter cell, once each, on `deepseek/deepseek-v4.1-flash`. Read each FCC gateway log. A result that changes from the 13d table goes in the report and the PR body (D9). The conductor hands the results to a fix session that updates the report.
 - **Commit** `fix(conformance): spy in-flight wait; differs label; FCC live log`.
+
+### Task 13g: Conformance: free-claude-code results repeated and diagnosed · OWNER REVIEW
+
+Found by the conductor in Task 13f's live step (2026-11-24, PR #188). Spec §3.10, D9. Evidence and research only; code changes only to our own free-claude-code adapter config.
+
+**Evidence.** With 13f's adapter fix, free-claude-code (pin v6.15.0) reaches OpenRouter `deepseek/deepseek-v4.1-flash` for the first time. Each cell ran once: `multi-turn-reasoning:anthropic->openai` came out `fail (live-confirmed)` ("turn 1 upstream response carried reasoning but the client stream has no reasoning block"), `multi-turn-reasoning:responses->openai` came out `differs (observed)` ("turn 2 upstream request dropped the reasoning block"), and `streamed-tool-args:responses->openai` and both `thinking-after-tool:*->openai` cells passed. The gateway logs show HTTP 200 throughout. A live-confirmed failure about another project is a public claim (D9), and our adapter was wrong once already, so neither result is evidence yet.
+
+**Files:**
+- Modify: `docs/research/2026-11-24-conformance-run.md`, `docs/decisions.md`
+- Modify only if the cause is our config: `tests/process/gateways/free-claude-code.ts`, tests beside it (create the test file where none exists)
+
+**Changes:**
+- **Repeat.** The conductor runs each of the two non-passing free-claude-code cells 3 times (same model, same pin), and each passing free-claude-code cell once more. Per-run results go in the report; a cell is reported as its result only if all runs agree, otherwise as `not reproducible (n of 3)`.
+- **Diagnose** (a fix session reads the gateway logs and spy logs under `tmp/conformance/live/` and free-claude-code's own docs and source at the pinned commit, citing file and line or URL):
+  1. Does free-claude-code emit reasoning to an Anthropic client only under a setting (for example a thinking or reasoning option in its config or in the request)? If our adapter doesn't set it → fix the adapter config, add an offline test pinning the config, and rerun the cell 3 times.
+  2. For the Responses client: does free-claude-code send prior-turn reasoning upstream for a Responses client at all, with `reasoning_history_format: "reasoning_content"` set? Cite the source that says so.
+  3. If the cause is in free-claude-code itself → STOP: the owner decides whether it is a reportable upstream bug. Do not open any issue.
+- **Report.** Final label per free-claude-code cell, the cause in one sentence with its citation, and a "what we may say" line: observed on this run only; no verdict language about the project; nothing in README, recipes, launch or site copy until the owner decides under D9.
+
+- [ ] **Step 1 (live, conductor runs):** the repeats above on `deepseek/deepseek-v4.1-flash` via `conformance-live.sh`, per-run output kept under `~/babelgate-conductor/`. Redacted FCC gateway logs only.
+- [ ] **Step 2: Tests** (only if the adapter changes): `"free-claude-code adapter sets <the setting> in live and mock mode"`, with the exact value the cited doc names. **Step 3:** run → FAIL, implement. **Step 4:** `npm run build && npm run test:process` (all cells that passed before still pass) and `./scripts/check.sh` → PASS.
+- [ ] **Step 5 (live, conductor runs):** rerun any cell the adapter change touches, 3 times; the fix session updates the report with all runs.
+- **Commit** `docs(conformance): free-claude-code results repeated and diagnosed` (or `fix(conformance): free-claude-code adapter <setting>` plus the report, if the adapter changed).
 
 ### Task 14: UI: breaker state, cache hits, free-tier label
 
