@@ -130,6 +130,47 @@ describe("provider preset tiers (v1.6 spec §3.3)", () => {
     expect(PROVIDER_PRESETS.deepseek.gaps).toContain("json_schema");
   });
 
+  it("openrouter-free preset turns reasoning passback on", () => {
+    // v1.6 Task 13c: OpenRouter documents `reasoning_content` as an
+    // alias of `reasoning` — the preset declares what the provider
+    // accepts, so the entry carries passback with no explicit key.
+    const config = yamlConfig(
+      `default: or\nproviders:\n  or:\n    preset: openrouter-free\n`,
+      { OPENROUTER_API_KEY: "k" },
+    );
+    const entry = config.registry.get("or");
+    expect(entry.reasoningPassback).toBe(true);
+    expect(entry.preset).toBe("openrouter-free");
+  });
+
+  it("deepseek preset turns reasoning passback on", () => {
+    // v1.6 Task 13c: DeepSeek's thinking-mode guide requires
+    // `reasoning_content` back on every turn of a tools request.
+    const config = yamlConfig(
+      `default: ds\nproviders:\n  ds:\n    preset: deepseek\n`,
+      { DEEPSEEK_API_KEY: "k" },
+    );
+    const entry = config.registry.get("ds");
+    expect(entry.reasoningPassback).toBe(true);
+    expect(entry.preset).toBe("deepseek");
+  });
+
+  it("explicit reasoning_passback false wins over the preset", () => {
+    const config = yamlConfig(
+      `default: or\nproviders:\n  or:\n    preset: openrouter-free\n    reasoning_passback: false\n`,
+      { OPENROUTER_API_KEY: "k" },
+    );
+    expect(config.registry.get("or").reasoningPassback).toBe(false);
+  });
+
+  it("entry without a preset keeps passback off", () => {
+    const config = yamlConfig(
+      `default: o\nproviders:\n  o:\n    type: openai\n    base_url: https://api.openai.com\n    api_key_env: OPENAI_API_KEY\n`,
+      { OPENAI_API_KEY: "k" },
+    );
+    expect(config.registry.get("o").reasoningPassback).toBeUndefined();
+  });
+
   it("live-proven presets carry their edit-task model", () => {
     expect(PROVIDER_PRESETS["openrouter-free"].suggested).toEqual({
       "claude-code": "nvidia/nemotron-3-ultra-550b-a55b:free",

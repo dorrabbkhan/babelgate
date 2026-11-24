@@ -11,6 +11,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   babelgateGateway,
   babelgateDefaultGateway,
+  babelgatePresetGateway,
 } from "./gateways/babelgate";
 import { ccrGateway, ccrClientHeaders, CCR_VERSION } from "./gateways/ccr";
 import {
@@ -62,6 +63,12 @@ const GATEWAYS: Record<string, GatewaySpec> = {
     adapter: babelgateDefaultGateway,
     models: { openai: "openai/mock-chat", gemini: "gemini/mock-gem" },
   },
+  // v1.6 Task 13c: the `preset: openrouter-free` config — passback
+  // comes from the preset's data, no explicit key.
+  "babelgate-preset": {
+    adapter: babelgatePresetGateway,
+    models: { openai: "openai/mock-chat", gemini: "gemini/mock-gem" },
+  },
   ccr: {
     adapter: ccrGateway,
     models: { openai: "mock-chat", gemini: "mock-gem" },
@@ -77,6 +84,7 @@ const GATEWAYS: Record<string, GatewaySpec> = {
 const GATEWAY_VERSIONS: Record<string, string> = {
   babelgate: `local build (${process.env.BABELGATE_BIN ?? "node dist/cli.js"})`,
   "babelgate-default": `local build (${process.env.BABELGATE_BIN ?? "node dist/cli.js"})`,
+  "babelgate-preset": `local build (${process.env.BABELGATE_BIN ?? "node dist/cli.js"})`,
   ccr: `@musistudio/claude-code-router ${CCR_VERSION} (npm, --ignore-scripts)`,
   "free-claude-code": `Alishahryar1/free-claude-code ${FCC_TAG} (${FCC_COMMIT.slice(0, 12)}, uv sync --frozen)`,
 };
@@ -97,6 +105,12 @@ const GATEWAY_CONFIG_NOTES: Record<string, string[]> = {
   "babelgate-default": [
     "unchanged default config — `reasoning_passback` unset on every " +
       "provider entry (its spec §3.3 default is off).",
+  ],
+  "babelgate-preset": [
+    "`preset: openrouter-free` on the `openai` entry with `base_url` " +
+      "pointed at the mock and no explicit `reasoning_passback` — " +
+      "passback comes from the preset itself (v1.6 Task 13c). Every " +
+      "other provider entry is the stock default config.",
   ],
   ccr: [
     "no reasoning or transformer option is set — v3.1.6 documents " +
@@ -168,7 +182,15 @@ function cellResult(
   verdict: { pass: boolean; rule?: { doc?: string } },
 ): Cell["result"] {
   if (verdict.pass) return "pass";
-  if (gateway !== "babelgate" && verdict.rule?.doc === undefined) {
+  // babelgate and babelgate-preset are held to the exact bar — a
+  // broken rule always fails our own shipped configs; competitor
+  // gateways and the disclosure-only babelgate-default get "differs"
+  // for rules no doc cites.
+  if (
+    gateway !== "babelgate" &&
+    gateway !== "babelgate-preset" &&
+    verdict.rule?.doc === undefined
+  ) {
     return "differs";
   }
   return "fail";

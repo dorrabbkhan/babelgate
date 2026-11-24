@@ -254,6 +254,11 @@ export function loadConfig(): EnvConfig {
       // The env path carries the preset's declared gaps too (v1.6
       // Task 8b) — the yaml loader merges them the same way.
       ...(targetPreset === undefined ? {} : { gaps: [...targetPreset.gaps] }),
+      // … and its reasoning_passback (v1.6 Task 13c): --provider /
+      // TARGET_PRESET take the preset's value, same merge as yaml.
+      ...(targetPreset?.reasoning_passback === undefined
+        ? {}
+        : { reasoningPassback: targetPreset.reasoning_passback }),
       contextWindow: targetContextWindow,
       ...(targetMaxOutputTokens === undefined
         ? {}

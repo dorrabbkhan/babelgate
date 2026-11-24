@@ -91,6 +91,19 @@ providers:
 - `local` forces `costUsd: 0` / `priceSource: "local"` the way Ollama
   is priced natively — for self-hosted OpenAI-compatible servers.
 
+Two `preset:` values also turn `reasoning_passback` on (send the
+model's `reasoning_content` back on later turns; off everywhere else,
+overridable per entry):
+
+- `preset: openrouter-free` — OpenRouter accepts `reasoning_content`
+  as an alias of `reasoning`
+  (<https://openrouter.ai/docs/use-cases/reasoning-tokens>, checked
+  2026-11-24).
+- `preset: deepseek` — DeepSeek's thinking mode requires
+  `reasoning_content` back on every turn of a `tools` request
+  (<https://api-docs.deepseek.com/guides/thinking_mode>, checked
+  2026-11-24).
+
 ## Notes
 
 - **Model names are the provider's own.** A route's `to` and a request's

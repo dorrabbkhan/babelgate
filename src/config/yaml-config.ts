@@ -161,6 +161,11 @@ export function loadYamlConfig(
       const type = provider.type ?? preset?.type;
       const baseUrl = provider.base_url ?? preset?.base_url;
       const apiKeyEnv = provider.api_key_env ?? preset?.api_key_env;
+      // v1.6 Task 13c: the entry's own value wins; else the preset's;
+      // else unset (off) — an explicit `reasoning_passback: false`
+      // still beats the preset.
+      const reasoningPassback =
+        provider.reasoning_passback ?? preset?.reasoning_passback;
       if (type === undefined || baseUrl === undefined) {
         throw new ConfigurationError(
           `${path}: providers.${name} needs "type" and "base_url" or a "preset"`,
@@ -198,9 +203,7 @@ export function loadYamlConfig(
         ...(provider.repair_tool_calls === undefined
           ? {}
           : { repairToolCalls: provider.repair_tool_calls }),
-        ...(provider.reasoning_passback === undefined
-          ? {}
-          : { reasoningPassback: provider.reasoning_passback }),
+        ...(reasoningPassback === undefined ? {} : { reasoningPassback }),
         ...(provider.reasoning === undefined
           ? {}
           : { reasoning: provider.reasoning }),

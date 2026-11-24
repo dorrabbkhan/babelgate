@@ -4,7 +4,7 @@
 #
 #   scripts/research/conformance-live.sh <gateway> <scenario> [--dry-run]
 #
-#   <gateway>:  babelgate | babelgate-default | ccr | free-claude-code
+#   <gateway>:  babelgate | babelgate-default | babelgate-preset | ccr | free-claude-code
 #   <scenario>: a scenario name from conformance.process.test.ts, e.g.
 #               streamed-tool-args:anthropic->openai
 #
@@ -43,7 +43,7 @@ cd "$(git rev-parse --show-toplevel)"
 
 usage() {
   echo "usage: $0 <gateway> <scenario> [--dry-run]" >&2
-  echo "  gateway:  babelgate | babelgate-default | ccr | free-claude-code" >&2
+  echo "  gateway:  babelgate | babelgate-default | babelgate-preset | ccr | free-claude-code" >&2
   echo "  scenario: <name>:<client>-><upstream>, e.g. streamed-tool-args:anthropic->openai" >&2
   exit 2
 }
@@ -61,8 +61,8 @@ done
 [ -n "$gateway" ] && [ -n "$scenario" ] || usage
 
 case "$gateway" in
-  babelgate|babelgate-default|ccr|free-claude-code) ;;
-  *) echo "conformance-live: unknown gateway '$gateway' (babelgate | babelgate-default | ccr | free-claude-code)" >&2; exit 2 ;;
+  babelgate|babelgate-default|babelgate-preset|ccr|free-claude-code) ;;
+  *) echo "conformance-live: unknown gateway '$gateway' (babelgate | babelgate-default | babelgate-preset | ccr | free-claude-code)" >&2; exit 2 ;;
 esac
 
 case "$scenario" in
