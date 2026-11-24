@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/scripts/conductor/session-env.sh",
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/scripts/conductor/session-env.sh",
             "statusMessage": "Acting as babelgate-conductor[bot]"
           }
         ]

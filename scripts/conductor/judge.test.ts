@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -176,6 +182,56 @@ describe("judge.ts (spec §3.0.1)", () => {
     const r = judge("extra-file-basename-other-path.diff");
     expect(r.exitCode).toBe(1);
     expect(line(r, "files-block")).toMatch(/^FLAG files-block .*src\/x\/one\.adapter\.ts outside Files block/);
+  });
+
+  // v1.6 Task 13e: a Files block saying "tests beside each" allows
+  // X.test.ts in the same directory as every listed X.ts (the
+  // src/config/env-config.test.ts false FLAG on PR #183, task 13c).
+  const PLAN16 = "docs/superpowers/plans/2026-11-20-babelgate-v1.6-plan.md";
+  const judge16 = (task: string, paths: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "judge-seed-"));
+    const diffFile = join(dir, "seed.diff");
+    writeFileSync(diffFile, paths.map((p) => seed(p, ["const c = 3;"])).join(""));
+    return runJudge({
+      version: "v1.6",
+      task,
+      diffFile,
+      plan: PLAN16,
+      title: "feat(presets): OpenRouter and DeepSeek pass reasoning back",
+      reportDir: dir,
+    });
+  };
+
+  it("tests beside each allows the sibling test file", () => {
+    const r = judge16("13c", [
+      "src/config/env-config.ts",
+      "src/config/env-config.test.ts",
+    ]);
+    expect(line(r, "files-block")).toBe(
+      "PASS files-block every diff file is in the task's Files block",
+    );
+  });
+
+  it("without the phrase the sibling test is still flagged", () => {
+    // v1.6 Task 13d lists thinking-after-tool.ts but its Files block has
+    // no "tests beside each".
+    const r = judge16("13d", [
+      "tests/process/scenarios/thinking-after-tool.test.ts",
+    ]);
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "files-block")).toBe(
+      "FLAG files-block tests/process/scenarios/thinking-after-tool.test.ts outside Files block and not named in a decisions.md hunk",
+    );
+  });
+
+  it("a test beside an unlisted file is still flagged", () => {
+    // Task 13c has the phrase, but circuit-breaker.ts is not in its Files
+    // block, so its test does not count either.
+    const r = judge16("13c", ["src/routing/circuit-breaker.test.ts"]);
+    expect(r.exitCode).toBe(1);
+    expect(line(r, "files-block")).toBe(
+      "FLAG files-block src/routing/circuit-breaker.test.ts outside Files block and not named in a decisions.md hunk",
+    );
   });
 
   // v1.5 Task 3: the plan's Files block names files by bare name after a
@@ -478,6 +534,32 @@ describe("judge.ts (spec §3.0.1)", () => {
     const calls = readFileSync(join(dir, "calls"), "utf8");
     expect(calls).toContain("run view --job 111 --log-failed");
     expect(calls).not.toContain("--job 222");
+  });
+
+  it("app-env drops an unlistable PATH entry so env can exec", () => {
+    // v1.6 Task 13e: a chmod-000 dir stands in for the dead AppImage
+    // mount that stopped env's execvp — the entry must be dropped from
+    // PATH and `env` must still find bash.
+    const dir = mkdtempSync(join(tmpdir(), "app-env-"));
+    const dead = join(dir, "dead-mount");
+    mkdirSync(dead);
+    chmodSync(dead, 0o000);
+    try {
+      const r = spawnSync(
+        "bash",
+        [
+          "-c",
+          `export PATH='${dead}':"$PATH" && ` +
+            `source scripts/conductor/app-env.sh && ` +
+            `env bash -c true && ` +
+            `case ":$PATH:" in *":${dead}:"*) exit 9;; esac`,
+        ],
+        { encoding: "utf8" },
+      );
+      expect(r.status).toBe(0);
+    } finally {
+      chmodSync(dead, 0o700);
+    }
   });
 
   it("judge.sh and wait-ci.sh argc guards exit 2", () => {
