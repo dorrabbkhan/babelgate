@@ -26,6 +26,15 @@
  * object `{gateway, scenario, result, pass, reason, ruleDoc,
  * clientStatuses}`. An absent or stale file means the test never
  * reached a verdict — that is INCONCLUSIVE, never CONFIRMED.
+ *
+ * Task 13f: the file is read before the vitest exit code — an
+ * observation run exits 0 and printed `PASS (live)` over a `differs`
+ * verdict; an unsupported pair exits 0 and printed `PASS (live)` over
+ * `not supported`. `differs` prints `DIFFERS (observed)`, `not
+ * supported` prints `NOT SUPPORTED`, `inconclusive` prints
+ * INCONCLUSIVE with its recorded cause, and `pass` still prints
+ * `PASS (live)`. The CONFIRMED/INCONCLUSIVE rules below are
+ * unchanged — they still apply to a non-zero exit.
  */
 import { existsSync, readFileSync } from "node:fs";
 
@@ -44,7 +53,12 @@ export interface SpyExchange {
 export interface LiveRunVerdict {
   gateway?: string;
   scenario?: string;
-  result?: "pass" | "fail" | "differs" | "not supported";
+  result?:
+    | "pass"
+    | "fail"
+    | "differs"
+    | "not supported"
+    | "inconclusive";
   pass?: boolean;
   reason?: string;
   /** The doc the broken rule cites — absent for observation rules. */
@@ -66,6 +80,8 @@ export interface LiveOutcomeInput {
 
 export type LiveOutcome =
   | { kind: "pass" }
+  | { kind: "differs"; reason?: string }
+  | { kind: "notSupported"; reason?: string }
   | { kind: "confirmed"; reason?: string; ruleDoc?: string }
   | { kind: "inconclusive"; cause: string };
 
@@ -79,7 +95,23 @@ const is2xx = (s: unknown): boolean =>
  * INCONCLUSIVE, not a wire-format finding.
  */
 export function liveOutcome(input: LiveOutcomeInput): LiveOutcome {
-  if (input.vitestStatus === 0) return { kind: "pass" };
+  if (input.vitestStatus === 0) {
+    // The verdict file labels the run before the exit code does —
+    // an observation or a skipped pair exits 0 and is not a PASS.
+    switch (input.verdict?.result) {
+      case "differs":
+        return { kind: "differs", reason: input.verdict.reason };
+      case "not supported":
+        return { kind: "notSupported", reason: input.verdict.reason };
+      case "inconclusive":
+        return {
+          kind: "inconclusive",
+          cause: input.verdict.reason ?? "the run could not be judged",
+        };
+      default:
+        return { kind: "pass" };
+    }
+  }
   if (/timed out/i.test(input.vitestOutput)) {
     return {
       kind: "inconclusive",
@@ -155,6 +187,16 @@ export function renderOutcome(
   switch (outcome.kind) {
     case "pass":
       return `conformance-live: ${gateway} ${scenario} PASS (live)`;
+    case "differs":
+      return (
+        `conformance-live: ${gateway} ${scenario} DIFFERS (observed)` +
+        `${outcome.reason ? ` — ${outcome.reason}` : ""}`
+      );
+    case "notSupported":
+      return (
+        `conformance-live: ${gateway} ${scenario} NOT SUPPORTED` +
+        `${outcome.reason ? ` — ${outcome.reason}` : ""}`
+      );
     case "confirmed":
       return (
         `conformance-live: ${gateway} ${scenario} CONFIRMED FAILURE ` +

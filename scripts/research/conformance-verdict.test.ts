@@ -191,6 +191,150 @@ describe("conformance-verdict (v1.6 Task 13b fix round 3)", () => {
     ).toContain("PASS (live)");
   });
 
+  it("differs verdict prints DIFFERS, not PASS", () => {
+    // Task 13f: a `differs` verdict is an observation — vitest exits
+    // 0 on it, so reading the exit code first printed PASS (live) on
+    // babelgate-default multi-turn-reasoning:{anthropic,responses}.
+    const outcome = liveOutcome({
+      vitestStatus: 0,
+      vitestOutput: "1 passed",
+      spy: [exchange(200), exchange(200)],
+      verdict: ruleFail({
+        result: "differs",
+        reason:
+          "turn 2 upstream request dropped the reasoning block",
+        ruleDoc: undefined,
+      }),
+    });
+    expect(outcome.kind).toBe("differs");
+    const line = renderOutcome(
+      "babelgate-default",
+      "multi-turn-reasoning:anthropic->openai",
+      outcome,
+    );
+    expect(line).toContain("DIFFERS (observed)");
+    expect(line).toContain(
+      "turn 2 upstream request dropped the reasoning block",
+    );
+    expect(line).not.toContain("PASS");
+  });
+
+  it("pass verdict still prints PASS", () => {
+    const outcome = liveOutcome({
+      vitestStatus: 0,
+      vitestOutput: "1 passed",
+      spy: [exchange(200), exchange(200)],
+      verdict: ruleFail({ result: "pass", pass: true }),
+    });
+    expect(outcome.kind).toBe("pass");
+    expect(
+      renderOutcome(
+        "babelgate",
+        "thinking-after-tool:anthropic->openai",
+        outcome,
+      ),
+    ).toBe(
+      "conformance-live: babelgate " +
+        "thinking-after-tool:anthropic->openai PASS (live)",
+    );
+  });
+
+  it("a vitest pass with no verdict file still prints PASS", () => {
+    const outcome = liveOutcome({
+      vitestStatus: 0,
+      vitestOutput: "1 passed",
+      spy: [exchange(200)],
+      verdict: undefined,
+    });
+    expect(outcome.kind).toBe("pass");
+  });
+
+  it("confirmed failure rule unchanged", () => {
+    const outcome = liveOutcome({
+      vitestStatus: 1,
+      vitestOutput:
+        "AssertionError: turn 2 upstream request carries no " +
+        "reasoning field per the target's wire rules",
+      spy: [exchange(200), exchange(200)],
+      verdict: ruleFail(),
+    });
+    expect(outcome.kind).toBe("confirmed");
+    expect(
+      renderOutcome(
+        "ccr",
+        "thinking-after-tool:anthropic->openai",
+        outcome,
+      ),
+    ).toBe(
+      "conformance-live: ccr thinking-after-tool:anthropic->openai " +
+        "CONFIRMED FAILURE (live) — turn 2 upstream request carries " +
+        "no reasoning field per the target's wire rules " +
+        "(rule: https://openrouter.ai/docs/use-cases/reasoning-tokens)",
+    );
+  });
+
+  it("not supported verdict prints NOT SUPPORTED", () => {
+    // FCC's *->gemini cells end without a scenario run — the test
+    // records `not supported` in the verdict file; that is not a
+    // live PASS.
+    const outcome = liveOutcome({
+      vitestStatus: 0,
+      vitestOutput: "1 passed",
+      spy: [],
+      verdict: {
+        gateway: "free-claude-code",
+        scenario: "multi-turn-reasoning:anthropic->gemini",
+        result: "not supported",
+        pass: true,
+        reason:
+          "not supported (per https://github.com/Alishahryar1/" +
+          "free-claude-code — gemini upstream is a fixed Google " +
+          "OpenAI-compatible endpoint)",
+      },
+    });
+    expect(outcome.kind).toBe("notSupported");
+    expect(
+      renderOutcome(
+        "free-claude-code",
+        "multi-turn-reasoning:anthropic->gemini",
+        outcome,
+      ),
+    ).toContain("NOT SUPPORTED");
+  });
+
+  it("inconclusive verdict prints INCONCLUSIVE with its cause", () => {
+    // Task 13f: the spy still had an exchange in flight when the
+    // turn's wait timed out — the run cannot be judged, never a
+    // failure.
+    const outcome = liveOutcome({
+      vitestStatus: 0,
+      vitestOutput: "1 passed",
+      spy: [exchange(200)],
+      verdict: {
+        gateway: "babelgate-preset",
+        scenario: "multi-turn-reasoning:responses->openai",
+        result: "inconclusive",
+        pass: false,
+        reason: "turn 2: spy still had an exchange in flight",
+        clientStatuses: [200, 200],
+      },
+    });
+    expect(outcome.kind).toBe("inconclusive");
+    if (outcome.kind === "inconclusive") {
+      expect(outcome.cause).toContain(
+        "spy still had an exchange in flight",
+      );
+    }
+    const line = renderOutcome(
+      "babelgate-preset",
+      "multi-turn-reasoning:responses->openai",
+      outcome,
+    );
+    expect(line).toContain("INCONCLUSIVE");
+    expect(line).toContain("spy still had an exchange in flight");
+    expect(line).not.toContain("FAILURE");
+  });
+
   it("a malformed spy-log line can never confirm", () => {
     const outcome = liveOutcome({
       vitestStatus: 1,

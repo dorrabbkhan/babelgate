@@ -14,6 +14,12 @@
  *
  * SPY_PORT=0 binds a free port; the bound port is printed as
  * `listening <port>` (the offline test reads it).
+ *
+ * GET /__inflight answers `{"inflight": <n>}` — the exchanges in
+ * flight right now (request arrived, log line not yet written).
+ * Live turns poll it before re-reading the log: a turn's log line
+ * is written when the upstream response ends, which can lag the
+ * client stream's end (v1.6 Task 13f).
  */
 import http from "node:http";
 import https from "node:https";
@@ -58,15 +64,48 @@ export function createSpyServer(opts: SpyOptions): http.Server {
     (targetUrl.protocol === "https:" ? 443 : 80);
   const dialect = opts.keyHeader === "x-goog-api-key" ? "gemini" : "openai";
 
+  /**
+   * Exchanges in flight right now — incremented when a request
+   * arrives, decremented after its log line is written on every
+   * path (upstream end, upstream error, mid-body abort, forward
+   * error). Live turns poll GET /__inflight before re-reading the
+   * log (v1.6 Task 13f): the line lands on upstream `end`, which
+   * can lag the client stream's end.
+   */
+  let inflight = 0;
+
   return http.createServer((req, res) => {
     const clientUrl = req.url ?? "/";
     if (clientUrl === "/__health") {
       res.writeHead(200).end("ok");
       return;
     }
+    if (clientUrl === "/__inflight") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ inflight }));
+      return;
+    }
+    inflight += 1;
+    let settled = false;
+    let exchangeStarted = false;
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      inflight -= 1;
+    };
     const chunks: Buffer[] = [];
     req.on("data", (c: Buffer) => chunks.push(c));
+    // A client that vanishes mid-upload never becomes an exchange —
+    // no line is written, but the slot must be released. After
+    // `end` the exchange owns the slot until its record lands.
+    req.on("aborted", () => {
+      if (!exchangeStarted) settle();
+    });
+    req.on("error", () => {
+      if (!exchangeStarted) settle();
+    });
     req.on("end", () => {
+      exchangeStarted = true;
       const body = Buffer.concat(chunks);
       const headers = { ...req.headers };
       delete headers["content-length"];
@@ -111,6 +150,10 @@ export function createSpyServer(opts: SpyOptions): http.Server {
             ...fields,
           }) + "\n",
         );
+        // The exchange's line is on disk — the slot is released on
+        // every path that reaches here (end, error, aborted,
+        // forward error).
+        settle();
       };
       // A client that went away mid-stream must not crash the spy;
       // the record is still written when the upstream ends.
@@ -137,10 +180,11 @@ export function createSpyServer(opts: SpyOptions): http.Server {
             res.write(c);
           });
           // The entry is written when the upstream response ends —
-          // still before the gateway finishes relaying the stream to
-          // the client — and carries the shape-only summary the
-          // client-side rule needs: whether reasoning was present.
-          // The response text itself is never logged.
+          // which can lag the client stream's end, so live turns
+          // wait on /__inflight before re-reading the log — and
+          // carries the shape-only summary the client-side rule
+          // needs: whether reasoning was present. The response text
+          // itself is never logged.
           up.on("end", () => {
             recordOnce({
               upstreamStatus: up.statusCode,

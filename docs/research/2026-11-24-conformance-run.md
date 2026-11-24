@@ -252,14 +252,14 @@ all-2xx exchanges; any non-2xx or timeout is inconclusive:
 | ccr | thinking-after-tool:responses->gemini | inconclusive (upstream 429) |
 | ccr | thinking-after-tool:responses->openai | fail (live-confirmed) |
 | free-claude-code | multi-turn-reasoning:anthropic->gemini | not supported |
-| free-claude-code | multi-turn-reasoning:anthropic->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+| free-claude-code | multi-turn-reasoning:anthropic->openai | fail (live-confirmed, 13f re-check) |
 | free-claude-code | multi-turn-reasoning:responses->gemini | not supported |
-| free-claude-code | multi-turn-reasoning:responses->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
-| free-claude-code | streamed-tool-args:responses->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+| free-claude-code | multi-turn-reasoning:responses->openai | differs (observed, 13f re-check) |
+| free-claude-code | streamed-tool-args:responses->openai | pass (live, 13f re-check) |
 | free-claude-code | thinking-after-tool:anthropic->gemini | not supported |
-| free-claude-code | thinking-after-tool:anthropic->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+| free-claude-code | thinking-after-tool:anthropic->openai | pass (live, 13f re-check) |
 | free-claude-code | thinking-after-tool:responses->gemini | not supported |
-| free-claude-code | thinking-after-tool:responses->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+| free-claude-code | thinking-after-tool:responses->openai | pass (live, 13f re-check) |
 
 Changes from the 13b draft:
 
@@ -275,26 +275,41 @@ Changes from the 13b draft:
 - Still live-confirmed on the new model: `babelgate-default` and
   `ccr` `thinking-after-tool:{anthropic,responses}->openai`, and
   `ccr multi-turn-reasoning:responses->openai`.
+- `free-claude-code / multi-turn-reasoning:anthropic->openai`: was
+  `fail (mock-only, unconfirmed)`; on the Task 13f re-check the
+  turn-1 upstream response carried reasoning and the client stream
+  had no thinking block — recorded `fail (live-confirmed)`.
+- `free-claude-code / multi-turn-reasoning:responses->openai`:
+  still `differs (observed)`, now observed live — the turn-2
+  upstream request dropped the reasoning block.
+- `free-claude-code / thinking-after-tool:anthropic->openai`: was
+  `fail (mock-only, unconfirmed)`; the re-check recorded `pass
+  (live)` — the mock finding did not reproduce on this run.
+- `free-claude-code / thinking-after-tool:responses->openai` and
+  `streamed-tool-args:responses->openai`: pass, now confirmed
+  live.
 
 `conformance-live.sh` printed **PASS** for `babelgate-default`
 `multi-turn-reasoning:{anthropic,responses}->openai`, but the
 verdict files say `differs`; the cells are recorded as `differs
 (observed)` — the mislabel is a known tooling limit (below).
 
-Not confirmable today: every `*->gemini` cell, for every gateway —
-Gemini returned 429/503 and the gateway returned 504
+Not confirmable in this run: every `*->gemini` cell, for every
+gateway — Gemini returned 429/503 and the gateway returned 504
 (quota/overload); a retry 20 minutes later still got 429. Every
-`free-claude-code` cell — the gateway answered HTTP 400 on turn 1
-in live mode and made no upstream call (in the 13b run it answered
-503, likewise with no upstream call). Those cells keep their mock
-values; no conclusion about free-claude-code is drawn from them.
+`free-claude-code` cell answered HTTP 400 on turn 1 in live mode
+and made no upstream call (in the 13b run it answered 503,
+likewise with no upstream call) — the Task 13f re-check below
+traced the 400 to our adapter's client model ref, and after the
+fix those cells produced the live values now in the table.
 
 Passback evidence: `passback-tokens.ts` on the `babelgate-preset`
 `thinking-after-tool:anthropic->openai` spy log, two runs, provider
 Wafer — `prompt_tokens` none 349 / `reasoning_content` 359 /
 `reasoning` 359. The new live model uses the sent-back reasoning.
 
-Known tooling limits (recorded here, not fixed in this PR):
+Known tooling limits (recorded here; all three fixed in v1.6 Task
+13f — kept for the record):
 
 - **Spy-log timing race.** `scripts/research/conformance-spy.ts`
   writes an exchange's log line when the upstream response ends
@@ -309,9 +324,87 @@ Known tooling limits (recorded here, not fixed in this PR):
   body carried non-empty `reasoning_content`; two reruns passed.
   Every live-confirmed failure listed above was checked against its
   spy log — the turn-2 assistant message has no reasoning field
-  there, so those confirmations stand.
+  there, so those confirmations stand. *Fixed in 13f:* the spy
+  counts in-flight exchanges and answers `GET /__inflight`; live
+  turns drain it (50 ms polls, 10 s cap) before re-reading the log,
+  and a drain timeout records the turn INCONCLUSIVE, never a
+  failure.
 - **Verdict mislabel.** `conformance-verdict.ts` prints
   `PASS (live)` for a verdict file whose result is `differs`.
+  *Fixed in 13f:* the verdict file is read before the vitest exit
+  code — `differs` prints `DIFFERS (observed) — <reason>`, `not
+  supported` prints `NOT SUPPORTED`, an `inconclusive` verdict
+  prints INCONCLUSIVE with its recorded cause.
+- **free-claude-code made no upstream call.** Every FCC live cell
+  answered 400 (13d; 503 in 13b) on turn 1 with an empty spy log,
+  and the adapter kept no gateway output to diagnose it. *Fixed in
+  13f:* the cause was the adapter's client model ref — FCC routes
+  `provider/model` on the request's own model field, and a bare
+  `deepseek/deepseek-v4.1-flash` matched its built-in `deepseek`
+  provider (api.deepseek.com, no key), never the configured custom
+  provider. The client ref now carries the `custom_<id>` prefix,
+  `model_ids` keeps the bare upstream id, and FCC stdout/stderr tee
+  to `tmp/conformance/live/<gateway>-<scenario>.gateway.log` in live
+  mode (spy-style key redaction, never bodies).
+
+### Task 13f re-check (2026-11-24)
+
+Step 5 of Task 13f, run live on this PR's branch on 2026-11-24 —
+one run per cell on OpenRouter `deepseek/deepseek-v4.1-flash`, the
+verdict taken from each cell's verdict file. Step 5's cell list:
+the `babelgate-default` and `ccr` cells the 13d table records as
+`fail (live-confirmed)` or `differs`, and every `free-claude-code`
+OpenRouter cell. The FCC gateway logs were read — HTTP 200 on
+every request, no keys, no bodies; the spy shows 2xx upstream
+exchanges with reasoning in the response for every FCC cell, and
+every client status is 200.
+
+- `babelgate-default` — identical to the 13d table:
+  `thinking-after-tool:{anthropic,responses}->openai` stay `fail
+  (live-confirmed)` (the turn-2 upstream request carries no
+  reasoning field per
+  https://openrouter.ai/docs/use-cases/reasoning-tokens) and
+  `multi-turn-reasoning:{anthropic,responses}->openai` stay
+  `differs (observed)` (the turn-2 upstream request dropped the
+  reasoning block). Only the label is new: the fixed verdict tool
+  prints `DIFFERS (observed)` for these cells.
+- `ccr` — identical to the 13d table:
+  `multi-turn-reasoning:{anthropic,responses}->openai` stay `fail
+  (live-confirmed)` (the turn-1 upstream response carried
+  reasoning, the client stream has no reasoning block per
+  https://platform.claude.com/docs/en/build-with-claude/extended-thinking
+  and https://platform.openai.com/docs/guides/reasoning) and
+  `thinking-after-tool:{anthropic,responses}->openai` stay `fail
+  (live-confirmed)` (the turn-2 upstream request carries no
+  reasoning field).
+- `free-claude-code` — all five OpenRouter cells resolved from
+  `inconclusive (gateway 400 on turn 1, no upstream call)`; the
+  table above carries the new values:
+  - `multi-turn-reasoning:anthropic->openai` — `fail
+    (live-confirmed)`: the turn-1 upstream response carried
+    reasoning and the client stream has no reasoning block (rule:
+    https://platform.claude.com/docs/en/build-with-claude/extended-thinking).
+  - `multi-turn-reasoning:responses->openai` — `differs
+    (observed)`: the turn-2 upstream request dropped the reasoning
+    block.
+  - `streamed-tool-args:responses->openai`,
+    `thinking-after-tool:{anthropic,responses}->openai` — `pass
+    (live)`.
+  FCC now reaches the upstream because of this PR's adapter fix —
+  the client model ref carries `FCC_PROVIDER_ID`, so a bare
+  `deepseek/<model>` no longer routes to FCC's built-in `deepseek`
+  provider. The earlier 400/503 were our adapter config, not a
+  free-claude-code bug.
+
+These `free-claude-code` results are new versus the 13b draft and
+the 13d table and are subject to the owner's D9 decision before
+anything public is said about free-claude-code; they are reported
+as observed on this run, and no gateway-vs-gateway conclusion is
+drawn from them.
+
+Not re-run (outside the task's Step 5 cell list): the three
+re-checked gateways' `*->gemini` rows and free-claude-code's
+`not supported` rows — they keep their 13d values.
 
 ## Not supported
 

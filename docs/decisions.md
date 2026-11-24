@@ -9874,3 +9874,52 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   settings change.
 - **Files outside the Files block:** none — every file named above is in
   the task's Files block.
+## v1.6 Task 13f — conformance tooling: spy-log race, `differs` verdict label, free-claude-code live output (spec §3.10, D9)
+
+- **`scripts/research/conformance-spy.ts`:** counts in-flight
+  exchanges (incremented when a request arrives, released after its
+  log line lands — on every path: upstream end, upstream error,
+  mid-body abort, forward error; a client that vanishes mid-upload
+  releases its slot without a line). `GET /__inflight` answers
+  `{"inflight": <n>}`.
+- **`tests/process/conformance.process.test.ts`, live mode only:**
+  `spyIdle` polls `/__inflight` every 50 ms up to 10 s before a turn
+  re-reads the spy log — the old "the spy writes before forwarding"
+  comment was wrong (the line lands on upstream `end`, which can lag
+  the client stream). A drain timeout records the cell
+  `inconclusive` and writes an `inconclusive` verdict — never a
+  failure. `writeLiveVerdict` now also writes `not supported`
+  verdicts for skipped pairs so a vitest pass on a skipped scenario
+  cannot print `PASS (live)`. `liveModel` gives free-claude-code the
+  `FCC_PROVIDER_ID/<model>` client ref (below). Mock mode unchanged.
+- **`scripts/research/conformance-verdict.ts`:** the verdict file is
+  read before the vitest exit code — `differs` → `DIFFERS (observed)
+  — <reason>`, `not supported` → `NOT SUPPORTED`, `inconclusive` →
+  INCONCLUSIVE with its recorded cause, `pass` or no file →
+  `PASS (live)`. The CONFIRMED/INCONCLUSIVE rules for a non-zero
+  exit are unchanged.
+- **`tests/process/gateways/free-claude-code.ts`:** the 13d/13b
+  no-upstream-call 400/503 root cause was the adapter's client model
+  ref — FCC routes `provider/model` on the request's own model field
+  and its provider catalog includes a built-in `deepseek`, so a bare
+  `deepseek/deepseek-v4.1-flash` never reached the custom provider.
+  `FCC_PROVIDER_ID` is exported; `fccModelRef` prefixes the client
+  ref, `fccUpstreamModelId` strips it for `model_ids` (the upstream
+  still sees the bare model id). Live mode only
+  (`CONFORMANCE_LIVE_UPSTREAM` set): stdout/stderr tee to the spy
+  log's path with `.jsonl` → `.gateway.log`
+  (`tmp/conformance/live/<gateway>-<scenario>.gateway.log`),
+  line-buffered through `redactGatewayOutput` — the spy's query-name
+  and key-header redaction, never bodies.
+- **Step 5 (live re-run on `deepseek/deepseek-v4.1-flash`):** run
+  by the conductor on this branch 2026-11-24 — `babelgate-default`
+  and `ccr` cells identical to the 13d table; free-claude-code
+  reached the upstream after this PR's adapter fix (its earlier
+  400/503 were our client model ref, not an FCC bug) and its five
+  OpenRouter cells produced the live values now in the report.
+  The FCC results are new versus the 13b draft and the 13d table
+  and are subject to the owner's D9 decision before anything public
+  is said about free-claude-code.
+- **Files outside the Files block:** none — every file named above
+  is in the task's Files block.
+

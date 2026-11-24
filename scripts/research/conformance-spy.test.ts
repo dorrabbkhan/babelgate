@@ -1,9 +1,14 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Offline test for scripts/research/conformance-spy.ts — the forward
@@ -38,6 +43,9 @@ interface RunningTarget {
   requests: TargetRequest[];
   /** Set per test — what the stub replies. */
   reply: { status: number; headers: Record<string, string>; body: string };
+  /** Set when the target was started with `hold` — resolve to let
+   * the held response end. */
+  release?(): void;
   close(): void;
 }
 
@@ -51,8 +59,17 @@ function listen(server: Server): Promise<number> {
   });
 }
 
-async function startTarget(): Promise<RunningTarget> {
+async function startTarget(
+  opts: { hold?: boolean } = {},
+): Promise<RunningTarget> {
   const requests: TargetRequest[] = [];
+  let release: (() => void) | undefined;
+  const gate =
+    opts.hold === true
+      ? new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      : undefined;
   const running: RunningTarget = {
     port: 0,
     requests,
@@ -61,6 +78,7 @@ async function startTarget(): Promise<RunningTarget> {
       headers: { "content-type": "application/json" },
       body: "{}",
     },
+    release,
     close: () => {},
   };
   const server = createServer((req, res) => {
@@ -73,7 +91,11 @@ async function startTarget(): Promise<RunningTarget> {
         body: Buffer.concat(chunks).toString("utf8"),
       });
       res.writeHead(running.reply.status, running.reply.headers);
-      res.end(running.reply.body);
+      if (gate !== undefined) {
+        void gate.then(() => res.end(running.reply.body));
+      } else {
+        res.end(running.reply.body);
+      }
     });
   });
   running.port = await listen(server);
@@ -249,6 +271,92 @@ describe("conformance-live spy (v1.6 Task 13b fix round 3)", () => {
       // A shape-only summary — never the response text.
       const logText = readFileSync(running.logPath, "utf8");
       expect(logText).not.toContain("thinking hard");
+    },
+    30_000,
+  );
+
+  it(
+    "spy reports in-flight exchanges until the log line is written",
+    async () => {
+      target = await startTarget({ hold: true });
+      const running = await startSpy({
+        target: `http://127.0.0.1:${target.port}`,
+        keyHeader: "authorization",
+      });
+      const inflight = async (): Promise<number> => {
+        const res = await fetch(
+          `http://127.0.0.1:${running.port}/__inflight`,
+        );
+        return (
+          ((await res.json()) as { inflight?: number }).inflight ?? -1
+        );
+      };
+      expect(await inflight()).toBe(0);
+      const pending = fetch(
+        `http://127.0.0.1:${running.port}/v1/chat/completions`,
+        { method: "POST", body: "{}" },
+      );
+      // The target holds its response open — the exchange stays in
+      // flight and no log line exists yet.
+      await vi.waitFor(
+        async () => expect(await inflight()).toBe(1),
+        { interval: 25, timeout: 5_000 },
+      );
+      expect(existsSync(running.logPath)).toBe(false);
+      target.release!();
+      const res = await pending;
+      expect(res.status).toBe(200);
+      await res.text();
+      // Back to 0 once the exchange's line is on disk.
+      expect(await inflight()).toBe(0);
+      expect(spyLog(running.logPath)).toHaveLength(1);
+    },
+    30_000,
+  );
+
+  it(
+    "spy in-flight returns to 0 when the upstream errors",
+    async () => {
+      // The target accepts then destroys the socket mid-response:
+      // the spy records the aborted exchange and frees the slot.
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (c: Buffer) => chunks.push(c));
+        req.on("end", () => {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.socket?.destroy();
+        });
+      });
+      const port = await listen(server);
+      target = {
+        port,
+        requests: [],
+        reply: { status: 200, headers: {}, body: "" },
+        close: () => server.close(),
+      };
+      const running = await startSpy({
+        target: `http://127.0.0.1:${port}`,
+        keyHeader: "authorization",
+      });
+      const res = await fetch(
+        `http://127.0.0.1:${running.port}/v1/chat/completions`,
+        { method: "POST", body: "{}" },
+      );
+      await res.arrayBuffer().catch(() => {});
+      await vi.waitFor(
+        async () => {
+          const r = await fetch(
+            `http://127.0.0.1:${running.port}/__inflight`,
+          );
+          expect(
+            ((await r.json()) as { inflight?: number }).inflight,
+          ).toBe(0);
+        },
+        { interval: 25, timeout: 5_000 },
+      );
+      const entries = spyLog(running.logPath);
+      expect(entries).toHaveLength(1);
+      expect(entries[0].error).toBeDefined();
     },
     30_000,
   );
