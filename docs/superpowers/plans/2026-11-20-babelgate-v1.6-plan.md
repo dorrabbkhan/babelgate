@@ -62,6 +62,8 @@ docs/recipes/{cursor,continue,aider,open-webui}.md                              
 docs/recipes/{langchain,llamaindex,vercel-ai-sdk,ollama-apps}.md, examples/sdk/*         (T12)
 scripts/research/competitor-check.sh, competitor-repos.txt                               NEW (T13)
 tests/process/gateways/{ccr,free-claude-code}.ts, tests/process/scenarios/*.ts, tests/process/replays/*, scripts/research/conformance-run.sh   NEW (T13b)
+tests/process/scenarios/{thinking-after-tool,multi-turn-reasoning,inputs.test}.ts, scripts/research/passback-tokens.ts   (T13d)
+scripts/conductor/{judge-checks.ts,judge.test.ts,app-env.sh,session-env.sh}, .claude/settings.json   (T13e)
 ui/src/screens/{Routing,Usage,Requests}.tsx                                              breaker, cache, free label (T14)
 README.md, docs/launch/v1.6-launch.md, docs/launch/listings.md, docs/support.md, .github/FUNDING.yml (patch), scripts/demo/*.tape   (T15)
 site/index.html, site/style.css, scripts/site/build-site.ts, docs/conductor/patches/v1.6-task16-pages.patch   NEW (T16)
@@ -91,8 +93,10 @@ CHANGELOG.md, package.json version                                              
 | 13 | Competitor-check script | — | | Sonnet | Script |
 | 13b | Competitor conformance run | 4 | OWNER REVIEW (claims about other projects) | Opus | Judges evidence that becomes public claims |
 | 13c | OpenRouter and DeepSeek presets pass reasoning back | 13b | | Sonnet | Preset data plus one merge rule; conductor runs the live check |
+| 13d | Conformance: live model keeps prior reasoning; Responses scenarios send real user items | 13c | | Sonnet | Test inputs and one script default; conductor runs the live re-run |
+| 13e | Conductor tooling: judge.sh "tests beside each"; PATH guard for hook and scripts | — | | Sonnet | Conductor scripts with seeded tests |
 | 14 | UI: breaker state, cache hits, free-tier label | 7, 9, 10 | | Sonnet | UI over existing data |
-| 15 | Launch readiness: README, post, listings, hygiene, Sponsors/support, demo | 6, 8, 11, 12, 13b, 13c | OWNER REVIEW | Sonnet | Copy; owner reviews |
+| 15 | Launch readiness: README, post, listings, hygiene, Sponsors/support, demo | 6, 8, 11, 12, 13b, 13c, 13d | OWNER REVIEW | Sonnet | Copy; owner reviews |
 | 16 | Landing page + Pages patch | 15 | OWNER REVIEW | Sonnet | Static page from approved mockup |
 | 17 | Live cases; gates E and F | 2, 6, 8, 14 | OWNER REVIEW | Opus | Judges release evidence |
 | 18 | CHANGELOG, `1.6.0`; gate G | 5, 6, 16, 17 | OWNER GATE | Sonnet | Release chore |
@@ -397,6 +401,50 @@ Found by Task 13b's live run (2026-11-24, owner decision: fix before launch copy
 - [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `npm run build && npm run test:process` and `./scripts/check.sh` → PASS.
 - [ ] **Step 5 (live, conductor runs):** `conformance-live.sh babelgate-preset thinking-after-tool:{anthropic,responses}->openai` → PASS. Then two otherwise identical turn-2 requests to OpenRouter, one with and one without `reasoning_content`: `usage.prompt_tokens` must be higher with the field (evidence that OpenRouter uses it, not only accepts it). For DeepSeek, `babelgate --provider deepseek` with the Claude Code and Codex edit tasks re-run once each (no regression from Task 8a). Results go in decisions.md and the PR body. If OpenRouter shows no token difference → STOP: the field name is then the open question, and the owner decides.
 - **Commit** `feat(presets): OpenRouter and DeepSeek pass reasoning back`.
+
+### Task 13d: Conformance: live model keeps prior reasoning; Responses scenarios send real user items
+
+Found by the conductor in Task 13c's live step (2026-11-24, PR #183). Spec §3.10, D9.
+
+**Evidence.**
+1. On the live conformance model `deepseek/deepseek-r1-0528`, OpenRouter's `usage.prompt_tokens` for the same turn-2 request was 135 with no reasoning field, 135 with `reasoning_content` and 135 with `reasoning`. On `deepseek/deepseek-v4.1-flash` it was 361 / 411 / 411, on `moonshotai/kimi-k3` 268 / 318 / 318, and on `z-ai/glm-5.3` 192 / 241 / 241. R1's chat template drops earlier-turn reasoning, so with R1 a reasoning cell can pass while the model never sees what was sent back.
+2. The Responses client turns send user text as bare strings inside the `input` array: `tests/process/scenarios/thinking-after-tool.ts` (`responsesTurn2`, first item) and `tests/process/scenarios/multi-turn-reasoning.ts` (`responsesTurn`, every question). The Responses API's array items are objects, so babelgate drops each string with a `field_dropped` note (`src/transformers/adapters/responses.items.ts`). The upstream request therefore has no user question after turn 1. That is the scenario's bug, not babelgate's: the decoder behaviour stays as it is.
+
+**Files:**
+- Modify: `scripts/research/conformance-live.sh` (OpenRouter default model), `tests/process/scenarios/thinking-after-tool.ts`, `tests/process/scenarios/multi-turn-reasoning.ts`, `docs/research/2026-11-24-conformance-run.md`, `docs/research/2026-11-24-conformance-run.shapes.md`, `docs/decisions.md`
+- Create: `tests/process/scenarios/inputs.test.ts` (the item-shape test), `scripts/research/passback-tokens.ts` (the with/without `prompt_tokens` check as a script), `scripts/research/passback-tokens.test.ts`
+
+**Changes:**
+- `conformance-live.sh`: the OpenRouter default model becomes `deepseek/deepseek-v4.1-flash` (keeps prior-turn reasoning, evidence above). `CONFORMANCE_LIVE_MODEL_OPENAI` still overrides it. The report names the model per run.
+- Scenarios: every Responses user turn is `{role: "user", content: "<text>"}`. No other change to turns, pass rules or replays. Pre-approved here: these two scenario files change their request inputs only; no assertion is removed or weakened (D6 applies to nothing else).
+- `passback-tokens.ts <spy-log.jsonl>`: takes turn 2's upstream body from a conformance-live spy log, sends it to OpenRouter non-streaming with `max_tokens: 16` three times (no reasoning field / `reasoning_content` / `reasoning`), and prints `status`, upstream provider and `usage.prompt_tokens` per variant. It never prints bodies, completions or keys. Key from `OPENROUTER_API_KEY`. Network script, not part of `npm test`.
+
+- [ ] **Step 1: Tests.** `"responses scenario turns send user text as message items"` (every `input` item built by both scenarios' Responses turns is an object; asserts `{role: "user", content: "What is the weather in Paris?"}` exactly for the first item), `"passback-tokens prints shapes only"` (offline, against a local stub: output lines carry no body text and no key).
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `npm run build && npm run test:process` (babelgate only, all cells pass) and `./scripts/check.sh` → PASS.
+- [ ] **Step 5 (live, conductor runs):** re-run `conformance-live.sh` for every Responses cell (`*:responses->openai`, `*:responses->gemini`) and every `thinking-after-tool` / `multi-turn-reasoning` cell, for `babelgate`, `babelgate-default`, `babelgate-preset`, `ccr` and `free-claude-code`, on the new model. Then `passback-tokens.ts` on the `babelgate-preset thinking-after-tool:anthropic->openai` spy log: `prompt_tokens` must be higher with `reasoning_content` than without. If not → STOP. The conductor hands the results to a fix session that updates both research docs (which cells changed, old and new model, date). A competitor result that changes from the 13b draft is called out in the PR body for the owner (D9).
+- **Commit** `test(conformance): live model keeps prior reasoning; Responses user items`.
+
+### Task 13e: Conductor tooling: judge.sh "tests beside each"; PATH guard for hook and scripts
+
+Found in Task 13c's run (2026-11-24). Conductor tooling only; no product code.
+
+**Evidence.**
+1. `judge.sh 183 v1.6 13c` flagged `src/config/env-config.test.ts` as outside the Files block, although Task 13c's block says "tests beside each" and lists `src/config/env-config.ts`. This was a false positive.
+2. A stale AppImage mount (`/tmp/.mount_t3_*`, `ENOTCONN`) was on the session's PATH. `env` stops at the first PATH entry it can't stat with an error other than ENOENT, so every `#!/usr/bin/env bash` script failed with `env: unknown error: execvp failed`. That includes the SessionStart hook, which is why `CONDUCTOR_ACTOR` was unset, and `as-app.sh`, `app-token.sh`, the `gh` wrapper and `devin.sh`.
+
+**Files:**
+- Modify: `scripts/conductor/judge-checks.ts`, `scripts/conductor/judge.test.ts`, `scripts/conductor/fixtures/*` (new seeded cases only), `scripts/conductor/app-env.sh`, `scripts/conductor/session-env.sh`, `.claude/settings.json` (the hook command only), `docs/decisions.md`
+
+**Changes:**
+- `filesBlockPatterns`: when a task's Files block contains the phrase "tests beside each" (case-insensitive), every listed `X.ts` also allows `X.test.ts` in the same directory. Nothing else is widened.
+- `app-env.sh`: drop PATH entries that exist but can't be listed (`ls "$d" >/dev/null 2>&1` fails), before it prepends `bin/`. Entries that don't exist are left alone.
+- `session-env.sh`: write the same filtered PATH to `$CLAUDE_ENV_FILE`, so the session's own commands use it too.
+- `.claude/settings.json`: the hook command becomes `bash "$CLAUDE_PROJECT_DIR"/scripts/conductor/session-env.sh`, so it runs even when PATH lookup through `env` fails. No other settings change.
+
+- [ ] **Step 1: Tests.** `"tests beside each allows the sibling test file"` (`src/config/env-config.test.ts` passes for a block listing `src/config/env-config.ts` with that phrase), `"without the phrase the sibling test is still flagged"`, `"a test beside an unlisted file is still flagged"`. For the PATH guard, a shell test with a directory whose read permission is removed (`chmod 000`) standing in for the dead mount: after sourcing `app-env.sh`, `env bash -c true` succeeds and the bad entry is gone from PATH.
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `npx vitest run scripts/conductor` and `./scripts/check.sh` → PASS.
+- [ ] **Step 5 (conductor):** re-run `judge.sh 183 v1.6 13c` and confirm the `files-block` FLAG is gone. Open a new session, check that `printenv CONDUCTOR_ACTOR` prints the bot, and check that `scripts/conductor/as-app.sh gh api user` works without the manual PATH strip.
+- **Commit** `fix(conductor): judge.sh tests-beside-each; PATH guard`.
 
 ### Task 14: UI: breaker state, cache hits, free-tier label
 
