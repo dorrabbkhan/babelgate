@@ -294,7 +294,8 @@ Passback evidence: `passback-tokens.ts` on the `babelgate-preset`
 Wafer — `prompt_tokens` none 349 / `reasoning_content` 359 /
 `reasoning` 359. The new live model uses the sent-back reasoning.
 
-Known tooling limits (recorded here, not fixed in this PR):
+Known tooling limits (recorded here; all three fixed in v1.6 Task
+13f — kept for the record):
 
 - **Spy-log timing race.** `scripts/research/conformance-spy.ts`
   writes an exchange's log line when the upstream response ends
@@ -309,9 +310,28 @@ Known tooling limits (recorded here, not fixed in this PR):
   body carried non-empty `reasoning_content`; two reruns passed.
   Every live-confirmed failure listed above was checked against its
   spy log — the turn-2 assistant message has no reasoning field
-  there, so those confirmations stand.
+  there, so those confirmations stand. *Fixed in 13f:* the spy
+  counts in-flight exchanges and answers `GET /__inflight`; live
+  turns drain it (50 ms polls, 10 s cap) before re-reading the log,
+  and a drain timeout records the turn INCONCLUSIVE, never a
+  failure.
 - **Verdict mislabel.** `conformance-verdict.ts` prints
   `PASS (live)` for a verdict file whose result is `differs`.
+  *Fixed in 13f:* the verdict file is read before the vitest exit
+  code — `differs` prints `DIFFERS (observed) — <reason>`, `not
+  supported` prints `NOT SUPPORTED`, an `inconclusive` verdict
+  prints INCONCLUSIVE with its recorded cause.
+- **free-claude-code made no upstream call.** Every FCC live cell
+  answered 400 (13d; 503 in 13b) on turn 1 with an empty spy log,
+  and the adapter kept no gateway output to diagnose it. *Fixed in
+  13f:* the cause was the adapter's client model ref — FCC routes
+  `provider/model` on the request's own model field, and a bare
+  `deepseek/deepseek-v4.1-flash` matched its built-in `deepseek`
+  provider (api.deepseek.com, no key), never the configured custom
+  provider. The client ref now carries the `custom_<id>` prefix,
+  `model_ids` keeps the bare upstream id, and FCC stdout/stderr tee
+  to `tmp/conformance/live/<gateway>-<scenario>.gateway.log` in live
+  mode (spy-style key redaction, never bodies).
 
 ## Not supported
 

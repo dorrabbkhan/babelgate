@@ -1,6 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  type WriteStream,
+} from "node:fs";
+import { dirname, join } from "node:path";
 import type { GatewayUnderTest, RunningGateway } from "../harness";
 import { waitHealthy } from "../harness";
 import { stopChild } from "./babelgate";
@@ -30,7 +35,47 @@ export const FCC_DIR =
 export const FCC_REPO_URL =
   "https://github.com/Alishahryar1/free-claude-code";
 
-const PROVIDER_ID = "custom_0123456789abcdef0123456789abcdef";
+/**
+ * The custom provider id FCC_CUSTOM_PROVIDERS declares — FCC routes
+ * `provider/model` on the request's own model field, and its
+ * provider_ids include the whole built-in catalog: a bare OpenRouter
+ * `vendor/model` (`deepseek/deepseek-v4.1-flash`) collides with the
+ * built-in `deepseek` provider and goes to api.deepseek.com with no
+ * key — the no-upstream-call 400/503 every FCC live cell hit in
+ * 13d/13b (Task 13f). The client-facing model therefore carries this
+ * prefix.
+ */
+export const FCC_PROVIDER_ID = "custom_0123456789abcdef0123456789abcdef";
+
+/**
+ * The client-facing model ref — `<provider_id>/<model>`. Already-
+ * prefixed refs pass through (live models arrive prefixed from
+ * liveModel).
+ */
+export function fccModelRef(model: string): string {
+  const prefix = `${FCC_PROVIDER_ID}/`;
+  return model.startsWith(prefix) ? model : `${prefix}${model}`;
+}
+
+/** The model id the upstream sees — the ref minus the provider prefix. */
+export function fccUpstreamModelId(ref: string): string {
+  const prefix = `${FCC_PROVIDER_ID}/`;
+  return ref.startsWith(prefix) ? ref.slice(prefix.length) : ref;
+}
+
+/**
+ * Spy-style redaction for the live gateway log (Task 13f): a
+ * `name=value` or `name: value` credential — the spy's query names
+ * (key, api_key, access_token) plus the key headers it redacts —
+ * lands as `<redacted>`. Only what FCC prints is logged, never
+ * request or response bodies.
+ */
+export function redactGatewayOutput(text: string): string {
+  return text.replace(
+    /(?<![\w-])(x-goog-api-key|x-api-key|api[_-]?key|access[_-]?token|authorization|key)("?\s*[:=]\s*"?(?:Bearer\s+)?)[^&\s"',}]*/gi,
+    "$1$2<redacted>",
+  );
+}
 
 function fccBin(dir = FCC_DIR): string | undefined {
   for (const name of ["fcc-server", "fcc-server.exe"]) {
@@ -88,15 +133,34 @@ export function fccCustomProviders(
 ): string {
   return JSON.stringify([
     {
-      provider_id: PROVIDER_ID,
+      provider_id: FCC_PROVIDER_ID,
       display_name: "Mock",
       base_url: `${upstream}/v1`,
       api_format: "openai_chat",
       api_keys: ["mock-key"],
-      model_ids: [model],
+      // The upstream model id — the ref minus the provider prefix
+      // (live models arrive as `custom_<id>/<vendor>/<model>`).
+      model_ids: [fccUpstreamModelId(model)],
       reasoning_history_format: "reasoning_content",
     },
   ]);
+}
+
+/**
+ * Live mode only (CONFORMANCE_LIVE_UPSTREAM set): the file the
+ * gateway's stdout/stderr tee to — the spy log's path with `.jsonl`
+ * swapped for `.gateway.log` (conformance-live.sh names it
+ * `tmp/conformance/live/<gateway>-<scenario>.jsonl`).
+ */
+function gatewayLogPath(): string | undefined {
+  if (process.env.CONFORMANCE_LIVE_UPSTREAM === undefined) {
+    return undefined;
+  }
+  const spyLog = process.env.CONFORMANCE_LIVE_SPY_LOG;
+  if (spyLog === undefined) return undefined;
+  return spyLog.endsWith(".jsonl")
+    ? spyLog.replace(/\.jsonl$/, ".gateway.log")
+    : `${spyLog}.gateway.log`;
 }
 
 export const fccGateway: GatewayUnderTest = {
@@ -111,6 +175,18 @@ export const fccGateway: GatewayUnderTest = {
       );
     }
     mkdirSync(workDir, { recursive: true });
+    // Live mode only: tee stdout/stderr to the scenario's gateway
+    // log so a failing cell's cause is visible (Task 13f — the
+    // adapter kept output only on startup failure, so 13d's 400s
+    // were undiagnosable). Line-buffered so redactGatewayOutput sees
+    // whole `name=value` pairs.
+    let logStream: WriteStream | undefined;
+    const logPath = gatewayLogPath();
+    if (logPath !== undefined) {
+      mkdirSync(dirname(logPath), { recursive: true });
+      logStream = createWriteStream(logPath);
+    }
+    let pending = "";
     const child = spawn(bin, [], {
       cwd: workDir,
       env: {
@@ -122,19 +198,40 @@ export const fccGateway: GatewayUnderTest = {
         HOST: "127.0.0.1",
         PORT: String(port),
         FCC_CUSTOM_PROVIDERS: fccCustomProviders(upstream, models.openai),
-        MODEL: `${PROVIDER_ID}/${models.openai}`,
+        MODEL: fccModelRef(models.openai),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const stderr: Buffer[] = [];
-    child.stderr.on("data", (c: Buffer) => stderr.push(c));
-    child.stdout.on("data", (c: Buffer) => stderr.push(c));
+    const onOutput = (c: Buffer): void => {
+      stderr.push(c);
+      if (logStream === undefined) return;
+      pending += c.toString("utf8");
+      let nl = pending.indexOf("\n");
+      while (nl >= 0) {
+        logStream.write(redactGatewayOutput(pending.slice(0, nl + 1)));
+        pending = pending.slice(nl + 1);
+        nl = pending.indexOf("\n");
+      }
+    };
+    child.stderr.on("data", onOutput);
+    child.stdout.on("data", onOutput);
     const base = `http://127.0.0.1:${port}`;
     const running: RunningGateway = {
       anthropicBase: base,
       responsesBase: `${base}/v1`,
       openaiBase: `${base}/v1`,
-      stop: () => stopChild(child),
+      stop: async () => {
+        await stopChild(child);
+        if (logStream === undefined) return;
+        if (pending !== "") {
+          logStream.write(redactGatewayOutput(pending));
+          pending = "";
+        }
+        await new Promise<void>((resolve) =>
+          logStream.end(() => resolve()),
+        );
+      },
     };
     try {
       await waitHealthy(base, 30_000);
@@ -142,7 +239,9 @@ export const fccGateway: GatewayUnderTest = {
       await running.stop();
       throw new Error(
         `free-claude-code failed to start: ${String(err)}\n` +
-          `output: ${Buffer.concat(stderr).toString("utf8").slice(-4000)}`,
+          `output: ${redactGatewayOutput(
+            Buffer.concat(stderr).toString("utf8").slice(-4000),
+          )}`,
       );
     }
     return running;

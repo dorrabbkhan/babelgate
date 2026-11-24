@@ -1,4 +1,5 @@
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -6,6 +7,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -19,6 +21,7 @@ import {
   fccUnsupported,
   FCC_TAG,
   FCC_COMMIT,
+  FCC_PROVIDER_ID,
 } from "./gateways/free-claude-code";
 import { freePort, type RunningGateway } from "./harness";
 import {
@@ -156,8 +159,15 @@ interface Cell {
    * "fail" only when a doc-cited rule broke (D9); a broken rule with
    * no citing doc is "differs" — an observation, never a failure.
    * `babelgate` stays exact: any broken rule is a failure for it.
+   * "inconclusive" is live mode only (the spy could not be read —
+   * never a failure, never reaches the mock report).
    */
-  result: "pass" | "fail" | "differs" | "not supported";
+  result:
+    | "pass"
+    | "fail"
+    | "differs"
+    | "not supported"
+    | "inconclusive";
   reason?: string;
   /** The exact missing/extra field path for the one-line cell. */
   detail?: string;
@@ -285,6 +295,25 @@ const SPY_LOG = process.env.CONFORMANCE_LIVE_SPY_LOG;
  */
 const LIVE_VERDICT = process.env.CONFORMANCE_LIVE_VERDICT;
 
+/**
+ * Live mode only: write the scenario's own verdict for
+ * conformance-verdict.ts — before any assert, so a failing verdict
+ * still lands. `result` is the cell result ("not supported" and
+ * "inconclusive" included: a live run's label comes from this file
+ * first, not the vitest exit code).
+ */
+function writeLiveVerdict(
+  gateway: string,
+  scenario: string,
+  fields: Record<string, unknown>,
+): void {
+  if (LIVE_VERDICT === undefined) return;
+  writeFileSync(
+    LIVE_VERDICT,
+    JSON.stringify({ gateway, scenario, ...fields }) + "\n",
+  );
+}
+
 function liveModel(
   gateway: string,
   upstream: Scenario["upstream"],
@@ -295,7 +324,17 @@ function liveModel(
   if (model === undefined) return undefined;
   // babelgate routes by "<provider>/<model>"; the others forward the
   // bare upstream model name.
-  return gateway.startsWith("babelgate") ? `${upstream}/${model}` : model;
+  if (gateway.startsWith("babelgate")) return `${upstream}/${model}`;
+  // free-claude-code routes `provider/model` on the request's own
+  // model field; a bare OpenRouter `vendor/model` collides with its
+  // built-in provider ids (`deepseek/…` → api.deepseek.com, never
+  // the custom provider — the 13d/13b live cells' no-upstream-call
+  // 400/503, Task 13f). Its client model carries the custom
+  // provider prefix.
+  if (gateway === "free-claude-code") {
+    return `${FCC_PROVIDER_ID}/${model}`;
+  }
+  return model;
 }
 
 function modelsFor(
@@ -310,9 +349,14 @@ function modelsFor(
 }
 
 /** Append new spy-log entries to `requests` (live mode only). */
-function syncSpyLog(requests: RecordedRequest[]): number {
-  if (SPY_LOG === undefined || !existsSync(SPY_LOG)) return requests.length;
-  const lines = readFileSync(SPY_LOG, "utf8").split("\n").filter(Boolean);
+function syncSpyLog(
+  requests: RecordedRequest[],
+  logPath: string | undefined = SPY_LOG,
+): number {
+  if (logPath === undefined || !existsSync(logPath)) {
+    return requests.length;
+  }
+  const lines = readFileSync(logPath, "utf8").split("\n").filter(Boolean);
   for (const line of lines.slice(requests.length)) {
     const entry = JSON.parse(line) as RecordedRequest;
     requests.push(entry);
@@ -320,11 +364,51 @@ function syncSpyLog(requests: RecordedRequest[]): number {
   return requests.length;
 }
 
+/**
+ * Live mode only: poll the spy's /__inflight until no exchange is in
+ * flight (every 50 ms, at most 10 s). The spy writes a turn's log
+ * line when the upstream response ends — that can lag the client
+ * stream's end (Task 13f), so the log cannot be trusted until the
+ * spy drains. Returns false on timeout: the run cannot be judged —
+ * INCONCLUSIVE, never a failure.
+ */
+async function spyIdle(
+  spyBase: string,
+  timeoutMs = 10_000,
+  intervalMs = 50,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const res = await fetch(`${spyBase}/__inflight`, {
+        signal: AbortSignal.timeout(1_000),
+      });
+      if (res.ok) {
+        const body = (await res.json()) as { inflight?: number };
+        if (body.inflight === 0) return true;
+      }
+    } catch {
+      // the spy is not answering yet — keep polling to the deadline
+    }
+    if (Date.now() >= deadline) return false;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 async function runScenario(
   spec: GatewaySpec,
   gatewayName: string,
   scenario: Scenario,
-): Promise<{ verdict: ReturnType<Scenario["assert"]>; results: TurnResult[] }> {
+): Promise<{
+  verdict: ReturnType<Scenario["assert"]> | undefined;
+  results: TurnResult[];
+  /**
+   * Live mode only: why the run could not be judged (the spy still
+   * had an exchange in flight when the drain wait timed out) —
+   * INCONCLUSIVE, never a failure.
+   */
+  spyInconclusive?: string;
+}> {
   const live = LIVE_UPSTREAM !== undefined;
   const upstream = live
     ? {
@@ -359,11 +443,21 @@ async function runScenario(
         upstream.requests,
       );
       if (live) {
-        // the spy writes before forwarding, so every request for the
-        // turn is on disk once the client stream completed — re-slice
-        // against the refreshed log (sendTurn sliced a stale array).
-        // upstreamRequestFrom carries the spy's shape-only response
-        // summary into responseHadReasoning.
+        // The spy writes a turn's log line when the upstream response
+        // ends — it can lag the client stream's end (Task 13f; the
+        // old "the spy writes before forwarding" comment was wrong).
+        // Drain the spy's in-flight count before re-reading the log,
+        // then re-slice against the refreshed log (sendTurn sliced a
+        // stale array). upstreamRequestFrom carries the spy's
+        // shape-only response summary into responseHadReasoning.
+        if (!(await spyIdle(LIVE_UPSTREAM))) {
+          results.push(result);
+          return {
+            verdict: undefined,
+            results,
+            spyInconclusive: `turn ${i + 1}: spy still had an exchange in flight`,
+          };
+        }
         syncSpyLog(upstream.requests);
         result.upstream = upstream.requests
           .slice(prevCount)
@@ -398,6 +492,15 @@ describe("conformance (spec §3.10)", () => {
             reason: unsupported,
             live: "not supported",
           });
+          // conformance-verdict.ts labels a live run from this file
+          // first: without it a vitest pass on a skipped scenario
+          // would print PASS (live).
+          writeLiveVerdict(gatewayName, scenario.name, {
+            result: "not supported",
+            pass: true,
+            reason: unsupported,
+            clientStatuses: [],
+          });
           expect(unsupported).toContain("per ");
         });
         continue;
@@ -419,12 +522,32 @@ describe("conformance (spec §3.10)", () => {
               `(RECORD_OUT_DIR=tests/process/replays)`,
           );
         }
-        const { verdict, results } = await runScenario(
+        const { verdict, results, spyInconclusive } = await runScenario(
           spec,
           gatewayName,
           scenario,
         );
-        const result = cellResult(gatewayName, verdict);
+        if (spyInconclusive !== undefined) {
+          // The spy could not be drained — the run cannot be judged.
+          // INCONCLUSIVE, never a failure (Task 13f).
+          record({
+            gateway: gatewayName,
+            scenario: scenario.name,
+            client: scenario.client,
+            upstream: scenario.upstream,
+            result: "inconclusive",
+            reason: spyInconclusive,
+            live: "n/a",
+          });
+          writeLiveVerdict(gatewayName, scenario.name, {
+            result: "inconclusive",
+            pass: false,
+            reason: spyInconclusive,
+            clientStatuses: results.map((r) => r.status),
+          });
+          return;
+        }
+        const result = cellResult(gatewayName, verdict!);
         record({
           gateway: gatewayName,
           scenario: scenario.name,
@@ -437,24 +560,17 @@ describe("conformance (spec §3.10)", () => {
           evidence: verdict.evidence,
           live: result === "differs" ? "n/a" : "pending",
         });
-        if (LIVE_VERDICT !== undefined) {
-          // conformance-live.sh decides CONFIRMED vs INCONCLUSIVE
-          // from this: the client status per turn and the doc the
-          // broken rule cites — a transport failure can never
-          // confirm a wire-format finding.
-          writeFileSync(
-            LIVE_VERDICT,
-            JSON.stringify({
-              gateway: gatewayName,
-              scenario: scenario.name,
-              result,
-              pass: verdict.pass,
-              reason: verdict.reason,
-              ruleDoc: verdict.rule?.doc,
-              clientStatuses: results.map((r) => r.status),
-            }) + "\n",
-          );
-        }
+        // conformance-live.sh decides CONFIRMED vs INCONCLUSIVE
+        // from this: the client status per turn and the doc the
+        // broken rule cites — a transport failure can never
+        // confirm a wire-format finding.
+        writeLiveVerdict(gatewayName, scenario.name, {
+          result,
+          pass: verdict.pass,
+          reason: verdict.reason,
+          ruleDoc: verdict.rule?.doc,
+          clientStatuses: results.map((r) => r.status),
+        });
         expect(
           assertable(result, verdict.pass),
           verdict.reason
@@ -521,6 +637,122 @@ describe("mock upstream gemini route split", () => {
   });
 });
 
+/* ---- live-mode tooling (v1.6 Task 13f) ----
+ * Offline pins for the live-mode helpers: the spy's in-flight
+ * drain and the free-claude-code client model ref (a bare
+ * OpenRouter `vendor/model` routes to FCC's built-in provider, never
+ * the custom one). */
+
+/** Listen helper for the stub spy servers below. */
+function listen0(server: ReturnType<typeof createServer>): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      resolve(typeof addr === "object" && addr !== null ? addr.port : 0);
+    });
+  });
+}
+
+describe("live-mode tooling (v1.6 Task 13f)", () => {
+  it("live turn waits for the spy before reading upstream requests", async () => {
+    // A stub spy: the exchange's response ends at once but its log
+    // line lands 300 ms later — the race shape from Task 13d's live
+    // run. /__inflight drains only when the line hits disk.
+    mkdirSync(TMP, { recursive: true });
+    const logPath = join(TMP, "spy-wait.jsonl");
+    let inflight = 0;
+    const server = createServer((req, res) => {
+      if (req.url === "/__inflight") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ inflight }));
+        return;
+      }
+      inflight += 1;
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200).end("{}");
+        setTimeout(() => {
+          appendFileSync(
+            logPath,
+            JSON.stringify({
+              method: req.method,
+              url: req.url,
+              body: "{}",
+              upstreamStatus: 200,
+              response: { hasReasoning: true },
+            }) + "\n",
+          );
+          inflight -= 1;
+        }, 300);
+      });
+    });
+    const port = await listen0(server);
+    try {
+      const spyBase = `http://127.0.0.1:${port}`;
+      const requests: RecordedRequest[] = [];
+      const prevCount = syncSpyLog(requests, logPath);
+      const res = await fetch(`${spyBase}/v1/chat/completions`, {
+        method: "POST",
+        body: "{}",
+      });
+      await res.text();
+      // What runScenario does for a live turn: drain the spy, then
+      // re-read the log — the turn still sees its request.
+      expect(await spyIdle(spyBase)).toBe(true);
+      syncSpyLog(requests, logPath);
+      expect(requests.slice(prevCount)).toHaveLength(1);
+      expect(requests[0].response?.hasReasoning).toBe(true);
+    } finally {
+      server.close();
+      rmSync(logPath, { force: true });
+    }
+  });
+
+  it("a spy that never drains reports the turn inconclusive", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ inflight: 1 }));
+    });
+    const port = await listen0(server);
+    try {
+      expect(await spyIdle(`http://127.0.0.1:${port}`, 300)).toBe(
+        false,
+      );
+    } finally {
+      server.close();
+    }
+  });
+
+  it("free-claude-code live model carries the custom provider prefix", () => {
+    // FCC routes `provider/model` on the request's own model field;
+    // a bare OpenRouter `vendor/model` matches its built-in
+    // `deepseek` provider (api.deepseek.com, no key) — the 13d/13b
+    // live cells' no-upstream-call 400/503. The custom provider ref
+    // routes to the configured endpoint instead.
+    const prev = process.env.CONFORMANCE_LIVE_MODEL_OPENAI;
+    process.env.CONFORMANCE_LIVE_MODEL_OPENAI =
+      "deepseek/deepseek-v4.1-flash";
+    try {
+      expect(liveModel("free-claude-code", "openai")).toBe(
+        `${FCC_PROVIDER_ID}/deepseek/deepseek-v4.1-flash`,
+      );
+      expect(liveModel("ccr", "openai")).toBe(
+        "deepseek/deepseek-v4.1-flash",
+      );
+      expect(liveModel("babelgate", "openai")).toBe(
+        "openai/deepseek/deepseek-v4.1-flash",
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.CONFORMANCE_LIVE_MODEL_OPENAI;
+      } else {
+        process.env.CONFORMANCE_LIVE_MODEL_OPENAI = prev;
+      }
+    }
+  });
+});
+
 /* ---- report ---- */
 
 const RESULTS_PATH = process.env.CONFORMANCE_RESULTS;
@@ -535,6 +767,7 @@ function renderReport(): string {
       const cell = cells.find((c) => c.gateway === g && c.scenario === s);
       if (!cell) return "—";
       if (cell.result === "not supported") return `not supported`;
+      if (cell.result === "inconclusive") return "inconclusive (live)";
       if (cell.result === "pass") return "pass (mock)";
       if (cell.result === "differs") return "differs (observed)";
       if (cell.reason?.startsWith("replay ")) return "replay pending";
