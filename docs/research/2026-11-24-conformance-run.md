@@ -73,14 +73,14 @@ rule with no citing doc is an observation: it can produce
 
 | scenario | babelgate | babelgate-default | ccr | free-claude-code |
 | --- | --- | --- | --- | --- |
-| thinking-after-tool:anthropic->openai | pass (mock) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (mock-only, unconfirmed) |
-| thinking-after-tool:responses->openai | pass (mock) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | pass (mock) |
+| thinking-after-tool:anthropic->openai | pass (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (mock-only, unconfirmed) |
+| thinking-after-tool:responses->openai | pass (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | pass (mock) |
 | thinking-after-tool:anthropic->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
 | thinking-after-tool:responses->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
 | streamed-tool-args:anthropic->openai | pass (mock) | pass (mock) | pass (mock) | pass (mock) |
-| streamed-tool-args:responses->openai | pass (mock) | pass (mock) | pass (mock) | pass (mock) |
-| multi-turn-reasoning:anthropic->openai | pass (mock) | differs (observed) | fail (mock-only, unconfirmed) | fail (mock-only, unconfirmed) |
-| multi-turn-reasoning:responses->openai | pass (mock) | differs (observed) | fail (live-confirmed 2026-11-24) | differs (observed) |
+| streamed-tool-args:responses->openai | pass (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) | pass (mock) |
+| multi-turn-reasoning:anthropic->openai | pass (live-confirmed 2026-11-24) | differs (observed, live 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (mock-only, unconfirmed) |
+| multi-turn-reasoning:responses->openai | pass (live-confirmed 2026-11-24) | differs (observed, live 2026-11-24) | fail (live-confirmed 2026-11-24) | differs (observed) |
 | multi-turn-reasoning:anthropic->gemini | pass (mock) | pass (mock) | fail (mock-only, unconfirmed) | not supported |
 | multi-turn-reasoning:responses->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
 
@@ -176,6 +176,142 @@ that it was used.
 
 Everything else that fails on the mock stays "fail (mock-only,
 unconfirmed)".
+
+## Amendment — Task 13d (2026-11-24)
+
+Two defects found in this run's own method, fixed in this PR:
+
+- **Responses scenarios sent no user question after turn 1.** The
+  Responses turns carried user text as bare strings inside the
+  `input` array; the Responses API's array items are objects, so
+  babelgate's decoder dropped each with a `field_dropped` note and
+  the upstream request had no user message from turn 2 on (the
+  `messages` shapes in the shapes appendix show it: no leading
+  user-length-29 item). Every Responses user turn now sends
+  `{role: "user", content: "<text>"}`. The decoder behaviour is
+  unchanged; the bug was the scenario's.
+- **The live model hid whether sent-back reasoning is used.** The
+  OpenRouter default was `deepseek/deepseek-r1-0528`; a same-body
+  token probe (`usage.prompt_tokens` non-streaming, max_tokens 16)
+  counted 135 with no reasoning field, 135 with `reasoning_content`
+  and 135 with `reasoning` — R1's chat template drops earlier-turn
+  reasoning, so a reasoning cell could pass live while the model
+  never saw it. `deepseek/deepseek-v4.1-flash` counted 361/411/411
+  (and kimi-k3 268/318/318, glm-5.3 192/241/241), so it is the new
+  `conformance-live.sh` OpenRouter default;
+  `CONFORMANCE_LIVE_MODEL_OPENAI` still overrides.
+
+**Mock re-run (2026-11-24, with the scenario fix):** every cell's
+mock result is the same as in the 13b draft — the fix changed
+request shapes only, not any verdict. The re-captured
+`*:responses->*` request shapes are in the shapes appendix.
+
+**Live re-run (2026-11-24):** OpenRouter
+`deepseek/deepseek-v4.1-flash` (the earlier live run used
+`deepseek/deepseek-r1-0528`); Gemini `gemini-3.5-flash`. Live
+result per cell, taken from each verdict file's `result` field —
+`fail (live-confirmed)` is a `fail` on a doc-cited rule over
+all-2xx exchanges; any non-2xx or timeout is inconclusive:
+
+| gateway | cell | live result |
+| --- | --- | --- |
+| babelgate | multi-turn-reasoning:anthropic->gemini | inconclusive (upstream 503) |
+| babelgate | multi-turn-reasoning:anthropic->openai | pass |
+| babelgate | multi-turn-reasoning:responses->gemini | inconclusive (upstream 503) |
+| babelgate | multi-turn-reasoning:responses->openai | pass |
+| babelgate | streamed-tool-args:responses->openai | pass |
+| babelgate | thinking-after-tool:anthropic->gemini | inconclusive (upstream 503) |
+| babelgate | thinking-after-tool:anthropic->openai | pass |
+| babelgate | thinking-after-tool:responses->gemini | inconclusive (upstream 503) |
+| babelgate | thinking-after-tool:responses->openai | pass |
+| babelgate-default | multi-turn-reasoning:anthropic->gemini | inconclusive (gateway 504 on turn 1) |
+| babelgate-default | multi-turn-reasoning:anthropic->openai | differs (observed) |
+| babelgate-default | multi-turn-reasoning:responses->gemini | inconclusive (gateway 504 on turn 3) |
+| babelgate-default | multi-turn-reasoning:responses->openai | differs (observed) |
+| babelgate-default | streamed-tool-args:responses->openai | pass |
+| babelgate-default | thinking-after-tool:anthropic->gemini | inconclusive (upstream 429) |
+| babelgate-default | thinking-after-tool:anthropic->openai | fail (live-confirmed) |
+| babelgate-default | thinking-after-tool:responses->gemini | inconclusive (upstream 429) |
+| babelgate-default | thinking-after-tool:responses->openai | fail (live-confirmed) |
+| babelgate-preset | multi-turn-reasoning:anthropic->gemini | inconclusive (test timed out) |
+| babelgate-preset | multi-turn-reasoning:anthropic->openai | pass |
+| babelgate-preset | multi-turn-reasoning:responses->gemini | inconclusive (upstream 429) |
+| babelgate-preset | multi-turn-reasoning:responses->openai | pass |
+| babelgate-preset | streamed-tool-args:responses->openai | pass |
+| babelgate-preset | thinking-after-tool:anthropic->gemini | inconclusive (gateway 504 on turn 1, no upstream call) |
+| babelgate-preset | thinking-after-tool:anthropic->openai | pass |
+| babelgate-preset | thinking-after-tool:responses->gemini | inconclusive (upstream 429) |
+| babelgate-preset | thinking-after-tool:responses->openai | pass |
+| ccr | multi-turn-reasoning:anthropic->gemini | inconclusive (upstream 429) |
+| ccr | multi-turn-reasoning:anthropic->openai | fail (live-confirmed) |
+| ccr | multi-turn-reasoning:responses->gemini | inconclusive (upstream 429) |
+| ccr | multi-turn-reasoning:responses->openai | fail (live-confirmed) |
+| ccr | streamed-tool-args:responses->openai | pass |
+| ccr | thinking-after-tool:anthropic->gemini | inconclusive (upstream 429) |
+| ccr | thinking-after-tool:anthropic->openai | fail (live-confirmed) |
+| ccr | thinking-after-tool:responses->gemini | inconclusive (upstream 429) |
+| ccr | thinking-after-tool:responses->openai | fail (live-confirmed) |
+| free-claude-code | multi-turn-reasoning:anthropic->gemini | not supported |
+| free-claude-code | multi-turn-reasoning:anthropic->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+| free-claude-code | multi-turn-reasoning:responses->gemini | not supported |
+| free-claude-code | multi-turn-reasoning:responses->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+| free-claude-code | streamed-tool-args:responses->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+| free-claude-code | thinking-after-tool:anthropic->gemini | not supported |
+| free-claude-code | thinking-after-tool:anthropic->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+| free-claude-code | thinking-after-tool:responses->gemini | not supported |
+| free-claude-code | thinking-after-tool:responses->openai | inconclusive (gateway 400 on turn 1, no upstream call) |
+
+Changes from the 13b draft:
+
+- `ccr / multi-turn-reasoning:anthropic->openai`: was `fail
+  (mock-only, unconfirmed)`, now `fail (live-confirmed
+  2026-11-24)` — turn 1 upstream response carried reasoning, but
+  the client stream had no thinking block.
+- `ccr / streamed-tool-args:responses->openai`: pass, now confirmed
+  live.
+- Every `babelgate`/`babelgate-preset` (opt-in) OpenRouter cell
+  passes live on the new model — including the Responses cells,
+  which now send a user question every turn.
+- Still live-confirmed on the new model: `babelgate-default` and
+  `ccr` `thinking-after-tool:{anthropic,responses}->openai`, and
+  `ccr multi-turn-reasoning:responses->openai`.
+
+`conformance-live.sh` printed **PASS** for `babelgate-default`
+`multi-turn-reasoning:{anthropic,responses}->openai`, but the
+verdict files say `differs`; the cells are recorded as `differs
+(observed)` — the mislabel is a known tooling limit (below).
+
+Not confirmable today: every `*->gemini` cell, for every gateway —
+Gemini returned 429/503 and the gateway returned 504
+(quota/overload); a retry 20 minutes later still got 429. Every
+`free-claude-code` cell — the gateway answered HTTP 400 on turn 1
+in live mode and made no upstream call (in the 13b run it answered
+503, likewise with no upstream call). Those cells keep their mock
+values; no conclusion about free-claude-code is drawn from them.
+
+Passback evidence: `passback-tokens.ts` on the `babelgate-preset`
+`thinking-after-tool:anthropic->openai` spy log, two runs, provider
+Wafer — `prompt_tokens` none 349 / `reasoning_content` 359 /
+`reasoning` 359. The new live model uses the sent-back reasoning.
+
+Known tooling limits (recorded here, not fixed in this PR):
+
+- **Spy-log timing race.** `scripts/research/conformance-spy.ts`
+  writes an exchange's log line when the upstream response ends
+  (`up.on("end")`); `tests/process/conformance.process.test.ts`
+  re-reads the log when the client stream completes. If the gateway
+  finishes the client stream first, that turn gets no upstream
+  requests — the comment at `conformance.process.test.ts` (~line
+  363, "the spy writes before forwarding") does not match the code.
+  Observed once: `babelgate-preset
+  multi-turn-reasoning:responses->openai` reported "turn 2 upstream
+  request dropped the reasoning block" while the spy log's turn-2
+  body carried non-empty `reasoning_content`; two reruns passed.
+  Every live-confirmed failure listed above was checked against its
+  spy log — the turn-2 assistant message has no reasoning field
+  there, so those confirmations stand.
+- **Verdict mislabel.** `conformance-verdict.ts` prints
+  `PASS (live)` for a verdict file whose result is `differs`.
 
 ## Not supported
 
