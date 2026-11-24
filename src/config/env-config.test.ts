@@ -231,6 +231,23 @@ describe("Environment Configuration", () => {
     expect(config.registry.get("openai").gaps).toEqual(["json_schema"]);
   });
 
+  it("--provider openrouter-free entry has passback on", () => {
+    // v1.6 Task 13c: the env path (TARGET_PRESET, which --provider
+    // sets) takes the preset's reasoning_passback the same way it
+    // takes its gaps.
+    process.env.TARGET_API = "openai";
+    process.env.TARGET_PRESET = "openrouter-free";
+    process.env.OPENROUTER_API_KEY = "k";
+    unsetEnv("TARGET_API_KEY_ENV");
+    unsetEnv("OPENAI_API_KEY");
+
+    const config = loadConfig();
+
+    const entry = config.registry.get("openai");
+    expect(entry.preset).toBe("openrouter-free");
+    expect(entry.reasoningPassback).toBe(true);
+  });
+
   it("a keyless preset needs no api key", () => {
     process.env.TARGET_API = "anthropic";
     process.env.TARGET_PRESET = "ollama-anthropic";

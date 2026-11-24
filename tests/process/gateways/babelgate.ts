@@ -43,6 +43,39 @@ export function babelgateYaml(
   return lines.join("\n") + "\n";
 }
 
+/**
+ * v1.6 Task 13c's `babelgate-preset`: the `openai` provider is
+ * `preset: openrouter-free` with only `base_url` pointed at the mock
+ * — `type`, `api_key_env` (OPENROUTER_API_KEY, set to a mock value in
+ * the child env), `gaps` and `reasoning_passback` all come from the
+ * preset; no explicit `reasoning_passback` key. Every other provider
+ * is the stock entry, so the gemini scenarios still run.
+ */
+export function babelgatePresetYaml(upstream: string): string {
+  const lines = ["default: openai", "providers:"];
+  for (const provider of [
+    "openai",
+    "gemini",
+    "ollama",
+    "anthropic",
+    "responses",
+  ]) {
+    if (provider === "openai") {
+      lines.push(
+        `  ${provider}:`,
+        `    preset: openrouter-free`,
+        `    base_url: ${upstream}`,
+      );
+      continue;
+    }
+    lines.push(`  ${provider}:`, `    type: ${provider}`, `    base_url: ${upstream}`);
+    if (provider !== "ollama") {
+      lines.push(`    api_key_env: BABELGATE_MOCK_KEY`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
 /** The command under test: `$BABELGATE_BIN` when set, else `node dist/cli.js`. */
 export function gatewayCommand(): { cmd: string; args: string[] } {
   const bin = process.env.BABELGATE_BIN;
@@ -70,14 +103,19 @@ export function stopChild(child: ChildProcess): Promise<void> {
 
 function makeBabelgateGateway(
   name: string,
-  opts: { reasoningPassback?: boolean } = {},
+  opts: { reasoningPassback?: boolean; preset?: boolean } = {},
 ): GatewayUnderTest {
   return {
     name,
     async start({ upstream, port, workDir }): Promise<RunningGateway> {
       mkdirSync(workDir, { recursive: true });
       const configPath = join(workDir, "babelgate.yaml");
-      writeFileSync(configPath, babelgateYaml(upstream, opts));
+      writeFileSync(
+        configPath,
+        opts.preset === true
+          ? babelgatePresetYaml(upstream)
+          : babelgateYaml(upstream, opts),
+      );
 
       const { cmd, args } = gatewayCommand();
       const child = spawn(cmd, [...args, "--config", configPath], {
@@ -93,6 +131,11 @@ function makeBabelgateGateway(
           USERPROFILE: workDir,
           PORT: String(port),
           BABELGATE_MOCK_KEY: "mock-key",
+          // babelgate-preset: the openrouter-free preset's api_key_env —
+          // the mock ignores auth; live mode's spy injects the real key.
+          ...(opts.preset === true
+            ? { OPENROUTER_API_KEY: "mock-key" }
+            : {}),
           NODE_ENV: "production",
         },
         stdio: ["ignore", "pipe", "pipe"],
@@ -131,3 +174,10 @@ export const babelgateGateway: GatewayUnderTest = makeBabelgateGateway(
 /** The unchanged default config — measured like a competitor. */
 export const babelgateDefaultGateway: GatewayUnderTest =
   makeBabelgateGateway("babelgate-default");
+
+/**
+ * The `preset: openrouter-free` config — passback comes from the
+ * preset's data, not an explicit key (v1.6 Task 13c).
+ */
+export const babelgatePresetGateway: GatewayUnderTest =
+  makeBabelgateGateway("babelgate-preset", { preset: true });

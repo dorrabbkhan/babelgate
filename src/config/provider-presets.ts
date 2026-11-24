@@ -74,6 +74,13 @@ export interface ProviderPreset {
   };
   /** Provider cap below the client's default (§3.3, E11). */
   max_output_tokens?: number;
+  /**
+   * Send reasoning parts back as `reasoning_content` (v1.4 spec §3.3;
+   * v1.6 Task 13c): the preset names one provider, so it can declare
+   * what that provider accepts — plain entries keep the flag off
+   * because other Chat servers may reject the field.
+   */
+  reasoning_passback?: boolean;
   /** Provider documentation the values were verified against. */
   docs: string;
   /** Date of that verification (YYYY-MM-DD). */
@@ -102,6 +109,7 @@ export const providerPresetSchema: z.ZodType<ProviderPreset> =
       })
       .optional(),
     max_output_tokens: z.number().int().positive().optional(),
+    reasoning_passback: z.boolean().optional(),
     docs: z.string().min(1),
     verified: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   });
@@ -249,6 +257,11 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
       "claude-code": "nvidia/nemotron-3-ultra-550b-a55b:free",
       codex: "nvidia/nemotron-3-ultra-550b-a55b:free",
     },
+    // reasoning passback verified 2026-11-24 against
+    // https://openrouter.ai/docs/use-cases/reasoning-tokens:
+    // "you can also use `reasoning_content` as an alias - it
+    // functions identically to `reasoning`".
+    reasoning_passback: true,
     docs: "https://openrouter.ai/docs/quickstart",
     verified: "2026-11-22",
   },
@@ -374,6 +387,12 @@ export const PROVIDER_PRESETS: Record<PresetName, ProviderPreset> = {
       "claude-code": "deepseek-flash",
       codex: "deepseek-flash",
     },
+    // reasoning passback verified 2026-11-24 against
+    // https://api-docs.deepseek.com/guides/thinking_mode (the
+    // reasoning_model guide moved here): for requests carrying
+    // `tools`, `reasoning_content` "must be fully passed back" on
+    // every later turn or the API returns a 400.
+    reasoning_passback: true,
     docs: "https://api-docs.deepseek.com/quick_start/quick_start",
     verified: "2026-11-23",
   },
