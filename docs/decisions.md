@@ -9923,3 +9923,38 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
 - **Files outside the Files block:** none — every file named above
   is in the task's Files block.
 
+## v1.6 Task 13g — conformance: free-claude-code results repeated and diagnosed (spec §3.10, D9)
+
+- **`docs/research/2026-11-24-conformance-run.md`:** the conductor's
+  repeats on `deepseek/deepseek-v4.1-flash`, FCC pinned v6.15.0
+  (e8806fb608ac) — `multi-turn-reasoning:anthropic->openai` stays
+  `fail (live-confirmed)` 3 of 3: FCC does emit a `thinking` block
+  for upstream `reasoning_content` without any setting
+  (`output_enabled`, `core/reasoning.py:107-111`; chat transport at
+  `providers/openai_chat/transport.py:318-328`), but signs it only
+  from upstream-supplied signed/encrypted `reasoning_details` via
+  `StructuredReasoningStream`, gated on the profile flag
+  `structured_reasoning_details` (`transport.py:213-219`,
+  `reasoning_details.py:252-263`, `stream_output.py:448-453`) — a
+  flag no `FCC_CUSTOM_PROVIDERS` field can set
+  (`providers/custom.py:159-167`, `profiles.py:131`,
+  `config/custom_providers.py:33-47`), and DeepSeek sends no
+  signature. `multi-turn-reasoning:responses->openai` stays
+  `differs (observed)` 3 of 3: `reasoning_history_format:
+  "reasoning_content"` is honoured (the echoed reasoning item does
+  become `reasoning_content`,
+  `core/openai_responses/chat_request.py:301-339,572-580`), but
+  `prepare_history` runs at the profile's
+  `HistoryScope.TOOL_CONTINUATION` (`profiles.py:132`,
+  `behavior.py:68-69`), which keeps the field only inside the
+  tool-call turn window (`core/history_replay.py:466-496,619-623`),
+  and that scope is not configurable either. The three previously
+  passing cells passed again (2 of 2 including the 13f run).
+  **The cause for both cells is in free-claude-code itself** — the
+  adapter config is unchanged, no offline test was added and no
+  cell needs a rerun; whether the unsigned-thinking behaviour is a
+  reportable upstream bug is the owner's decision under D9 and no
+  issue was filed.
+- **Files outside the Files block:** none — only the two
+  Files-block files changed; `tests/process/gateways/free-claude-code.ts`
+  stayed untouched because no adapter setting covers either cause.
