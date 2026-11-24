@@ -90,8 +90,9 @@ CHANGELOG.md, package.json version                                              
 | 12 | Recipes + examples: LangChain, LlamaIndex, Vercel AI SDK, Ollama apps | 8 | | Sonnet | Copy plus CI-checked examples |
 | 13 | Competitor-check script | — | | Sonnet | Script |
 | 13b | Competitor conformance run | 4 | OWNER REVIEW (claims about other projects) | Opus | Judges evidence that becomes public claims |
+| 13c | OpenRouter and DeepSeek presets pass reasoning back | 13b | | Sonnet | Preset data plus one merge rule; conductor runs the live check |
 | 14 | UI: breaker state, cache hits, free-tier label | 7, 9, 10 | | Sonnet | UI over existing data |
-| 15 | Launch readiness: README, post, listings, hygiene, Sponsors/support, demo | 6, 8, 11, 12, 13b | OWNER REVIEW | Sonnet | Copy; owner reviews |
+| 15 | Launch readiness: README, post, listings, hygiene, Sponsors/support, demo | 6, 8, 11, 12, 13b, 13c | OWNER REVIEW | Sonnet | Copy; owner reviews |
 | 16 | Landing page + Pages patch | 15 | OWNER REVIEW | Sonnet | Static page from approved mockup |
 | 17 | Live cases; gates E and F | 2, 6, 8, 14 | OWNER REVIEW | Opus | Judges release evidence |
 | 18 | CHANGELOG, `1.6.0`; gate G | 5, 6, 16, 17 | OWNER GATE | Sonnet | Release chore |
@@ -375,6 +376,27 @@ Spec §3.10, D9.
 - [ ] **Step 1: Tests.** `"babelgate passes thinking-after-tool"`, `"babelgate passes streamed-tool-args"`, `"babelgate passes multi-turn-reasoning"` (must pass; a babelgate failure is a bug → fix in this task if small, else STOP).
 - [ ] **Step 2:** Add the two competitor adapters; run `conformance-run.sh`. Each competitor failure → `conformance-live.sh`; only live-confirmed failures are reported as failures, others as "mock-only, unconfirmed".
 - [ ] **Step 3:** Write the draft report (no adjectives; versions, dates, repro). PR title `[OWNER REVIEW] research: competitor conformance run`; body lists the D9 decision with the conductor's recommendation. **Commit** `test: competitor conformance run`.
+
+### Task 13c: OpenRouter and DeepSeek presets pass reasoning back
+
+Found by Task 13b's live run (2026-11-24, owner decision: fix before launch copy compares gateways). v1.4 spec §3.2/§3.3 (`reasoning_passback`, off by default), v1.6 spec §3.3 (presets).
+
+**Evidence.** babelgate with its default config failed `thinking-after-tool:{anthropic,responses}->openai` live on OpenRouter (`deepseek/deepseek-r1-0528`): the turn-2 assistant message carried only `content, role, tool_calls`, upstream 200. With `reasoning_passback: true` the same cells passed live: the message carried `reasoning_content`, upstream 200. OpenRouter documents `reasoning_content` as an alias of `message.reasoning` ("it functions identically to `reasoning`", https://openrouter.ai/docs/use-cases/reasoning-tokens). DeepSeek names the field `reasoning_content` (https://api-docs.deepseek.com/guides/reasoning_model); re-verify on the task date what it says about sending it back. Passback stays off for plain entries because other Chat servers may reject the field; a preset names one provider, so it can declare what that provider accepts. Both presets are new in v1.6 (unreleased), so no released config changes behaviour.
+
+**Files:**
+- Modify: `src/config/provider-presets.ts`, `src/config/provider-presets.test.ts`, `src/config/yaml-config.ts`, `src/config/env-config.ts`, tests beside each, `src/cli-presets.ts` (only if the list shows the flag), `docs/recipes/openai-compatible-providers.md` (one line per preset), `docs/decisions.md`
+- Modify: `tests/process/gateways/babelgate.ts` and `scripts/research/conformance-live.sh` (a `babelgate-preset` gateway: `preset: openrouter-free` with `base_url` pointed at the mock, no explicit `reasoning_passback`)
+
+**Interfaces:**
+- `ProviderPreset` gains `reasoning_passback?: boolean` (in the type and in `providerPresetSchema`). `openrouter-free` and `deepseek` set it to `true`, each with the doc URL and the verified date in a code comment. No other preset changes.
+- yaml-config and env-config: an entry's `reasoning_passback` is the entry's own value when set, else the preset's value, else unset (off). An explicit `reasoning_passback: false` on an entry wins over the preset. The env path (`--provider`, `TARGET_PRESET`) takes the preset's value the same way it takes `gaps`.
+- Only the encoded field is `reasoning_content` (unchanged). `reasoning_details` passback (OpenRouter's encrypted and signed reasoning for Anthropic/Gemini models) is out of scope; record it in the decisions entry as a known limit.
+- No canonical change, no adapter change, no provider branch: the flag is preset data.
+
+- [ ] **Step 1: Tests.** `"openrouter-free preset turns reasoning passback on"`, `"deepseek preset turns reasoning passback on"`, `"explicit reasoning_passback false wins over the preset"`, `"entry without a preset keeps passback off"`, `"--provider openrouter-free entry has passback on"`; process: `"babelgate-preset passes thinking-after-tool:anthropic->openai"` and `":responses->openai"` (selected through `CONFORMANCE_GATEWAYS`, like `babelgate-default`; the default `npm run test:process` run stays babelgate only).
+- [ ] **Step 2: Run** → FAIL. **Step 3: Implement.** **Step 4:** `npm run build && npm run test:process` and `./scripts/check.sh` → PASS.
+- [ ] **Step 5 (live, conductor runs):** `conformance-live.sh babelgate-preset thinking-after-tool:{anthropic,responses}->openai` → PASS. Then two otherwise identical turn-2 requests to OpenRouter, one with and one without `reasoning_content`: `usage.prompt_tokens` must be higher with the field (evidence that OpenRouter uses it, not only accepts it). For DeepSeek, `babelgate --provider deepseek` with the Claude Code and Codex edit tasks re-run once each (no regression from Task 8a). Results go in decisions.md and the PR body. If OpenRouter shows no token difference → STOP: the field name is then the open question, and the owner decides.
+- **Commit** `feat(presets): OpenRouter and DeepSeek pass reasoning back`.
 
 ### Task 14: UI: breaker state, cache hits, free-tier label
 
