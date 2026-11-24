@@ -177,6 +177,37 @@ that it was used.
 Everything else that fails on the mock stays "fail (mock-only,
 unconfirmed)".
 
+## Amendment — Task 13d (2026-11-24)
+
+Two defects found in this run's own method, fixed before the cells
+are re-read:
+
+- **Responses scenarios sent no user question after turn 1.** The
+  Responses turns carried user text as bare strings inside the
+  `input` array; the Responses API's array items are objects, so
+  babelgate's decoder dropped each with a `field_dropped` note and
+  the upstream request had no user message from turn 2 on (the
+  `messages` shapes in the shapes appendix show it: no leading
+  user-length-29 item). Every Responses user turn now sends
+  `{role: "user", content: "<text>"}`. Every `*:responses->*` cell
+  above was collected under the defect and is being re-run — a
+  Responses cell result may change. The decoder behaviour is
+  unchanged; the bug was the scenario's.
+- **The live model hid whether sent-back reasoning is used.** The
+  OpenRouter default was `deepseek/deepseek-r1-0528`; a same-body
+  token probe (`usage.prompt_tokens` non-streaming, max_tokens 16)
+  counted 135 with no reasoning field, 135 with `reasoning_content`
+  and 135 with `reasoning` — R1's chat template drops earlier-turn
+  reasoning, so a reasoning cell could pass live while the model
+  never saw it. `deepseek/deepseek-v4.1-flash` counted 361/411/411
+  (and kimi-k3 268/318/318, glm-5.3 192/241/241), so it is the new
+  `conformance-live.sh` OpenRouter default;
+  `CONFORMANCE_LIVE_MODEL_OPENAI` still overrides. Confirmations
+  recorded on r1-0528 above stay valid for "the field was sent and
+  accepted" but cannot show the model used it; the reasoning cells
+  are being re-run on the new model and this table is updated with
+  the per-cell changes and dates.
+
 ## Not supported
 
 - free-claude-code / thinking-after-tool:anthropic->gemini: not supported (per https://github.com/Alishahryar1/free-claude-code — gemini upstream is a fixed Google OpenAI-compatible endpoint)

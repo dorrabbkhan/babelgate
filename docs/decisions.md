@@ -9769,3 +9769,50 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   the cause. DeepSeek's own doc (https://api-docs.deepseek.com/guides/thinking_mode, read
   2026-11-24): with `tools`, `reasoning_content` "must be fully passed back … the API will return a
   400 error" otherwise; without `tools` it "will be ignored".
+
+## v1.6 Task 13d — Conformance: live model keeps prior reasoning; Responses scenarios send real user items (v1.6 spec §3.10, D9)
+
+- **Live model change (`scripts/research/conformance-live.sh`):** the
+  OpenRouter default `deepseek/deepseek-r1-0528` →
+  `deepseek/deepseek-v4.1-flash`. Evidence (same turn-2 body,
+  non-streaming `max_tokens: 16`, `usage.prompt_tokens` no reasoning
+  field / `reasoning_content` / `reasoning`, conductor's 13c live
+  step): r1-0528 135/135/135 — its chat template drops earlier-turn
+  reasoning, so a reasoning cell could pass live while the model
+  never saw the sent-back reasoning; deepseek-v4.1-flash 361/411/411,
+  kimi-k3 268/318/318, glm-5.3 192/241/241 — on those models the
+  field is used. `CONFORMANCE_LIVE_MODEL_OPENAI` still overrides; the
+  report names the model per run.
+- **Scenario fix (pre-approved in the task; request inputs only, no
+  assertion removed or weakened):** the Responses turns sent user
+  text as bare strings inside `input`; the Responses API's array
+  items are objects, so babelgate's decoder dropped each with a
+  `field_dropped` note
+  (`src/transformers/adapters/responses.items.ts`) and the upstream
+  request had no user message from turn 2 on — visible in the
+  2026-11-24 shapes appendix (the responses cells' `messages` lack
+  the `content:<string:29>` user item their anthropic twins carry).
+  Every Responses user turn now sends
+  `{role: "user", content: "<text>"}` — the EasyInputMessage shape
+  (`input[]` items may omit `type` when `role` is present,
+  responses.items.ts; a real Codex client's wire shape). Turns, pass
+  rules and replays are otherwise unchanged; the decoder behaviour
+  stays as it is — the defect was the scenario's, not babelgate's.
+- **`scripts/research/passback-tokens.ts` (new):** re-sends a turn-2
+  spy-log body (the second recorded exchange — thinking-after-tool
+  runs one upstream call per turn) to OpenRouter non-streaming with
+  `max_tokens: 16` three times — no reasoning field /
+  `reasoning_content` / `reasoning` — and prints one
+  `variant=<v> status=<s> provider=<p> prompt_tokens=<n>` line each;
+  bodies, completions and keys are never printed (the offline stub
+  test asserts it). Key from `OPENROUTER_API_KEY`, base URL
+  overridable via `PASSBACK_TARGET` (stub tests). Network script,
+  not part of `npm test`.
+- **Report docs:** `docs/research/2026-11-24-conformance-run.md` and
+  `docs/research/2026-11-24-conformance-run.shapes.md` carry a Task
+  13d amendment: the `*:responses->*` cells were collected under the
+  input defect and the live cells under the r1-0528 blind spot; both
+  are re-run by the conductor's Step 5 on the new model, and the
+  docs record which cells changed (old and new model, date).
+- **Files outside the Files block:** none — every file named above
+  is in the task's Files block.

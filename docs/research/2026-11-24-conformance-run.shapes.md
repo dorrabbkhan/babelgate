@@ -3,6 +3,15 @@
 Shapes only (`<string:N>`), never prompt or completion text. One
 entry per non-pass cell of the same-date conformance-run report.
 
+Note (Task 13d, 2026-11-24): the `*:responses->*` request shapes
+below were captured while the scenario sent user text as bare
+strings inside `input` — babelgate dropped them with
+`field_dropped`, so those shapes lack a user message from turn 2 on
+(compare the anthropic twin, which opens with a `role:user` /
+`content:<string:29>` message). The fix — user turns now send
+`{role: "user", content: "<text>"}` message items — changes these
+shapes; they are re-captured on the Task 13d re-run.
+
 ## babelgate-default / thinking-after-tool:anthropic->openai (fail)
 
 - request shape: `{"kind":"object","fields":{"model":{"kind":"string","length":9},"messages":{"kind":"array","length":3,"items":[{"kind":"object","fields":{"role":{"kind":"string","length":4},"content":{"kind":"string","length":29}}},{"kind":"object","fields":{"role":{"kind":"string","length":9},"content":{"kind":"string","length":0},"tool_calls":{"kind":"array","length":1,"items":[{"kind":"object","fields":{"id":{"kind":"string","length":32},"type":{"kind":"string","length":8},"function":{"kind":"object","fields":{"name":{"kind":"string","length":11},"arguments":{"kind":"string","length":20}}}}}]}}},{"kind":"object","fields":{"role":{"kind":"string","length":4},"content":{"kind":"string","length":33},"tool_call_id":{"kind":"string","length":32}}}]},"max_tokens":{"kind":"number"},"reasoning_effort":{"kind":"string","length":7},"tools":{"kind":"array","length":1,"items":[{"kind":"object","fields":{"type":{"kind":"string","length":8},"function":{"kind":"object","fields":{"name":{"kind":"string","length":11},"description":{"kind":"string","length":15},"parameters":{"kind":"object","fields":{"type":{"kind":"string","length":6},"properties":{"kind":"object","fields":{"location":{"kind":"object","fields":{"type":{"kind":"string","length":6}}}}}}}}}}}]},"stream":{"kind":"boolean"},"stream_options":{"kind":"object","fields":{"include_usage":{"kind":"boolean"}}}}}`

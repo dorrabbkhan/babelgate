@@ -71,10 +71,12 @@ function responsesTurn(n: number): {
 } {
   return {
     request: (prev: TurnResult[]) => {
-      const input: unknown[] = [QUESTIONS[0]];
+      const input: unknown[] = [
+        { role: "user", content: QUESTIONS[0] },
+      ];
       for (let i = 0; i < n - 1; i += 1) {
         input.push(...responsesOutputItems(prev[i].body));
-        input.push(QUESTIONS[i + 1]);
+        input.push({ role: "user", content: QUESTIONS[i + 1] });
       }
       return {
         model: "$MODEL",
@@ -103,7 +105,7 @@ function build(
           model: "$MODEL",
           stream: true,
           reasoning: { effort: "low" },
-          input: QUESTIONS[0],
+          input: [{ role: "user", content: QUESTIONS[0] }],
         };
   // In assert order — each failing verdict names its rule. The
   // upstream-passback rule deliberately has no `doc`: nothing public

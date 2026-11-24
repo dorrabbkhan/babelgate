@@ -90,7 +90,7 @@ function responsesTurn2(prev: TurnResult[]): unknown {
     reasoning: { effort: "low" },
     tools: TOOLS_RESPONSES,
     input: [
-      "What is the weather in Paris?",
+      { role: "user", content: "What is the weather in Paris?" },
       ...output,
       {
         type: "function_call_output",
@@ -170,7 +170,9 @@ function build(
                 stream: true,
                 reasoning: { effort: "low" },
                 tools: TOOLS_RESPONSES,
-                input: "What is the weather in Paris?",
+                input: [
+                  { role: "user", content: "What is the weather in Paris?" },
+                ],
               },
       },
       { request: client === "anthropic" ? anthropicTurn2 : responsesTurn2 },

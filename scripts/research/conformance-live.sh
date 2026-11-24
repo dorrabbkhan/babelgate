@@ -29,7 +29,9 @@
 #
 # Keys come from env, never from flags:
 #   openai upstream — OPENROUTER_API_KEY (target openrouter.ai/api,
-#                     model default deepseek/deepseek-r1-0528) or
+#                     model default deepseek/deepseek-v4.1-flash —
+#                     keeps prior-turn reasoning; r1-0528's chat
+#                     template drops it, Task 13d token evidence) or
 #                     OPENAI_API_KEY (api.openai.com, gpt-4o-mini)
 #   gemini upstream — GEMINI_API_KEY (generativelanguage.googleapis.com,
 #                     gemini-3.5-flash)
@@ -87,7 +89,7 @@ case "$upstream" in
     if [ -n "${OPENROUTER_API_KEY:-}" ] || [ -z "${OPENAI_API_KEY:-}" ]; then
       key_env="OPENROUTER_API_KEY"
       target="https://openrouter.ai/api"
-      model_default="deepseek/deepseek-r1-0528"
+      model_default="deepseek/deepseek-v4.1-flash"
     else
       key_env="OPENAI_API_KEY"
       target="https://api.openai.com"
