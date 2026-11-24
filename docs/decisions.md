@@ -9911,9 +9911,15 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   (`tmp/conformance/live/<gateway>-<scenario>.gateway.log`),
   line-buffered through `redactGatewayOutput` — the spy's query-name
   and key-header redaction, never bodies.
-- **Step 5 (live re-run on `deepseek/deepseek-v4.1-flash`):**
-  recording/network step — run by the conductor; its cell changes go
-  in the report and the PR body per the task.
+- **Step 5 (live re-run on `deepseek/deepseek-v4.1-flash`):** run
+  by the conductor on this branch 2026-11-24 — `babelgate-default`
+  and `ccr` cells identical to the 13d table; free-claude-code
+  reached the upstream after this PR's adapter fix (its earlier
+  400/503 were our client model ref, not an FCC bug) and its five
+  OpenRouter cells produced the live values now in the report.
+  The FCC results are new versus the 13b draft and the 13d table
+  and are subject to the owner's D9 decision before anything public
+  is said about free-claude-code.
 - **Files outside the Files block:** none — every file named above
   is in the task's Files block.
 
