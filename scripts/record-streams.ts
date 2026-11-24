@@ -16,6 +16,18 @@
  *   RECORD_TWINS=max_tokens          — limit which cases get a non-streaming
  *                                      twin call (default: every non-error
  *                                      case; RECORD_TWINS=none → no twins)
+ *   RECORD_TWINS_ONLY=1              — top-up mode (v1.6 Task 13b fix
+ *                                      round 3): record only the missing
+ *                                      <case>.nonstreaming.json for the
+ *                                      selected cases — never call the
+ *                                      stream endpoint, never touch the
+ *                                      committed <case>.<ext>/.json bytes
+ *                                      (the default skip guards a case
+ *                                      whose wire file exists, so a
+ *                                      missing twin could never be added
+ *                                      after the fact without
+ *                                      RECORD_OVERWRITE re-recording the
+ *                                      stream too)
  *   RECORD_OVERWRITE=1               — allow rewriting files that already
  *                                      exist (default: never overwrite)
  *   RECORD_OUT_DIR=<dir>             — output root (default
@@ -61,6 +73,7 @@ const DATE = new Date().toISOString().slice(0, 10);
 const RECORD_PROVIDERS = csv(process.env.RECORD_PROVIDERS);
 const RECORD_CASES = csv(process.env.RECORD_CASES);
 const RECORD_TWINS = csv(process.env.RECORD_TWINS);
+const TWINS_ONLY = process.env.RECORD_TWINS_ONLY === "1";
 const OVERWRITE = process.env.RECORD_OVERWRITE === "1";
 const OLLAMA_MIDSTREAM_KILL = process.env.OLLAMA_MIDSTREAM_KILL;
 
@@ -125,6 +138,36 @@ async function recordProvider(
   for (const [name, c] of Object.entries(rec.cases)) {
     if (RECORD_CASES && !RECORD_CASES.includes(name)) continue;
     const wirePath = join(rec.dir, `${name}.${rec.ext}`);
+    if (TWINS_ONLY) {
+      // Top-up mode: fill in a missing <case>.nonstreaming.json
+      // without re-recording or rewriting the committed wire/meta
+      // bytes (Task 13b fix round 3 — the round-2 replays recorded
+      // with RECORD_TWINS=none have no twin). The stream endpoint is
+      // never called; <case>.<ext> and <case>.json are never touched.
+      if (c.expectInStreamError) continue;
+      if (RECORD_TWINS && !RECORD_TWINS.includes(name)) continue;
+      const twinFile = join(rec.dir, `${name}.nonstreaming.json`);
+      if (existsSync(twinFile) && !OVERWRITE) {
+        console.log(`  ${name}: twin exists on disk — skipped`);
+        continue;
+      }
+      requestCounts[provider] = (requestCounts[provider] ?? 0) + 1;
+      const twin = await post(
+        `${rec.baseUrl}${(rec.twinPath ?? rec.streamPath)(rec.model)}`,
+        rec.headers,
+        rec.body(rec.model, false, c.request),
+      );
+      if (twin.status >= 200 && twin.status < 300) {
+        writeGuarded(twinFile, twin.text);
+        console.log(
+          `  ${name}.nonstreaming.json <- HTTP ${twin.status} ` +
+            `(${twin.text.length} bytes)`,
+        );
+      } else {
+        console.log(`  ${name}: twin HTTP ${twin.status} — skipped`);
+      }
+      continue;
+    }
     if (existsSync(wirePath) && !OVERWRITE) {
       console.log(`  ${name}: exists on disk — skipped`);
       continue;

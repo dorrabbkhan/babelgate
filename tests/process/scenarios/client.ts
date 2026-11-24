@@ -5,6 +5,7 @@
  * next turn — thinking blocks and tool calls must be echoed
  * faithfully or the test asserts on the wrong thing.
  */
+import { readFileSync } from "node:fs";
 import type { RunningGateway } from "../harness";
 import type {
   ClientDialect,
@@ -62,6 +63,49 @@ function clientUrl(gw: RunningGateway, client: ClientDialect): string {
  * `upstreamBefore` is the count of recorded upstream requests before
  * this turn, so the slice is per-turn.
  */
+/**
+ * What the verdict can inspect about one upstream exchange: the
+ * recorded request plus how the response can be read — the replay
+ * file the mock served (`responseFile`, mock mode) or the live spy's
+ * shape-only summary (`response`, live mode).
+ */
+export interface UpstreamExchange {
+  url: string;
+  body: string;
+  /** Absolute path of the body file the mock served this request. */
+  responseFile?: string;
+  /** The live spy's shape-only response summary. */
+  response?: { hasReasoning?: boolean };
+}
+
+/**
+ * Build the verdict's view of one recorded upstream request: parse
+ * the body where JSON, and decide whether the upstream response for
+ * this request carried reasoning — from the spy's summary (live) or
+ * by reading the served replay bytes (mock).
+ */
+export function upstreamRequestFrom(
+  r: UpstreamExchange,
+  dialect: "openai" | "gemini",
+): UpstreamRequest {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(r.body);
+  } catch {
+    parsed = undefined;
+  }
+  let responseHadReasoning: boolean | undefined;
+  if (typeof r.response?.hasReasoning === "boolean") {
+    responseHadReasoning = r.response.hasReasoning;
+  } else if (r.responseFile !== undefined) {
+    responseHadReasoning = upstreamResponseHasReasoning(
+      readFileSync(r.responseFile, "utf8"),
+      dialect,
+    );
+  }
+  return { url: r.url, body: parsed, rawBody: r.body, responseHadReasoning };
+}
+
 export async function sendTurn(
   gw: RunningGateway,
   model: string,
@@ -69,7 +113,7 @@ export async function sendTurn(
   scenario: Scenario,
   turnIndex: number,
   prev: TurnResult[],
-  upstreamRequests: { url: string; body: string }[],
+  upstreamRequests: UpstreamExchange[],
 ): Promise<TurnResult> {
   const spec = scenario.turns[turnIndex];
   const raw =
@@ -85,15 +129,7 @@ export async function sendTurn(
   const events = parseSse(text).map((e) => e.event || "message");
   const upstream: UpstreamRequest[] = upstreamRequests
     .slice(upstreamBefore)
-    .map((r) => {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(r.body);
-      } catch {
-        parsed = undefined;
-      }
-      return { url: r.url, body: parsed, rawBody: r.body };
-    });
+    .map((r) => upstreamRequestFrom(r, scenario.upstream));
   return { turn: turnIndex + 1, status: res.status, body: text, sseEvents: events, upstream };
 }
 
@@ -278,11 +314,18 @@ export function upstreamCarriesReasoning(
 
 /**
  * Does the client stream hold a valid reasoning block before any
- * text? Anthropic: a `thinking`/`redacted_thinking` content block
- * opens before the first `text` block, and a `signature_delta`
- * accompanies it (Anthropic requires the signature to echo thinking
- * back — https://platform.claude.com/docs/en/build-with-claude/extended-thinking).
- * Responses: a `reasoning` output item completes before any `message`
+ * text or tool call? Anthropic: a `thinking`/`redacted_thinking`
+ * content block opens before the first `text` block and before the
+ * first `tool_use` block, and a `signature_delta` accompanies it
+ * (Anthropic requires the signature to echo thinking back —
+ * https://platform.claude.com/docs/en/build-with-claude/extended-thinking).
+ * One position exception: Gemini attaches `thoughtSignature` to the
+ * `functionCall` part itself
+ * (https://ai.google.dev/gemini-api/docs/thinking#signatures), so a
+ * signature-carrying thinking block *immediately after* the tool_use
+ * whose signature it carries satisfies the rule too — the signature
+ * surfaces with its own tool call. Responses: a `reasoning` output
+ * item is added or completes before any `message`/`function_call`
  * item and carries `encrypted_content` or summary content.
  */
 export function clientStreamHasReasoningBeforeText(
@@ -292,6 +335,8 @@ export function clientStreamHasReasoningBeforeText(
   const frames = sseJson(result.body);
   if (client === "anthropic") {
     let firstTextIndex = Number.POSITIVE_INFINITY;
+    let firstToolUseIndex = Number.POSITIVE_INFINITY;
+    const toolUseIndices = new Set<number>();
     let thinkingIndex = Number.POSITIVE_INFINITY;
     let signed = false;
     for (const { json } of frames) {
@@ -301,6 +346,10 @@ export function clientStreamHasReasoningBeforeText(
         const bt = json.content_block?.type;
         if (bt === "text" && index < firstTextIndex) {
           firstTextIndex = index;
+        }
+        if (bt === "tool_use") {
+          if (index < firstToolUseIndex) firstToolUseIndex = index;
+          toolUseIndices.add(index);
         }
         if (
           (bt === "thinking" || bt === "redacted_thinking") &&
@@ -318,9 +367,16 @@ export function clientStreamHasReasoningBeforeText(
         signed = true;
       }
     }
-    return thinkingIndex < firstTextIndex && signed;
+    if (!signed || thinkingIndex >= firstTextIndex) return false;
+    // Canonical shape: the signed thinking block precedes the first
+    // tool call. Tool-call-signature shape: it immediately follows
+    // the tool_use whose signature it carries.
+    return (
+      thinkingIndex < firstToolUseIndex ||
+      toolUseIndices.has(thinkingIndex - 1)
+    );
   }
-  // responses: a completed reasoning item before any message item
+  // responses: a reasoning item before any message or function_call
   for (const { json } of frames) {
     const type = json?.type as string | undefined;
     const item = json?.item ?? json?.part ?? json;
@@ -334,13 +390,110 @@ export function clientStreamHasReasoningBeforeText(
       return true;
     }
     if (
-      (type === "response.output_item.done" && item?.type === "message") ||
-      type === "response.output_text.delta"
+      (type === "response.output_item.done" &&
+        (item?.type === "message" || item?.type === "function_call")) ||
+      type === "response.output_text.delta" ||
+      type === "response.function_call_arguments.delta"
     ) {
       return false;
     }
   }
   return false;
+}
+
+/* ---- upstream response reasoning detection ----
+ * The client-side rule may only require a gateway to surface
+ * reasoning the upstream actually sent in that turn (fix round 3 —
+ * Gemini does not return thought parts on every turn). These read the
+ * response bytes — replay file (mock) or the body the spy buffered —
+ * and answer "was reasoning present", per the same wire rules
+ * upstreamCarriesReasoning applies to requests:
+ * - Chat: `reasoning` / `reasoning_content` / `reasoning_details` on a
+ *   `delta` (SSE) or `message` (JSON) choice
+ * - Gemini: `thought: true` or a `thoughtSignature` on a candidate's
+ *   content part
+ */
+
+/** The JSON payloads of a response body: one per SSE `data:` frame,
+ * or the single object of a non-streaming JSON body. */
+function responsePayloads(body: string): unknown[] {
+  const trimmed = body.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return [JSON.parse(trimmed)];
+    } catch {
+      return [];
+    }
+  }
+  const out: unknown[] = [];
+  for (const { data } of parseSse(body)) {
+    try {
+      out.push(JSON.parse(data));
+    } catch {
+      // non-JSON data frame — not part of the response model
+    }
+  }
+  return out;
+}
+
+function chatPayloadHasReasoning(payload: unknown): boolean {
+  const choices =
+    typeof payload === "object" && payload !== null
+      ? (payload as { choices?: unknown[] }).choices
+      : undefined;
+  if (!Array.isArray(choices)) return false;
+  return choices.some((c) => {
+    if (typeof c !== "object" || c === null) return false;
+    const holders = [
+      (c as { delta?: unknown }).delta,
+      (c as { message?: unknown }).message,
+    ];
+    return holders.some(
+      (h) =>
+        typeof h === "object" &&
+        h !== null &&
+        REASONING_MESSAGE_FIELDS.some((f) =>
+          nonEmpty((h as Record<string, unknown>)[f]),
+        ),
+    );
+  });
+}
+
+function geminiPayloadHasReasoning(payload: unknown): boolean {
+  const candidates =
+    typeof payload === "object" && payload !== null
+      ? (payload as { candidates?: unknown[] }).candidates
+      : undefined;
+  if (!Array.isArray(candidates)) return false;
+  return candidates.some((cand) => {
+    const parts =
+      typeof cand === "object" && cand !== null
+        ? (cand as { content?: { parts?: unknown[] } }).content?.parts
+        : undefined;
+    if (!Array.isArray(parts)) return false;
+    return parts.some(
+      (p) =>
+        typeof p === "object" &&
+        p !== null &&
+        ((p as Record<string, unknown>).thought === true ||
+          nonEmpty((p as Record<string, unknown>).thoughtSignature)),
+    );
+  });
+}
+
+/**
+ * Did the upstream response carry reasoning, per the dialect's wire
+ * rules? Reads the raw response bytes — an SSE stream or a
+ * non-streaming JSON body.
+ */
+export function upstreamResponseHasReasoning(
+  body: string,
+  dialect: "openai" | "gemini",
+): boolean {
+  const has = dialect === "openai"
+    ? chatPayloadHasReasoning
+    : geminiPayloadHasReasoning;
+  return responsePayloads(body).some(has);
 }
 
 /**

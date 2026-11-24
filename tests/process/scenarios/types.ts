@@ -66,6 +66,17 @@ export interface UpstreamRequest {
   url: string;
   body: unknown;
   rawBody: string;
+  /**
+   * Whether the upstream response to this request carried reasoning
+   * (Chat `reasoning`/`reasoning_content`/`reasoning_details`, Gemini
+   * `thought: true` parts or a `thoughtSignature`) — read from the
+   * replay bytes the mock served (mock mode) or from the live spy's
+   * shape-only response summary (live mode). Undefined when the
+   * response could not be inspected; the client-side rule treats it
+   * as "n/a" — a gateway can only be required to surface reasoning the
+   * upstream actually sent.
+   */
+  responseHadReasoning?: boolean;
 }
 
 /** Everything the scenario assert needs from one turn. */

@@ -33,19 +33,19 @@ rule with no citing doc is an observation: it can produce
 - thinking-after-tool:anthropic->openai
   - every turn returns HTTP 200 with the client dialect's event stream (https://docs.anthropic.com/en/api/messages-streaming)
   - turn 2 upstream request carries reasoning back on the tool-call turn (messages[].reasoning / reasoning_content / reasoning_details) (https://openrouter.ai/docs/use-cases/reasoning-tokens)
-  - turn 2 client stream has a signed thinking block before text (https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+  - turn 2 client stream has a signed thinking block before the first text or tool_use block — or immediately after the tool_use whose signature it carries — when the turn's upstream response carried reasoning (https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 - thinking-after-tool:responses->openai
   - every turn returns HTTP 200 with the client dialect's event stream (https://platform.openai.com/docs/api-reference/responses-streaming)
   - turn 2 upstream request carries reasoning back on the tool-call turn (messages[].reasoning / reasoning_content / reasoning_details) (https://openrouter.ai/docs/use-cases/reasoning-tokens)
-  - turn 2 client stream has a reasoning item before the message (https://platform.openai.com/docs/guides/reasoning)
+  - turn 2 client stream has a reasoning item before the message or function call when the turn's upstream response carried reasoning (https://platform.openai.com/docs/guides/reasoning)
 - thinking-after-tool:anthropic->gemini
   - every turn returns HTTP 200 with the client dialect's event stream (https://docs.anthropic.com/en/api/messages-streaming)
   - turn 2 upstream request carries the thought signature on the tool-call turn (contents[].parts[] functionCall.thoughtSignature / thought:true) (https://ai.google.dev/gemini-api/docs/thought-signatures)
-  - turn 2 client stream has a signed thinking block before text (https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+  - turn 2 client stream has a signed thinking block before the first text or tool_use block — or immediately after the tool_use whose signature it carries — when the turn's upstream response carried reasoning (https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
 - thinking-after-tool:responses->gemini
   - every turn returns HTTP 200 with the client dialect's event stream (https://platform.openai.com/docs/api-reference/responses-streaming)
   - turn 2 upstream request carries the thought signature on the tool-call turn (contents[].parts[] functionCall.thoughtSignature / thought:true) (https://ai.google.dev/gemini-api/docs/thought-signatures)
-  - turn 2 client stream has a reasoning item before the message (https://platform.openai.com/docs/guides/reasoning)
+  - turn 2 client stream has a reasoning item before the message or function call when the turn's upstream response carried reasoning (https://platform.openai.com/docs/guides/reasoning)
 - streamed-tool-args:anthropic->openai
   - the client request returns HTTP 200 with the dialect's event stream (https://docs.anthropic.com/en/api/messages-streaming)
   - the client stream carries exactly one tool call whose concatenated arguments parse as the recorded JSON (upstream streams them as >=5 deltas) (https://docs.anthropic.com/en/api/messages-streaming)
@@ -54,19 +54,19 @@ rule with no citing doc is an observation: it can produce
   - the client stream carries exactly one tool call whose concatenated arguments parse as the recorded JSON (upstream streams them as >=5 deltas) (https://platform.openai.com/docs/api-reference/responses-streaming)
 - multi-turn-reasoning:anthropic->openai
   - every turn returns HTTP 200 with the client dialect's event stream (https://docs.anthropic.com/en/api/messages-streaming)
-  - every turn's client stream has a signed thinking block before text (https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+  - every turn whose upstream response carried reasoning has a signed thinking block before the first text or tool_use block — or immediately after the tool_use whose signature it carries — on the client stream (https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
   - every upstream request from turn 2 on carries reasoning back (messages[].reasoning / reasoning_content / reasoning_details) — observation only — no provider doc requires reasoning passback on a plain multi-turn chat with no tool call: DeepSeek's reasoning guide excludes earlier reasoning_content from the next turn's context (https://api-docs.deepseek.com/guides/reasoning_model); OpenRouter frames preservation around tool calling (https://openrouter.ai/docs/use-cases/reasoning-tokens)
 - multi-turn-reasoning:responses->openai
   - every turn returns HTTP 200 with the client dialect's event stream (https://platform.openai.com/docs/api-reference/responses-streaming)
-  - every turn's client stream has a reasoning item before the message (https://platform.openai.com/docs/guides/reasoning)
+  - every turn whose upstream response carried reasoning has a reasoning item before the message or function call on the client stream (https://platform.openai.com/docs/guides/reasoning)
   - every upstream request from turn 2 on carries reasoning back (messages[].reasoning / reasoning_content / reasoning_details) — observation only — no provider doc requires reasoning passback on a plain multi-turn chat with no tool call: DeepSeek's reasoning guide excludes earlier reasoning_content from the next turn's context (https://api-docs.deepseek.com/guides/reasoning_model); OpenRouter frames preservation around tool calling (https://openrouter.ai/docs/use-cases/reasoning-tokens)
 - multi-turn-reasoning:anthropic->gemini
   - every turn returns HTTP 200 with the client dialect's event stream (https://docs.anthropic.com/en/api/messages-streaming)
-  - every turn's client stream has a signed thinking block before text (https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+  - every turn whose upstream response carried reasoning has a signed thinking block before the first text or tool_use block — or immediately after the tool_use whose signature it carries — on the client stream (https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
   - every upstream request from turn 2 on carries the thought signature (contents[].parts[] thoughtSignature / thought:true) — observation only — Gemini documents thoughtSignature only on functionCall parts (https://ai.google.dev/gemini-api/docs/thought-signatures); no doc requires resending signatures on a plain multi-turn chat with no tool call
 - multi-turn-reasoning:responses->gemini
   - every turn returns HTTP 200 with the client dialect's event stream (https://platform.openai.com/docs/api-reference/responses-streaming)
-  - every turn's client stream has a reasoning item before the message (https://platform.openai.com/docs/guides/reasoning)
+  - every turn whose upstream response carried reasoning has a reasoning item before the message or function call on the client stream (https://platform.openai.com/docs/guides/reasoning)
   - every upstream request from turn 2 on carries the thought signature (contents[].parts[] thoughtSignature / thought:true) — observation only — Gemini documents thoughtSignature only on functionCall parts (https://ai.google.dev/gemini-api/docs/thought-signatures); no doc requires resending signatures on a plain multi-turn chat with no tool call
 
 ## Scenario × gateway
@@ -94,21 +94,21 @@ rule with no citing doc is an observation: it can produce
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
 - ccr / thinking-after-tool:responses->openai: turn 2 upstream request carries no reasoning field per the target's wire rules — messages[0] (assistant) carries no reasoning/reasoning_content/reasoning_details field (rule: https://openrouter.ai/docs/use-cases/reasoning-tokens)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / thinking-after-tool:anthropic->gemini: turn 2 upstream request carries no reasoning field per the target's wire rules — contents[] has no model turn at all (rule: https://ai.google.dev/gemini-api/docs/thought-signatures)
+- ccr / thinking-after-tool:anthropic->gemini: turn 1 status 502 — turn 1 client response HTTP 502 (rule: https://docs.anthropic.com/en/api/messages-streaming)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / thinking-after-tool:responses->gemini: turn 2 upstream request carries no reasoning field per the target's wire rules — contents[] has no model turn at all (rule: https://ai.google.dev/gemini-api/docs/thought-signatures)
+- ccr / thinking-after-tool:responses->gemini: turn 1 status 502 — turn 1 client response HTTP 502 (rule: https://platform.openai.com/docs/api-reference/responses-streaming)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / multi-turn-reasoning:anthropic->openai: turn 1 client stream carries no reasoning block — turn 1 client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+- ccr / multi-turn-reasoning:anthropic->openai: turn 1 upstream response carried reasoning but the client stream has no reasoning block — turn 1 client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / multi-turn-reasoning:responses->openai: turn 1 client stream carries no reasoning block — turn 1 client SSE: no output_item.done{type:reasoning, encrypted_content|summary|content} before the first message item (rule: https://platform.openai.com/docs/guides/reasoning)
+- ccr / multi-turn-reasoning:responses->openai: turn 1 upstream response carried reasoning but the client stream has no reasoning block — turn 1 client SSE: no output_item.done{type:reasoning, encrypted_content|summary|content} before the first message item (rule: https://platform.openai.com/docs/guides/reasoning)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / multi-turn-reasoning:anthropic->gemini: turn 1 client stream carries no reasoning block — turn 1 client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+- ccr / multi-turn-reasoning:anthropic->gemini: turn 1 status 502 — turn 1 client response HTTP 502 (rule: https://docs.anthropic.com/en/api/messages-streaming)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- ccr / multi-turn-reasoning:responses->gemini: turn 1 client stream carries no reasoning block — turn 1 client SSE: no output_item.done{type:reasoning, encrypted_content|summary|content} before the first message item (rule: https://platform.openai.com/docs/guides/reasoning)
+- ccr / multi-turn-reasoning:responses->gemini: turn 1 status 502 — turn 1 client response HTTP 502 (rule: https://platform.openai.com/docs/api-reference/responses-streaming)
   - repro: CONFORMANCE_GATEWAYS=ccr npm run test:process -- conformance.process.test.ts
-- free-claude-code / thinking-after-tool:anthropic->openai: turn 2 client stream has no signed thinking block before text — client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+- free-claude-code / thinking-after-tool:anthropic->openai: turn 2 upstream response carried reasoning but the client stream has no reasoning block before text or tool call — client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
   - repro: CONFORMANCE_GATEWAYS=free-claude-code npm run test:process -- conformance.process.test.ts
-- free-claude-code / multi-turn-reasoning:anthropic->openai: turn 1 client stream carries no reasoning block — turn 1 client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+- free-claude-code / multi-turn-reasoning:anthropic->openai: turn 1 upstream response carried reasoning but the client stream has no reasoning block — turn 1 client SSE: no content_block_start{thinking|redacted_thinking} + signature_delta before the first text block (rule: https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
   - repro: CONFORMANCE_GATEWAYS=free-claude-code npm run test:process -- conformance.process.test.ts
 
 ## Observed differences

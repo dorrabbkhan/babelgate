@@ -25,7 +25,7 @@ import {
   type MockRoute,
   type RecordedRequest,
 } from "./mock-upstream";
-import { sendTurn } from "./scenarios/client";
+import { sendTurn, upstreamRequestFrom } from "./scenarios/client";
 import { scenarios as streamedToolArgs } from "./scenarios/streamed-tool-args";
 import { scenarios as thinkingAfterTool } from "./scenarios/thinking-after-tool";
 import { scenarios as multiTurnReasoning } from "./scenarios/multi-turn-reasoning";
@@ -184,7 +184,7 @@ function assertable(result: Cell["result"], pass: boolean): boolean {
 /** The mock routes a scenario needs — one replay file answers every
  * turn's upstream call in its dialect. */
 function routesFor(s: Scenario): MockRoute[] {
-  const reply = {
+  const streamReply = {
     status: 200,
     headers: {
       "content-type": s.replay.endsWith(".sse")
@@ -193,10 +193,44 @@ function routesFor(s: Scenario): MockRoute[] {
     },
     bodyFile: s.replay,
   };
-  return s.upstream === "openai"
-    ? [{ method: "POST", path: /chat\/completions$/, reply }]
-    // streamed calls hit :streamGenerateContent ("Generate" capital G)
-    : [{ method: "POST", path: /[gG]enerateContent/, reply }];
+  if (s.upstream === "openai") {
+    // Every gateway calls Chat with stream:true — the recorded
+    // upstream request bodies show no "stream":false caller (fix
+    // round 3), so one streaming route.
+    return [
+      { method: "POST", path: /chat\/completions$/, reply: streamReply },
+    ];
+  }
+  // Gemini splits streaming from non-streaming in the path itself
+  // (:streamGenerateContent vs :generateContent — CCR calls the
+  // non-streaming endpoint, seen in the live spy log). Each gets its
+  // own replay: the recorded SSE for streamed calls, the recorded
+  // non-streaming twin for plain calls — a non-streaming call never
+  // gets SSE (fix round 3).
+  const twin = s.replay.endsWith(".sse")
+    ? s.replay.replace(/\.sse$/, ".nonstreaming.json")
+    : s.replay;
+  return [
+    {
+      method: "POST",
+      path: /:streamGenerateContent/,
+      reply: streamReply,
+    },
+    {
+      method: "POST",
+      path: /:generateContent/,
+      reply: {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        bodyFile: twin,
+        missingBodyFile:
+          `non-streaming replay not recorded: ${twin} — the conductor ` +
+          `records it with npm run record:streams ` +
+          `RECORD_OUT_DIR=tests/process/replays ` +
+          `RECORD_PROVIDERS=gemini RECORD_TWINS_ONLY=1`,
+      },
+    },
+  ];
 }
 
 /** The same resolution order as mock-upstream.ts, checked up front so
@@ -298,17 +332,13 @@ async function runScenario(
       if (live) {
         // the spy writes before forwarding, so every request for the
         // turn is on disk once the client stream completed — re-slice
-        // against the refreshed log (sendTurn sliced a stale array)
+        // against the refreshed log (sendTurn sliced a stale array).
+        // upstreamRequestFrom carries the spy's shape-only response
+        // summary into responseHadReasoning.
         syncSpyLog(upstream.requests);
-        result.upstream = upstream.requests.slice(prevCount).map((r) => {
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(r.body);
-          } catch {
-            parsed = undefined;
-          }
-          return { url: r.url, body: parsed, rawBody: r.body };
-        });
+        result.upstream = upstream.requests
+          .slice(prevCount)
+          .map((r) => upstreamRequestFrom(r, scenario.upstream));
       }
       results.push(result);
     }
@@ -383,6 +413,61 @@ describe("conformance (spec §3.10)", () => {
       });
     }
   }
+});
+
+/* ---- mock route split (fix round 3) ----
+ * Offline regression: Gemini's streaming vs non-streaming endpoints
+ * get different replays. A :streamGenerateContent call gets the
+ * recorded SSE bytes verbatim; a :generateContent call gets the
+ * recorded non-streaming twin — and until the conductor records it,
+ * a clear 502 "non-streaming replay not recorded", never SSE. */
+describe("mock upstream gemini route split", () => {
+  it("streams SSE to :streamGenerateContent and never to :generateContent", async () => {
+    const scenario = ALL_SCENARIOS.find(
+      (s) => s.upstream === "gemini" && s.replay.endsWith(".sse"),
+    );
+    expect(scenario).toBeDefined();
+    const upstream = await startMockUpstream(routesFor(scenario!));
+    try {
+      const sseRes = await fetch(
+        `${upstream.url}/v1beta/models/mock-gem:streamGenerateContent?alt=sse`,
+        { method: "POST", body: "{}" },
+      );
+      expect(sseRes.status).toBe(200);
+      expect(sseRes.headers.get("content-type")).toContain(
+        "text/event-stream",
+      );
+      // The replay is served byte-for-byte.
+      expect(await sseRes.text()).toBe(
+        readFileSync(
+          join(REPO, "tests", "process", "replays", scenario!.replay),
+          "utf8",
+        ),
+      );
+
+      const jsonRes = await fetch(
+        `${upstream.url}/v1beta/models/mock-gem:generateContent`,
+        { method: "POST", body: "{}" },
+      );
+      const twin = scenario!.replay.replace(/\.sse$/, ".nonstreaming.json");
+      if (replayExists(twin)) {
+        expect(jsonRes.status).toBe(200);
+        expect(jsonRes.headers.get("content-type")).toContain(
+          "application/json",
+        );
+        expect((await jsonRes.text()).startsWith("data:")).toBe(false);
+      } else {
+        // Until the twin is recorded the non-streaming call fails
+        // with a clear error — never the SSE replay.
+        expect(jsonRes.status).toBe(502);
+        expect(await jsonRes.text()).toContain(
+          "non-streaming replay not recorded",
+        );
+      }
+    } finally {
+      await upstream.close();
+    }
+  });
 });
 
 /* ---- report ---- */

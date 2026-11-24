@@ -118,12 +118,17 @@ function build(
     client === "anthropic"
       ? {
           check:
-            "every turn's client stream has a signed thinking block before text",
+            "every turn whose upstream response carried reasoning has " +
+            "a signed thinking block before the first text or " +
+            "tool_use block — or immediately after the tool_use whose " +
+            "signature it carries — on the client stream",
           doc: DOC.anthropicThinking,
         }
       : {
           check:
-            "every turn's client stream has a reasoning item before the message",
+            "every turn whose upstream response carried reasoning has " +
+            "a reasoning item before the message or function call on " +
+            "the client stream",
           doc: DOC.openaiReasoning,
         };
   const passbackRule: PassRule = {
@@ -179,10 +184,23 @@ function build(
             evidence,
           };
         }
-        if (!clientStreamHasReasoningBeforeText(t, client)) {
+        // Only required when the upstream response for that turn
+        // carried reasoning — a gateway can only surface reasoning the
+        // upstream actually sent (fix round 3 — Gemini does not return
+        // thought parts on every turn). When it carried none, the
+        // turn's client-side check is n/a.
+        const upstreamSentReasoning = t.upstream.some(
+          (r) => r.responseHadReasoning === true,
+        );
+        if (
+          upstreamSentReasoning &&
+          !clientStreamHasReasoningBeforeText(t, client)
+        ) {
           return {
             pass: false,
-            reason: `turn ${i + 1} client stream carries no reasoning block`,
+            reason:
+              `turn ${i + 1} upstream response carried reasoning but ` +
+              `the client stream has no reasoning block`,
             rule: streamRule,
             detail: `turn ${i + 1} ${clientReasoningMissDetail(client)}`,
             evidence,

@@ -9,12 +9,16 @@
 #               streamed-tool-args:anthropic->openai
 #
 # How it works: the conformance suite's "live mode" points the
-# gateway's provider config at a localhost logging forward-proxy (the
-# "spy") instead of the replay mock. The spy injects the real provider
-# key, forwards to the live provider, and records every upstream
-# request (headers redacted) plus the upstream status as JSONL — so
-# the same scenario turns and pass rules apply, and the turn-2
-# upstream request can be inspected for the reasoning field.
+# gateway's provider config at a localhost logging forward-proxy
+# (scripts/research/conformance-spy.ts, "the spy") instead of the
+# replay mock. The spy injects the real provider key, forwards to the
+# live provider (keeping the target's base path), and records every
+# upstream request plus a shape-only summary of the response as JSONL
+# — sensitive headers and key=/api_key=/access_token= query values
+# redacted, response text never logged — so the same scenario turns
+# and pass rules apply: the turn-2 upstream request can be inspected
+# for the reasoning field, and each turn's client-side check applies
+# only when the upstream response carried reasoning.
 #
 # Keys come from env, never from flags:
 #   openai upstream — OPENROUTER_API_KEY (target openrouter.ai/api,
@@ -100,7 +104,7 @@ model="${!model_var:-${CONFORMANCE_LIVE_MODEL:-$model_default}}"
 spy_dir="tmp/conformance/live"
 spy_log="$spy_dir/$gateway-${scenario//[^A-Za-z0-9_.-]/_}.jsonl"
 spy_port="${CONFORMANCE_SPY_PORT:-4599}"
-spy_js="$spy_dir/spy.mjs"
+spy_ts="scripts/research/conformance-spy.ts"
 
 if [ "$dry_run" = 1 ]; then
   key_state="set"; [ -n "${!key_env:-}" ] || key_state="NOT SET"
@@ -123,104 +127,6 @@ EOF
 fi
 
 mkdir -p "$spy_dir"
-cat > "$spy_js" <<'SPY_EOF'
-// conformance-live spy: localhost forward-proxy that injects the real
-// provider key, logs each upstream request (headers redacted) as JSONL
-// to SPY_LOG, then forwards the response verbatim. Written by
-// scripts/research/conformance-live.sh; gitignored under tmp/.
-import http from "node:http";
-import https from "node:https";
-import fs from "node:fs";
-
-const target = process.env.SPY_TARGET.replace(/\/$/, "");
-const key = process.env.SPY_KEY;
-const keyHeader = process.env.SPY_KEY_HEADER;
-const logPath = process.env.SPY_LOG;
-const targetUrl = new URL(target);
-
-const SENSITIVE = new Set([
-  "authorization",
-  "x-api-key",
-  "x-goog-api-key",
-  "api-key",
-]);
-
-const server = http.createServer((req, res) => {
-  if (req.url === "/__health") {
-    res.writeHead(200).end("ok");
-    return;
-  }
-  const chunks = [];
-  req.on("data", (c) => chunks.push(c));
-  req.on("end", () => {
-    const body = Buffer.concat(chunks);
-    const headers = { ...req.headers };
-    delete headers["content-length"];
-    delete headers["connection"];
-    headers.host = targetUrl.host;
-    let path = req.url;
-    // inject the real key (header or key= query param); the recorded
-    // copy keeps redacted headers only
-    if (keyHeader === "x-goog-api-key") {
-      headers["x-goog-api-key"] = key;
-      if (/([?&])key=/.test(path)) {
-        path = path.replace(/([?&])key=[^&]*/, `$1key=${key}`);
-      }
-    } else {
-      headers.authorization = `Bearer ${key}`;
-    }
-    const safeHeaders = Object.fromEntries(
-      Object.entries(req.headers).map(([k, v]) => [
-        k,
-        SENSITIVE.has(k.toLowerCase()) ? "<redacted>" : v,
-      ]),
-    );
-    const fwd = https.request(
-      {
-        method: req.method,
-        hostname: targetUrl.hostname,
-        port: targetUrl.port || 443,
-        path,
-        headers,
-      },
-      (up) => {
-        const rec = {
-          method: req.method,
-          url: req.url,
-          headers: safeHeaders,
-          body: body.toString("utf8"),
-          upstreamStatus: up.statusCode,
-        };
-        // record at response headers time: the entry exists before
-        // the gateway finishes relaying the stream to the client
-        fs.appendFileSync(logPath, JSON.stringify(rec) + "\n");
-        res.writeHead(up.statusCode, up.headers);
-        up.on("data", (c) => res.write(c));
-        up.on("end", () => res.end());
-      },
-    );
-    fwd.on("error", (err) => {
-      fs.appendFileSync(
-        logPath,
-        JSON.stringify({
-          method: req.method,
-          url: req.url,
-          headers: safeHeaders,
-          body: body.toString("utf8"),
-          upstreamStatus: 0,
-          error: String(err),
-        }) + "\n",
-      );
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.end("spy upstream error");
-    });
-    fwd.write(body);
-    fwd.end();
-  });
-});
-server.listen(Number(process.env.SPY_PORT), "127.0.0.1");
-SPY_EOF
-
 : > "$spy_log"
 spy_pid=""
 cleanup() {
@@ -231,7 +137,7 @@ trap cleanup EXIT
 key_value="${!key_env}"
 SPY_TARGET="$target" SPY_KEY="$key_value" SPY_KEY_HEADER="$key_header" \
   SPY_LOG="$spy_log" SPY_PORT="$spy_port" \
-  node "$spy_js" &
+  node -r ts-node/register/transpile-only "$spy_ts" &
 spy_pid=$!
 for i in $(seq 1 50); do
   if curl -sf -o /dev/null "http://127.0.0.1:$spy_port/__health" 2>/dev/null; then

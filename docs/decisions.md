@@ -9530,3 +9530,129 @@ owner added `USERPROFILE` next to `HOME` in the harness. Two causes:
   `docs/research/2026-11-24-conformance-run.shapes.md`,
   `docs/research/2026-11-23-conformance-run.md` (removed — superseded
   by the 11-24 run), and `docs/decisions.md` (this entry).
+
+**Fix round 3 — the four conformance-tooling defects the conductor's
+live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`):**
+
+- **`scripts/research/conformance-spy.ts` (new)** — the spy is no
+  longer a heredoc generated inside `scripts/research/conformance-live.sh`;
+  it is a testable module (`createSpyServer`) launched by
+  `node -r ts-node/register/transpile-only` with the same `SPY_*` env
+  contract. Three defect fixes live here: (1) every
+  `key=`/`api_key=`/`access_token=` query value is replaced by
+  `<redacted>` in BOTH logged paths (`url`, `upstreamPath`) and the log
+  is never written from the injected forwarding path — the conductor
+  found a real Gemini key in the log when the gateway sends `?key=`
+  (CCR's Gemini calls); (2) forwarding now prepends the target's base
+  path (`https://openrouter.ai/api` + `/v1/chat/completions` →
+  `/api/v1/chat/completions` — the generated spy dropped `/api` and
+  every OpenAI-upstream live cell 404'd); (3) the spy buffers each
+  upstream response and logs a shape-only summary
+  `response: {hasReasoning}` per exchange — the verdict's client-side
+  rule needs to know whether the upstream actually sent reasoning in
+  that turn, and response text is never logged. `http` targets are
+  supported too (offline test target).
+- **`tests/process/scenarios/client.ts`** — `upstreamResponseHasReasoning`
+  reads response bytes (SSE `data:` payloads or a non-streaming JSON
+  body) per the dialect's wire rules: Chat `reasoning` /
+  `reasoning_content` / `reasoning_details` on `delta` or `message`
+  choices; Gemini `thought: true` parts or `thoughtSignature`. New
+  `UpstreamExchange`/`upstreamRequestFrom` build the verdict's view of
+  one upstream exchange — parsed request body plus whether its
+  response carried reasoning, from the spy summary (live) or the
+  served replay file (mock, via `responseFile`). `sendTurn` takes
+  `UpstreamExchange[]`. `clientStreamHasReasoningBeforeText` now also
+  counts `tool_use` (Anthropic) / `function_call` and
+  `function_call_arguments.delta` (Responses) as payload the reasoning
+  must precede — with one documented position: Gemini attaches
+  `thoughtSignature` to the `functionCall` part itself
+  (https://ai.google.dev/gemini-api/docs/thinking), so a
+  signature-carrying thinking block immediately after the tool_use
+  whose signature it carries satisfies the rule; an unsigned or
+  non-adjacent block still fails.
+- **`tests/process/scenarios/types.ts`** — `UpstreamRequest` gains
+  `responseHadReasoning?: boolean` — the verdict's per-turn "did the
+  upstream send reasoning" input; undefined (e.g. no route matched)
+  means the turn's client-side check is n/a.
+- **`tests/process/mock-upstream.ts`** — `MockRoute.reply` gains
+  `missingBodyFile` (a replay not yet recorded answers a clear 502 —
+  never a different replay standing in); `RecordedRequest` gains
+  `responseFile` (the absolute path served — lets the verdict read
+  the upstream response bytes) and `response` (the live spy's
+  shape-only summary).
+- **`tests/process/conformance.process.test.ts`** — `routesFor`
+  splits Gemini's `:streamGenerateContent` (recorded SSE, still
+  byte-for-byte) from `:generateContent` (the recorded
+  `.nonstreaming.json` twin; missing → 502 "non-streaming replay not
+  recorded: <path>" with the recording command). Chat stays one
+  streaming route: the recorded upstream request bodies show every
+  gateway sends `stream: true` to Chat (probed ccr, babelgate and
+  free-claude-code mock runs — the same bodies the live spy records),
+  so no Chat twin is needed; if the conductor's spy logs show a
+  `"stream":false` caller the same `RECORD_TWINS_ONLY` top-up applies.
+  The live re-slice now uses `upstreamRequestFrom` so the spy's
+  `response.hasReasoning` reaches the verdict. A new offline
+  regression test (`mock upstream gemini route split`) asserts
+  `:streamGenerateContent` gets the committed `.sse` byte-for-byte
+  and `:generateContent` never gets SSE.
+- **`tests/process/scenarios/thinking-after-tool.ts` and
+  `tests/process/scenarios/multi-turn-reasoning.ts`** — the
+  client-side reasoning check now applies only when that turn's
+  upstream response carried reasoning (`responseHadReasoning ===
+  true`), per the owner-approved rule: a gateway can only be
+  required to surface reasoning the upstream actually sent (Gemini
+  does not return thought parts on every turn — the live run failed
+  babelgate itself on this). With none, the turn's check is n/a. The
+  rule text names the conditional and the tool-call-signature
+  position; the doc citations are unchanged. On the committed
+  replays the upstream does send reasoning, so babelgate is still
+  required to emit the block — same strictness as before.
+- **`scripts/record-streams.ts`** — new `RECORD_TWINS_ONLY=1` top-up
+  mode. `RECORD_OVERWRITE`'s default skip guards a case whose wire
+  file exists, so a missing `<case>.nonstreaming.json` could never be
+  added later without re-recording (and rewriting) the committed
+  `.sse`/`.json` — which the task forbids. Twins-only mode never calls
+  the stream endpoint and never touches `<case>.<ext>`/`.json`; it
+  writes only the missing twin (`RECORD_TWINS`/`RECORD_CASES` still
+  filter). Recording command for the two Gemini twins (run by the
+  conductor):
+  `npm run record:streams RECORD_OUT_DIR=tests/process/replays RECORD_PROVIDERS=gemini RECORD_CASES=thinking,thinking_tool_call RECORD_TWINS_ONLY=1`
+- **`tests/process/scenarios/client.test.ts` and
+  `scripts/record-streams.test.ts` and
+  `scripts/research/conformance-spy.test.ts` (new)** — the offline
+  coverage each fix required: redaction + forwarded injected key +
+  base-path + shape-only response summary against a 127.0.0.1
+  target (fake key `AIzaFAKE123`, `SPYSECRET-REALKEY-…` never in the
+  log); reasoning detection on the committed replays plus the new
+  ordering cases; twins-only writes the missing twin only.
+- **New mock findings:** the conditional client-side rule now fails
+  `ccr / multi-turn-reasoning:{anthropic,responses}->openai` and
+  `free-claude-code / thinking-after-tool:anthropic->openai` +
+  `multi-turn-reasoning:anthropic->openai` — the recorded upstream
+  did send reasoning and the client stream surfaced none (mock-only,
+  unconfirmed — each cell's `conformance-live.sh` command is in the
+  report's Live confirmation list). The four `ccr / *->gemini` cells
+  now fail `turn 1 status 502` — the recorded non-streaming twin is
+  pending until the conductor runs the command above; live mode is
+  unaffected (the spy forwards to the real provider).
+- **Pending replays (conductor records; committed files stay
+  byte-identical):**
+  `tests/process/replays/gemini/thinking.nonstreaming.json`
+  `tests/process/replays/gemini/thinking_tool_call.nonstreaming.json`
+- **Files outside the Files block (this round), one full path per
+  line:**
+  `scripts/research/conformance-spy.ts`
+  `scripts/research/conformance-spy.test.ts`
+  `scripts/record-streams.ts`
+  `scripts/record-streams.test.ts`
+  `tests/process/mock-upstream.ts`
+  `tests/process/scenarios/client.ts`
+  `tests/process/scenarios/client.test.ts`
+  `tests/process/scenarios/types.ts`
+  `tests/process/scenarios/thinking-after-tool.ts`
+  `tests/process/scenarios/multi-turn-reasoning.ts`
+  `tests/process/conformance.process.test.ts`
+  `scripts/research/conformance-live.sh`
+  `docs/research/2026-11-24-conformance-run.md`
+  `docs/research/2026-11-24-conformance-run.shapes.md`
+  `docs/decisions.md` (this entry)
