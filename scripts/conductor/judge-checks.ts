@@ -62,12 +62,14 @@ export function filesBlockPatterns(planText: string, task: string): string[] | n
   const fb = section.findIndex((l) => l.includes("**Files:**"));
   if (fb < 0) return null;
   const pats: string[] = [];
+  const fbLines = [section[fb]];
   for (const l of section.slice(fb + 1)) {
     if (l.startsWith("**") || l.startsWith("### ") || /^\s*-\s*\[/.test(l)) break;
     if (!/^\s*-/.test(l) && !/^\s+\S/.test(l)) {
       if (l.trim() === "") continue;
       break;
     }
+    fbLines.push(l);
     // Plans write later entries on a line by bare name, after a full path
     // in the same directory ("`src/config/gateway.schema.ts`, `yaml-config.ts`"),
     // and mix in bare repo-root files ("`scripts/check.sh`, `package.json`,
@@ -94,6 +96,14 @@ export function filesBlockPatterns(planText: string, task: string): string[] | n
       }
     }
   }
+  // "tests beside each" in the Files block: every listed `X.ts` also
+  // allows `X.test.ts` in the same directory (v1.6 Task 13e —
+  // src/config/env-config.test.ts was a false FLAG on #183). Only the
+  // derived sibling tests are added; nothing else is widened.
+  if (/tests beside each/i.test(fbLines.join("\n")))
+    for (const p of [...pats])
+      if (p.endsWith(".ts") && !p.endsWith(".test.ts"))
+        pats.push(`${p.slice(0, -".ts".length)}.test.ts`);
   return pats.length ? pats : null;
 }
 

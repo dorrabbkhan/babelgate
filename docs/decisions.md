@@ -9843,3 +9843,34 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   whose result is `differs`).
 - **Files outside the Files block:** none — every file named above
   is in the task's Files block.
+
+## v1.6 Task 13e — judge.sh "tests beside each"; PATH guard for hook and scripts (conductor tooling)
+
+- **`filesBlockPatterns` (`scripts/conductor/judge-checks.ts`):** when the
+  task's `**Files:**` block contains the phrase "tests beside each"
+  (case-insensitive), every listed `X.ts` also allows `X.test.ts` in the
+  same directory — only the derived sibling tests are added, nothing
+  else is widened. Fixes the false FLAG on `src/config/env-config.test.ts`
+  by `judge.sh 183 v1.6 13c` (PR #183), reproduced as the seeded test
+  `"tests beside each allows the sibling test file"`.
+- **PATH guard (`scripts/conductor/app-env.sh`):** before `bin/` is
+  prepended, each PATH entry that exists but can't be listed is dropped —
+  `ls` fails with an error other than ENOENT ("No such file or
+  directory"). That covers a stale mount's ENOTCONN (the reported
+  `/tmp/.mount_t3_*` case, where `-e` alone can't tell "missing" from
+  "can't stat") and an unreadable dir's EACCES; entries that don't exist
+  are left alone because env's execvp skips ENOENT itself. `dirname` and
+  the filtering `ls` run on a fixed `PATH=/usr/bin:/bin` so the guard
+  works when the incoming PATH is already poisoned.
+- **`scripts/conductor/session-env.sh`:** captures the session's PATH,
+  runs its own commands on `/usr/bin:/bin`, and writes the filtered PATH
+  `app-env.sh` produces (`bin/` first, unlistable entries gone) to
+  `$CLAUDE_ENV_FILE` as `export PATH=<path>` escaped with `printf %q`, so
+  the session's commands use the working PATH too.
+- **`.claude/settings.json`:** the SessionStart hook command becomes
+  `bash "$CLAUDE_PROJECT_DIR"/scripts/conductor/session-env.sh`, so the
+  hook runs even when `/usr/bin/env` can't resolve `bash` through the
+  poisoned PATH (the failure that left `CONDUCTOR_ACTOR` unset). No other
+  settings change.
+- **Files outside the Files block:** none — every file named above is in
+  the task's Files block.
