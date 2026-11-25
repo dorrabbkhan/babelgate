@@ -103,6 +103,9 @@ h2{font-family:Georgia,serif;font-weight:400;font-size:36px;text-align:center;ma
    section or the page */
 .tscroll{overflow-x:auto}
 .scrollhint{display:none}
+/* ≤760px the hand-verified rows leave the table (they would be clipped
+   inside the scroll wrapper) and render in this block instead. */
+.handlist{display:none}
 table{width:100%;border-collapse:separate;border-spacing:0;font-size:15px;background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden}
 th,td{padding:14px 16px;text-align:center;border-bottom:1px solid var(--line)}
 th{font-weight:500;color:var(--muted);font-size:13px;background:#faf9f6}
@@ -145,6 +148,12 @@ footer a:hover{color:var(--ink)}
   th,td{padding:10px 8px;font-size:13px}
   table{min-width:620px}
   .scrollhint{display:block;text-align:center;font-size:12px;color:var(--muted);margin-top:8px}
+  tr.hand{display:none}
+  .handlist{display:block;margin-top:10px;border:1px solid var(--line);border-radius:14px;background:#fbfaf7;overflow:hidden}
+  .handrow{padding:10px 14px;border-bottom:1px solid var(--line);font-size:13.5px;color:var(--muted);text-align:left;line-height:1.45}
+  .handrow:last-child{border-bottom:0}
+  .handrow b{display:block;font-weight:600;color:var(--ink);font-size:15px}
+  .handrow a{color:var(--muted);text-decoration:underline}
 }
 
 /* prefers-reduced-motion → the still page: CSS animations complete

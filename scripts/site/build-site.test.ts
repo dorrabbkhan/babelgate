@@ -256,6 +256,42 @@ describe("build-site", () => {
     expect(html).toMatch(/<div class="tscroll">\s*<table>/);
   });
 
+  it("mobile overflow guards: hand-verified rows leave the table ≤760px", () => {
+    const css = readFileSync(join(ROOT, "site", "style.css"), "utf8");
+    // A colspan cell is as wide as the 620px table, so its text is
+    // clipped inside the scroll wrapper (#193 round 2): at ≤760px the
+    // rows render in a .handlist block below the table instead.
+    const mobile = css.slice(
+      css.indexOf("@media (max-width:760px)"),
+      css.indexOf("prefers-reduced-motion"),
+    );
+    expect(mobile).toMatch(/tr\.hand\{display:none\}/);
+    expect(mobile).toMatch(/\.handlist\{display:block/);
+    // Desktop keeps the rows inside the table; the block stays hidden.
+    expect(css).toMatch(/\.handlist\{display:none\}/);
+    const f = makeFixture();
+    writeMatrix(f, {
+      plain: { anthropic: fullRow() },
+      stream: { anthropic: fullRow() },
+      tools: { anthropic: fullRow() },
+      stream_tools: { anthropic: fullRow() },
+    });
+    writeCompat(f);
+    writeFileSync(
+      join(f.recipes, "open-webui.md"),
+      "# Recipe: Open WebUI on any backend through babelgate\n\n" +
+        "> **Verified:** Open WebUI v9.9.9 through `babelgate --provider x`,\n" +
+        "> 2026-11-24 — chat and one tool call.\n",
+    );
+    const html = build(f);
+    expect(html).toMatch(/<\/table>\s*<\/div>\s*<div class="handlist">/);
+    const row = html.split("\n").find((l) => l.includes('class="handrow"'));
+    expect(row).toBeDefined();
+    expect(row).toContain("<b>Open WebUI</b>");
+    expect(row).toContain('class="hv"');
+    expect(row).toContain("verified by hand on v9.9.9");
+  });
+
   it("reduced-motion rule present", () => {
     const css = readFileSync(join(ROOT, "site", "style.css"), "utf8");
     expect(css).toContain("prefers-reduced-motion");

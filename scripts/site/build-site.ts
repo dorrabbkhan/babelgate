@@ -342,22 +342,33 @@ function renderBlock(
     const note = row.note ? ` <small>${esc(row.note)}</small>` : "";
     lines.push(`    <tr><td>${esc(row.name)}${note}</td>${cellsHtml}</tr>`);
   });
+  const handBlocks: string[] = [];
   for (const r of recipes) {
     if (emitted.some((row) => row.name.toLowerCase() === r.name.toLowerCase())) {
       continue;
     }
     const when = r.date ? ` · ${esc(r.date)}` : "";
     const recipe = `${REPO}/blob/main/docs/recipes/${r.file}`;
+    const text =
+      `verified by hand on ${esc(r.version)}${when} — ` +
+      `<a href="${recipe}">recipe</a>`;
     lines.push(
       `    <tr class="hand"><td>${esc(r.name)}</td>` +
-        `<td colspan="${targets.length}">verified by hand on ` +
-        `${esc(r.version)}${when} — <a href="${recipe}">recipe</a></td></tr>`,
+        `<td colspan="${targets.length}">${text}</td></tr>`,
+    );
+    // ≤760px the table scrolls inside .tscroll and a colspan cell's text
+    // sits off-screen; this block repeats the rows below the table
+    // (style.css hides tr.hand and shows .handlist only there).
+    handBlocks.push(
+      `  <div class="handrow"><b>${esc(r.name)}</b>` +
+        `<span class="hv">${text}</span></div>`,
     );
   }
+  lines.push("  </tbody>", "</table>", "</div>");
+  if (handBlocks.length > 0) {
+    lines.push('<div class="handlist">', ...handBlocks, "</div>");
+  }
   lines.push(
-    "  </tbody>",
-    "</table>",
-    "</div>",
     '<div class="scrollhint" aria-hidden="true">scroll for all providers →</div>',
     `<div class="live"><i></i><span>${liveLine(replay)}</span></div>`,
   );
