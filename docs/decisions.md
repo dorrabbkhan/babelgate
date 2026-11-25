@@ -10117,3 +10117,124 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   `vitest` run wiped `.out/`) is treated as absent and the committed
   `docs/compatibility.md` drives the table — the Pages job always takes
   that path since it does not run the pair tests.
+
+## v1.6 Task 17 — live cases; gates E and F (spec §4) · OWNER REVIEW
+
+- **Forced-429 breaker case** (`tests/live/gateway.live.test.ts`): a
+  local `node:http` stub on `127.0.0.1:0` answers 429 to every
+  request — the rate limit is forced deterministically, never
+  borrowed from a provider. `circuit_breaker: {failures: 1,
+  cooldown_ms: 60000}` opens `limited` after its first eligible
+  failure. The case asserts the exact state change:
+  `/ui/api/routing` reports `limited` `open` with
+  `consecutiveFailures: 1` and `ollama` `closed`, and the next
+  request is served by the `ollama` fallback
+  (`x-babelgate-provider: ollama`, `x-babelgate-attempts: 1` — the
+  skipped_open hop is not an attempt) with no new stub hit. Verified
+  end-to-end offline against a stub Ollama (`/api/tags` +
+  `/api/chat`): PASS (317 ms).
+- **Free/cheap preset cases**: derived from `PROVIDER_PRESETS` at
+  load — `tier` free or cheap, `api_key_env` present, `suggested`
+  non-empty (today: openrouter-free, gemini-free, nvidia-nim,
+  cerebras, deepseek). Each preset's describe registers only when
+  its key env var is set — the file's `if (process.env.X)` pattern,
+  plus the `live suite: skipping …` log line; no skip APIs. The
+  request uses the preset's own `suggested` model — never a
+  hard-coded copy — in the client dialect that entry was proven for
+  on the Task 8 edit task (`claude-code` → `/v1/messages`, `codex` →
+  `/v1/responses` with `store: false`, `openai-apps` →
+  `/v1/chat/completions`), routed through a yaml `preset:` provider
+  entry so the preset fills type/base_url/api_key_env/gaps itself.
+  `groq` gets no case — its candidates failed the Task 8 edit task,
+  so it has no `suggested`. Assertions are the 200 status, the
+  `x-babelgate-provider` name and the source-dialect shape only —
+  no prompt or completion text is asserted or printed.
+- **`scripts/gates/first-run.sh <install-cmd> <preset> <client>`**
+  (gate F): runs the install one-liner under a fresh `mktemp -d`
+  HOME (with `$HOME/.local/bin` on PATH so install.sh's default
+  target is found), derives the preset's key env var *name* from the
+  installed product's own `babelgate presets` output (the value is
+  never printed), starts `babelgate --preset <client> --provider
+  <preset>` on a free port, then applies the printed client
+  instructions as a stranger would: the `export ANTHROPIC_*` lines
+  become the claude run's env, the printed config.toml block is
+  written verbatim to `$HOME/.codex/config.toml` plus the
+  `approval_policy`/`sandbox_mode` keys codex-edit.sh uses (the
+  non-interactive equivalent of a user's approval; top-level keys,
+  inserted before the first `[table]`). `setup_seconds` is measured
+  on `process.hrtime.bigint()` (monotonic and system-wide —
+  CLOCK_MONOTONIC on Linux, mach_absolute_time on macOS — so the
+  separate `node -e` calls share an epoch; per-process
+  `performance.now()` would read ~0 on every call, and `date +%s`
+  is a wall clock that can jump) from the install's start to
+  exports applied + `/health` green; the edit task itself is
+  untimed. Every exit path
+  prints exactly one `FIRST_RUN setup_seconds=<n> client=<client>
+  preset=<preset> result=<PASS|FAIL>` line. `--docker` re-executes
+  the script inside `docker run --rm node:24` with the repo mounted
+  and the client CLI npm-installed first (untimed prep); every
+  `*_API_KEY` and the proxy vars are forwarded by name. `--dry-run`
+  / `FIRST_RUN_DRY_RUN=1` prints the plan offline. ShellCheck
+  0.10.0 clean.
+- **Reuse, not duplication**: the proven gate scripts
+  (`claude-code-edit.sh`, `codex-edit.sh`) could not be invoked —
+  each owns its own proxy lifecycle. What is reused is their
+  fixture (`scripts/gates/fixtures/edit-task`), their client
+  invocations and env vars verbatim (claude `-p` + `--allowedTools`,
+  `codex exec --skip-git-repo-check` + scratch CODEX_HOME +
+  `CODEX_TIMEOUT_S`), and their verdict (the fixture's own
+  `npm test`).
+- **Gate E evidence** (spec §4): offline half on this branch — all
+  eight D7 tests in `scripts/gates/shape-diff.test.ts` pass: the
+  seeded wire changes `"pr142 schema-only diff exits 0"`, `"pr149
+  schema-only diff exits 0"` and `"schema root removed is reported,
+  exit 0"` show schema contents are ignored, while `"new tool name
+  still fails"`, `"new content block type still fails"`, `"new SSE
+  event type still fails"`, `"new top-level key still fails"` and
+  `"new key inside a known block still fails"` prove real wire
+  changes still exit 1. Replay half: scheduled Live run
+  45229829599 (2026-11-23, main bfb7f63, which contains D7
+  c9c905b), job `client-replay` success: Claude Code 2.1.330 edit
+  gate PASS, recorded run PASS, shape diff 0 added / 11 removed;
+  Codex 0.171.0 edit gate PASS, recorded run PASS, shape diff 0
+  added / 0 removed. npm latest on 2026-11-25 is Claude Code
+  2.1.332 / Codex 0.172.0; the next Monday replay (2026-11-30)
+  covers them. Both clients also passed gate F's edit task above
+  on those newer releases.
+- **Gate F results** (spec §4 — first run from scratch, install +
+  client pointed at babelgate under a minute; `first-run.sh` is the
+  driver on every leg):
+
+  | machine | client | preset | install cmd | setup_seconds | result |
+  |---|---|---|---|---|---|
+  | Linux container (node:24) | claude-code | openrouter-free | `npm install -g ./babelgate-1.5.1.tgz` (npm pack of PR head 6907343; v1.6 binaries not yet published) | 4 | PASS |
+  | Linux container (node:24) | codex | openrouter-free | `npm install -g ./babelgate-1.5.1.tgz` (npm pack of PR head 6907343; v1.6 binaries not yet published) | 5 | PASS |
+  | macOS | claude-code | per available keys | per run | PENDING (owner: macOS) | PENDING (owner: macOS) |
+  | macOS | codex | per available keys | per run | PENDING (owner: macOS) | PENDING (owner: macOS) |
+  | Windows | claude-code | per available keys | per run | PENDING (owner: Windows) | PENDING (owner: Windows) |
+  | Windows | codex | per available keys | per run | PENDING (owner: Windows) | PENDING (owner: Windows) |
+
+  Linux leg run by the conductor on 2026-11-25 with
+  `scripts/gates/first-run.sh --docker "npm install -g ./babelgate-1.5.1.tgz" openrouter-free <client>`;
+  clients Claude Code 2.1.332 and Codex 0.172.0 (npm latest that
+  day); whole container run incl. image start and client install:
+  34 s (claude-code), 73 s (codex). The edit-task fixture fails
+  unedited (`sum` returns a - b), so PASS means the client fixed
+  it through babelgate. Gate F's release form (install.sh on the
+  published v1.6.0 binary) is re-run at gate G.
+
+  Windows: first-run.sh is bash; run it from Git Bash or WSL.
+
+- **Files outside the Files block:** `scripts/gates/first-run.test.ts`
+  — offline coverage of `--dry-run` (both clients' plan output, the
+  docker re-exec command, sentinel key value never echoed), argument
+  validation and `bash -n`/shellcheck hygiene; a small vitest test
+  beside the script like the other `scripts/gates/*.test.ts`.
+- **Live/network steps** — the `first-run.sh` Linux container leg
+  is done (see the Gate F table). `npm run test:live` with
+  provider keys (the new preset cases and the forced-429 case
+  against a real Ollama fallback) is PENDING (owner): the
+  conductor's session was not permitted to run it. The owner legs
+  on macOS and Windows also remain. The Devin sandbox had no
+  Docker or client CLIs and no working network to providers;
+  offline evidence above.
