@@ -36,9 +36,12 @@
 # stranger who has it. Every *_API_KEY env var is forwarded by name.
 #
 # FIRST_RUN setup_seconds is measured on a monotonic clock
-# (performance.now()): from the install command's start to the
-# printed exports/config applied and babelgate healthy. The edit
-# task runs untimed — gate F's minute is setup time.
+# (process.hrtime.bigint() — CLOCK_MONOTONIC on Linux,
+# mach_absolute_time on macOS, both system-wide so every
+# `node -e` call below reads the same clock): from the install
+# command's start to the printed exports/config applied and
+# babelgate healthy. The edit task runs untimed — gate F's
+# minute is setup time.
 #
 # --dry-run / FIRST_RUN_DRY_RUN=1 prints the commands it would run
 # and exits 0 — offline-safe; scripts/gates/first-run.test.ts
@@ -78,10 +81,14 @@ case "$client" in
   *) usage; exit 2 ;;
 esac
 
-# A monotonic millisecond clock (performance.now() — immune to
-# wall-clock adjustments, unlike `date +%s`).
+# A monotonic millisecond clock shared across processes —
+# process.hrtime.bigint() (CLOCK_MONOTONIC on Linux,
+# mach_absolute_time on macOS): each `node -e` is a fresh
+# process, so per-process performance.now() would start near 0
+# every call. Immune to wall-clock adjustments, unlike
+# `date +%s`.
 now_ms() {
-  node -e 'process.stdout.write(String(Math.round(performance.now())))'
+  node -e 'process.stdout.write(String(process.hrtime.bigint() / 1000000n))'
 }
 
 # The one FIRST_RUN line every path ends on. setup_seconds is frozen
@@ -198,7 +205,7 @@ command -v "${bg_cmd[0]}" >/dev/null 2>&1 ||
 # 3. The preset's key env var name, from the installed product's own
 #    `presets` output ("key env NAME" / "keyless") — never the value.
 key_env="$("${bg_cmd[@]}" presets 2>/dev/null \
-  | sed -n "s/^${preset} (tier [a-z]*, key env \([A-Za-z_][A-Za-z0-9_]*\)).*/\1/p" \
+  | sed -n "s/^${preset} (tier [a-z]*, key env \([A-Za-z_][A-Za-z0-9_]*\).*/\1/p" \
   || true)"
 if [ -n "$key_env" ] && [ -z "${!key_env:-}" ]; then
   fail "$key_env is not set (preset $preset reads its key from it)"

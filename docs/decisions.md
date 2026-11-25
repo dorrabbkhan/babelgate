@@ -10162,9 +10162,13 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   `approval_policy`/`sandbox_mode` keys codex-edit.sh uses (the
   non-interactive equivalent of a user's approval; top-level keys,
   inserted before the first `[table]`). `setup_seconds` is measured
-  on `performance.now()` (monotonic — `date +%s` is a wall clock
-  that can jump) from the install's start to exports applied +
-  `/health` green; the edit task itself is untimed. Every exit path
+  on `process.hrtime.bigint()` (monotonic and system-wide —
+  CLOCK_MONOTONIC on Linux, mach_absolute_time on macOS — so the
+  separate `node -e` calls share an epoch; per-process
+  `performance.now()` would read ~0 on every call, and `date +%s`
+  is a wall clock that can jump) from the install's start to
+  exports applied + `/health` green; the edit task itself is
+  untimed. Every exit path
   prints exactly one `FIRST_RUN setup_seconds=<n> client=<client>
   preset=<preset> result=<PASS|FAIL>` line. `--docker` re-executes
   the script inside `docker run --rm node:24` with the repo mounted
