@@ -240,6 +240,22 @@ describe("build-site", () => {
     }
   });
 
+  it("mobile overflow guards: install scrolls inside, table has own wrapper", () => {
+    const css = readFileSync(join(ROOT, "site", "style.css"), "utf8");
+    // #193: the command span must be able to shrink inside .install and
+    // scroll horizontally — a long command never widens the page.
+    expect(css).toMatch(/\.cmd\{[^}]*min-width:0[^}]*overflow-x:auto/);
+    // #193: the proof table scrolls inside its own wrapper, not the
+    // section or the page.
+    expect(css).toMatch(/\.tscroll\{[^}]*overflow-x:auto/);
+    expect(css).not.toMatch(/section\.proof\{[^}]*overflow-x/);
+    const f = makeFixture();
+    writeCompat(f);
+    const html = build(f);
+    expect(html).toContain('<div class="tscroll">');
+    expect(html).toMatch(/<div class="tscroll">\s*<table>/);
+  });
+
   it("reduced-motion rule present", () => {
     const css = readFileSync(join(ROOT, "site", "style.css"), "utf8");
     expect(css).toContain("prefers-reduced-motion");

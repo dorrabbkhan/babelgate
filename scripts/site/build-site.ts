@@ -321,6 +321,7 @@ function renderBlock(
 ): string {
   const targets = collectTargets(cells);
   const lines: string[] = [
+    '<div class="tscroll">',
     "<table>",
     `  <thead><tr><th></th>${targets
       .map((t) => `<th>${esc(TARGET_LABELS[t] ?? t)}</th>`)
@@ -356,6 +357,8 @@ function renderBlock(
   lines.push(
     "  </tbody>",
     "</table>",
+    "</div>",
+    '<div class="scrollhint" aria-hidden="true">scroll for all providers →</div>',
     `<div class="live"><i></i><span>${liveLine(replay)}</span></div>`,
   );
   return lines.join("\n");
