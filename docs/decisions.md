@@ -10065,3 +10065,55 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   texts with file links, because no open issues exist to label; the
   FUNDING patch adds `.github/FUNDING.yml` with `github:
   [dorrabbkhan]` only — enabling Sponsors stays the owner's act.
+## v1.6 Task 16 — landing page (spec §3.8, D8, `docs/assets/landing-mockup-v2.html`)
+
+- **The table's check rule:** a client×provider cell earns `✓` when the
+  four core features (`plain`, `stream`, `tools`, `stream_tools`) all
+  record `pass` or `note` in the matrix — the everyday-chat claim the
+  page makes; structured output, reasoning and media stay one click
+  away in `docs/compatibility.md`, which the page names in the table
+  caption and links. Rows are client dialects from the matrix
+  (`anthropic`→Claude Code, `responses`→Codex, `openai`→OpenAI-format
+  apps, `gemini`→Gemini-format apps, `ollama`→Ollama apps); a source
+  with no recorded cell gets no row, and a source unknown to the label
+  map renders under its own id — "clients with matrix data only".
+  Column headers are the provider dialect names (`OpenAI`, `Gemini`,
+  `Ollama`, `Anthropic`, `Responses`), so OpenRouter/DeepSeek are not
+  claimed as separately-tested targets — the caption says they ride the
+  OpenAI column.
+- **"Last checked" sources:** no committed file carries the latest
+  replayed client versions, so `scripts/site/build-site.ts` reads the
+  client-replay `summary.md` + a `run.json` (`{url, date}`) from
+  `tmp/client-replay/` — the Pages workflow patch downloads the most
+  recent green `live.yml` run's `client-replay-<id>` artifact into
+  that path. Absent either (a plain checkout), the line degrades to
+  "checked automatically on every change" plus the replay link parsed
+  from the `docs/compatibility.md` header — nothing is ever typed by
+  hand. Verified locally against the real run-45229829599 artifact:
+  `Claude Code 2.1.330 · Codex 0.171.0 · 23 Nov 2026`.
+- **Recipe-only clients** are discovered, not listed: any
+  `docs/recipes/*.md` with a `# Recipe: <Name> on` title and a `>
+  **Verified:**` header blockquote earns a "verified by hand on
+  <version> · <date>" row linking the recipe (first `\d+.\d+` token =
+  version, first `YYYY-MM-DD` = date). Today: Open WebUI v0.13.4,
+  Continue 1.5.47, Aider 0.86.2. Cursor is omitted — its header says
+  "Not verified end to end". A verified client already present as a
+  matrix row is skipped.
+- **Mockup deviations (content, not look):** spec §3.8's required
+  content adds two blocks the mockup lacks — a numbered "free first
+  run" strip under the install tabs and the `docs/assets/demo.gif`
+  demo section (copied into `dist-site/` at build, no external
+  request). The "Copied ✓" button label lost its `✓` so the only
+  check marks in the file are the generated table cells (the named
+  test pins this). `og:image`/`og:url` use the Pages URL named in the
+  spec (`dorrabbkhan.github.io/babelgate`). `site/og.png` is a
+  1200×630 Playwright screenshot of the built page.
+- **Files outside the Files block:** `.gitignore` — added `/dist-site/`
+  beside `/dist/`/`/dist-bin/`/`/dist-packaging/` so the local build
+  output can't dirty the tree (the Pages job writes there too).
+- **Cell-order detail:** check-pop delays compute to fixed 2.80–3.92 s
+  values at build time; recipe rows carry no animation. An emptied
+  `tests/matrix/.out/matrix.json` (`cells: {}`, e.g. after a partial
+  `vitest` run wiped `.out/`) is treated as absent and the committed
+  `docs/compatibility.md` drives the table — the Pages job always takes
+  that path since it does not run the pair tests.

@@ -4,6 +4,8 @@
 /dist-bin/
 # Rendered packaging manifests (scripts/packaging/render.ts, v1.6)
 /dist-packaging/
+# Built landing site (scripts/site/build-site.ts, v1.6)
+/dist-site/
 *.js
 # Keep TypeScript declaration files if you publish a package
 !/src/**/*.d.ts
