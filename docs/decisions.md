@@ -10192,30 +10192,49 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   still fails"`, `"new content block type still fails"`, `"new SSE
   event type still fails"`, `"new top-level key still fails"` and
   `"new key inside a known block still fails"` prove real wire
-  changes still exit 1. **PENDING (conductor)**: the latest
-  scheduled client-replay run green on current Claude Code and
-  Codex with the D7 diff.
+  changes still exit 1. Replay half: scheduled Live run
+  45229829599 (2026-11-23, main bfb7f63, which contains D7
+  c9c905b), job `client-replay` success: Claude Code 2.1.330 edit
+  gate PASS, recorded run PASS, shape diff 0 added / 11 removed;
+  Codex 0.171.0 edit gate PASS, recorded run PASS, shape diff 0
+  added / 0 removed. npm latest on 2026-11-25 is Claude Code
+  2.1.332 / Codex 0.172.0; the next Monday replay (2026-11-30)
+  covers them. Both clients also passed gate F's edit task above
+  on those newer releases.
 - **Gate F results** (spec §4 — first run from scratch, install +
   client pointed at babelgate under a minute; `first-run.sh` is the
   driver on every leg):
 
   | machine | client | preset | install cmd | setup_seconds | result |
   |---|---|---|---|---|---|
-  | Linux container (node:24) | claude-code | per conductor's keys (openrouter-free or gemini-free) | per run | PENDING (conductor) | PENDING (conductor) |
-  | Linux container (node:24) | codex | per conductor's keys | per run | PENDING (conductor) | PENDING (conductor) |
+  | Linux container (node:24) | claude-code | openrouter-free | `npm install -g ./babelgate-1.5.1.tgz` (npm pack of PR head 6907343; v1.6 binaries not yet published) | 4 | PASS |
+  | Linux container (node:24) | codex | openrouter-free | `npm install -g ./babelgate-1.5.1.tgz` (npm pack of PR head 6907343; v1.6 binaries not yet published) | 5 | PASS |
   | macOS | claude-code | per available keys | per run | PENDING (owner: macOS) | PENDING (owner: macOS) |
   | macOS | codex | per available keys | per run | PENDING (owner: macOS) | PENDING (owner: macOS) |
   | Windows | claude-code | per available keys | per run | PENDING (owner: Windows) | PENDING (owner: Windows) |
   | Windows | codex | per available keys | per run | PENDING (owner: Windows) | PENDING (owner: Windows) |
+
+  Linux leg run by the conductor on 2026-11-25 with
+  `scripts/gates/first-run.sh --docker "npm install -g ./babelgate-1.5.1.tgz" openrouter-free <client>`;
+  clients Claude Code 2.1.332 and Codex 0.172.0 (npm latest that
+  day); whole container run incl. image start and client install:
+  34 s (claude-code), 73 s (codex). The edit-task fixture fails
+  unedited (`sum` returns a - b), so PASS means the client fixed
+  it through babelgate. Gate F's release form (install.sh on the
+  published v1.6.0 binary) is re-run at gate G.
+
+  Windows: first-run.sh is bash; run it from Git Bash or WSL.
 
 - **Files outside the Files block:** `scripts/gates/first-run.test.ts`
   — offline coverage of `--dry-run` (both clients' plan output, the
   docker re-exec command, sentinel key value never echoed), argument
   validation and `bash -n`/shellcheck hygiene; a small vitest test
   beside the script like the other `scripts/gates/*.test.ts`.
-- **Live/network steps: run by the conductor** — `npm run
-  test:live` with provider keys (the new preset cases and the
-  forced-429 case against a real Ollama fallback), the `first-run.sh`
-  Linux container leg, and the owner legs on macOS and Windows. The
-  Devin sandbox had no provider keys, no Docker and no client CLIs;
+- **Live/network steps** — the `first-run.sh` Linux container leg
+  is done (see the Gate F table). `npm run test:live` with
+  provider keys (the new preset cases and the forced-429 case
+  against a real Ollama fallback) is PENDING (owner): the
+  conductor's session was not permitted to run it. The owner legs
+  on macOS and Windows also remain. The Devin sandbox had no
+  Docker or client CLIs and no working network to providers;
   offline evidence above.
