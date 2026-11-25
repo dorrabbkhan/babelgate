@@ -102,7 +102,16 @@ function Row({ row }: { row: RequestRow }) {
       <td class={`status-${row.status}`}>{row.status}</td>
       <td>{fmtTokens(row)}</td>
       <td>{fmtCache(row)}</td>
-      <td>{fmtCost(row)}</td>
+      <td>
+        {fmtCost(row)}
+        {/* §3.5: a response-cache replay priced $0 says so. */}
+        {row.cacheHit === true && (
+          <>
+            {" "}
+            <span class="badge">cache hit</span>
+          </>
+        )}
+      </td>
       <td>{row.totalMs}</td>
       <td>
         {row.diagnostics.length > 0 && (

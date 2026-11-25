@@ -294,11 +294,20 @@ describe("response cache in the chat services", () => {
       for await (const chunk of result!.stream!.chunks) out.push(chunk);
       return out;
     };
-    const first = await collect("r1");
-    const second = await collect("r2");
-    expect(mockPostStream).toHaveBeenCalledTimes(1);
-    expect(first.length).toBeGreaterThan(0);
-    expect(second).toEqual(first);
+    // The stream encoder stamps `created` from Date.now() once per
+    // response; the two collects straddling a second boundary made the
+    // chunk payloads differ by that one field (CI flake). Freeze the
+    // clock so the comparison stays chunk-for-chunk exact.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      const first = await collect("r1");
+      const second = await collect("r2");
+      expect(mockPostStream).toHaveBeenCalledTimes(1);
+      expect(first.length).toBeGreaterThan(0);
+      expect(second).toEqual(first);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("cache hit row has cache_hit 1 and cost 0", async () => {

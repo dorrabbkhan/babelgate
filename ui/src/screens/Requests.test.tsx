@@ -228,4 +228,34 @@ describe("Requests screen", () => {
       "pass-through",
     );
   });
+
+  it("request row shows cache hit badge", async () => {
+    listMock.mockResolvedValue({
+      rows: [
+        makeRow({ cacheHit: true, costUsd: 0 }),
+        makeRow({ id: "r2", client: "codex" }),
+      ],
+    });
+    await act(async () => {
+      render(<Requests />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const rows = container.querySelectorAll("tbody tr");
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain("cache hit");
+    expect(rows[1].textContent).not.toContain("cache hit");
+
+    // a live finished cache-hit row gets the badge too
+    await act(async () => {
+      live.onFinished?.(
+        makeRow({ id: "r3", client: "codex", cacheHit: true, costUsd: 0 }),
+      );
+    });
+    expect(container.querySelector("tbody tr")!.textContent).toContain(
+      "cache hit",
+    );
+  });
 });

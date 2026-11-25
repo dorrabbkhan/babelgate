@@ -167,6 +167,48 @@ describe("GET /ui/api/routing", () => {
     expect(text).not.toContain("apiKey");
     expect(text).not.toContain("api_key_env");
   });
+
+  it("a tier:free preset route carries freeTier, not a price", async () => {
+    // A separate yaml keeps the provider-list assertion above exact;
+    // the preset's api_key_env is overridden with the test key.
+    writeFileSync(
+      TMP_CONFIG,
+      `default: free
+providers:
+  free:
+    preset: openrouter-free
+    api_key_env: FAKE_UI_KEY_ENV
+aliases:
+  cheap: free/deepseek/deepseek-v4.1-flash:free
+`,
+    );
+    resetConfig();
+
+    const res = await request(app).get("/ui/api/routing").set(UI);
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+
+    const prices = res.body.prices as {
+      target: string;
+      price?: unknown;
+      source?: string;
+      freeTier?: { preset: string; docs: string; verified: string };
+    }[];
+    const byTarget = Object.fromEntries(
+      prices.map((p) => [p.target, p]),
+    );
+    // v1.6 §3.3: the label comes from the preset — the route reads
+    // "$0 (free tier, per <preset> docs on <verified>)" in the UI.
+    expect(byTarget["free/deepseek/deepseek-v4.1-flash:free"]).toEqual({
+      target: "free/deepseek/deepseek-v4.1-flash:free",
+      freeTier: {
+        preset: "openrouter-free",
+        docs: "https://openrouter.ai/docs/quickstart",
+        verified: "2026-11-22",
+      },
+    });
+    // §3.5: breaker state ships in the same payload ([] pre-traffic).
+    expect(res.body.breakers).toEqual([]);
+  });
 });
 
 describe("GET /ui/api/routing/plan", () => {
