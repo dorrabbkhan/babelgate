@@ -18,7 +18,7 @@ from the project's own docs or repository · *not verified* — a
 secondary source claims it but we did not re-verify against a primary
 source. Competitor columns were checked against each project's own
 documentation **as of 2026-11-19**; babelgate's column reflects `main`
-at v1.5 and every ✓ names the file or test that backs it. This table
+at v1.6 and every ✓ names the file or test that backs it. This table
 can go stale — dates and sources are below.
 
 | Feature | babelgate | LiteLLM (as of 2026-11-19) | Bifrost (as of 2026-11-19) | claude-code-router (as of 2026-11-19) | OpenRouter (as of 2026-11-19) | Cloudflare AI Gateway (as of 2026-11-19) |
@@ -35,15 +35,15 @@ can go stale — dates and sources are below.
 | Inbound client formats | ✓ five: OpenAI Chat, Anthropic, Gemini, Ollama, Responses | ✓ OpenAI, Anthropic, Google (+ SDK pass-throughs) | ✓ OpenAI, Anthropic, Google GenAI | ◐ agent-facing endpoints (Anthropic for Claude Code, Responses for Codex) | ✓ Chat Completions, Responses, Anthropic Messages | ◐ OpenAI-compat endpoint plus per-provider native endpoints |
 | Streaming + tool calls translated | ✓ — every pair, contract-tested | ✓ | ✓ | ✓ | ✓ | ◐ provider-native endpoints; the compat endpoint translates |
 | Routing, aliases, fallbacks | ✓ | ✓ | ✓ | ✓ | ✓ `models` array, `provider` routing, `fallbacks` | ✓ incl. dynamic routes |
-| Load balancing / health / circuit breaker | planned (v1.6) | ✓ | ✓ | ◐ credential pools, key rotation, ordered fallback | ✓ automatic provider fallback | ✓ |
-| Cache | planned (v1.6, opt-in exact-match) | ✓ | ✓ semantic cache | not documented | ◐ provider prompt-caching passthrough with sticky routing | ✓ |
+| Load balancing / health / circuit breaker | ◐ per-provider in-memory breaker (v1.6) — `src/routing/circuit-breaker.ts`, `circuit_breaker:` / `CIRCUIT_BREAKER=off` | ✓ | ✓ | ◐ credential pools, key rotation, ordered fallback | ✓ automatic provider fallback | ✓ |
+| Cache | ✓ opt-in exact-match, in memory (v1.6) — `src/services/response-cache.ts`, `cache:` / `CACHE=on` | ✓ | ✓ semantic cache | not documented | ◐ provider prompt-caching passthrough with sticky routing | ✓ |
 | Cost / usage dashboard | ✓ SQLite usage store + `/ui` | ✓ | ✓ | ◐ per-request cost estimate in logs | ✓ hosted dashboard | ✓ analytics |
 | Prometheus / OpenTelemetry | ✓ `/metrics` + OTel spans | ✓ | ✓ | not documented | n/a (hosted) | ◐ OTel trace export; analytics + Logpush |
 | MCP gateway | ✗ not a feature — MCP calls pass through as content | ✓ MCP Gateway | ✓ MCP tools | ✓ ToolHub / MCP | not documented | not documented |
 | Virtual keys / budgets / SSO / audit | planned | ✓ | ✓ keys + budgets in OSS; SSO/audit enterprise | not documented | ✓ keyed accounts + limits | ◐ rate limits, Access integration |
 | Providers / models covered | ◐ five provider types; any OpenAI-compatible host via config | ✓ 100+ | ✓ | ✓ many presets | ✓ hundreds of models, one key | ✓ many providers |
 | Hosted option | ✗ self-hosted only | ◐ self-host OSS; hosted enterprise offering | not documented | not documented — docs describe it running "locally or on your own server" | ✓ hosted | ✓ hosted |
-| Install | ◐ `npx babelgate`, Docker image | Python service / Docker | Go binary, npx | Electron desktop app + CLI | n/a | n/a |
+| Install | ✓ signed single-file binaries (Homebrew, install.sh, install.ps1 — v1.6), `npx babelgate`, Docker image | Python service / Docker | Go binary, npx | Electron desktop app + CLI | n/a | n/a |
 | Embeddings inbound | ◐ OpenAI `/v1/embeddings` only | ✓ | ✓ | not documented | ✓ embeddings endpoint | not documented |
 
 ## Where the others are better
@@ -60,10 +60,12 @@ can go stale — dates and sources are below.
   MCP tool servers. If MCP governance is the requirement, **use
   LiteLLM or Bifrost**.
 - **Semantic cache** — Bifrost ships one; LiteLLM and Cloudflare have
-  cache features too. If semantic caching is the point, **use
+  cache features too. babelgate's cache (v1.6) is opt-in exact-match
+  for CI runs, not semantic. If semantic caching is the point, **use
   Bifrost**.
 - **Load balancing / health / circuit breaking** — LiteLLM, Bifrost and
-  Cloudflare are mature here; babelgate's is a planned minimal version.
+  Cloudflare are mature here; babelgate's is a minimal per-process
+  breaker (v1.6), not fleet-wide load balancing.
   **Use LiteLLM or Cloudflare** if you need it today.
 - **Team governance** — virtual keys, budgets, SSO, audit trails:
   LiteLLM and Bifrost (and Cloudflare Access) cover this now. **Use
@@ -119,6 +121,13 @@ babelgate (this repository):
   `tests/contracts/` reasoning fixtures.
 - Client replay: `.github/workflows/live.yml` (`client-replay` job),
   `scripts/gates/client-replay.sh`.
+- Circuit breaker: `src/routing/circuit-breaker.ts`,
+  `src/services/attempt-targets.ts`; `circuit_breaker:` /
+  `CIRCUIT_BREAKER=off` (docs/reference.md).
+- Response cache: `src/services/response-cache.ts`; `cache:` /
+  `CACHE=on` (docs/reference.md).
+- Installers/binaries: `install/install.sh`, `install/install.ps1`,
+  `packaging/homebrew/`, `packaging/winget/`, `scripts/build-binary.ts`.
 
 Competitors — one row per `✗`/`◐` cell and each sourced `✓` (accessed
 2026-11-19):

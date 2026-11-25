@@ -10004,3 +10004,64 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   one (canonical events carry no `created`; spec's "replayed in the
   client's format" arguably allows it — a wire-format call for the
   owner, not this task).
+
+## v1.6 Task 15 — launch readiness (spec §3.8)
+
+- **README restructured to the spec's order** — pitch → install per OS
+  (brew, install.sh, install.ps1, npx, Docker) → free first run → proof
+  → clients → everything else. The long reference (CLI flag table, env
+  table, endpoint kinds, auth, errors, running-from-source, testing,
+  live tests, project structure, Docker detail, stack) moved to
+  `docs/reference.md`; the CLI table was updated for `--provider`,
+  `--preset codex`, `babelgate presets` and `--version`, and the env
+  table gained `TARGET_PRESET`, `TARGET_API_KEY_ENV`, `CACHE` and
+  `CIRCUIT_BREAKER` — all four trace to `src/cli-first-run.ts` and
+  `src/config/env-config.ts`.
+- **D9 applied: no competitor claims went public.** Zero open issues
+  exist (`gh issue list`, 2026-11-25) and no upstream issues have been
+  filed, so README, listings and `docs/comparison.md` carry no
+  conformance results and no reasoning-passback comparison. The
+  findings sit in `docs/launch/v1.6-launch.md` under a marked
+  "owner: competitor results, pending upstream issues" section as
+  draft source material, summarising
+  `docs/research/2026-11-24-conformance-run.md` verbatim (versions,
+  dates, cell labels). `docs/comparison.md` changes are confined to
+  babelgate's own column: circuit breaker and cache cells moved from
+  "planned (v1.6)" to the shipped descriptions, the Install cell
+  gained the binaries, and the sources list names the new files —
+  every competitor cell is untouched.
+- **Demo tapes updated for the binary + free first run, not
+  re-recorded here.** `demo.tape` now runs `babelgate --preset
+  claude-code --provider gemini-free`; `codex.tape` runs `babelgate
+  --preset codex --provider gemini-free` and shows the printed
+  config.toml block. Both wait on the output the binary actually prints
+  (verified offline against a rebuilt `dist-bin/babelgate`: the
+  `export` lines, `Paste into ~/.codex/config.toml:` and
+  `--- end of config.toml block ---`). No provider key exists in this
+  sandbox, so **the GIFs were not re-recorded** — recording is the
+  conductor's step; `docs/assets/demo.gif` and
+  `docs/assets/demo-codex.gif` (Files-block files) are deliberately
+  unchanged, and the README alt text already describes the planned
+  re-recording (Claude Code / Codex on the Gemini free tier).
+- **Files outside the Files block:** `docs/reference.md` (new) — spec
+  §3.8's "long reference moved under `docs/`" needs a destination file
+  and the Files block names none. `scripts/demo/record-demo.sh` — the
+  tape's runner: the tape now types `babelgate` on the `gemini-free`
+  preset, so the script's contract changed from `OPENROUTER_API_KEY`
+  to `GEMINI_API_KEY` and it must put the binary on PATH
+  (`BABELGATE_BIN`, else a `npm run build:binary` product, symlinked
+  into `/tmp/babelgate-bin`); without it the new tape cannot run.
+  `scripts/demo/record-codex-demo.sh` — same reason, plus its
+  `config.toml` now mirrors the printed block (`model =
+  "gemini-3.8-flash"`, `model_catalog_json` under the real
+  `~/.babelgate`). `docs/decisions.md` — this entry.
+- **Resolved without asking:** `irm … | iex` chosen as the Windows
+  install line (install.ps1's documented invocation form with its
+  default `%LOCALAPPDATA%\babelgate\bin`); winget presented as
+  "manifest prepared, pending submission" rather than an install
+  command (D4 — submission is the owner's); no "under a minute" first-
+  run claim (gate F is Task 17's); the "5+ good first issue candidates"
+  in `docs/launch/repo-settings.md` are written as proposed issue
+  texts with file links, because no open issues exist to label; the
+  FUNDING patch adds `.github/FUNDING.yml` with `github:
+  [dorrabbkhan]` only — enabling Sponsors stays the owner's act.

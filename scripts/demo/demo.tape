@@ -1,5 +1,7 @@
-# babelgate README demo: Claude Code fixes a failing test through babelgate,
-# on a free OpenRouter model. Run with scripts/demo/record-demo.sh.
+# babelgate README demo: Claude Code fixes a failing test through
+# babelgate on the Gemini free tier — the release binary's free first
+# run (`--provider gemini-free` → the preset's proven suggested model).
+# Record with scripts/demo/record-demo.sh.
 Output "/tmp/babelgate-demo.gif"
 Set Shell "bash"
 Set FontSize 16
@@ -8,15 +10,19 @@ Set Height 700
 Set Theme "Catppuccin Mocha"
 Set TypingSpeed 30ms
 
-# Off camera: key, quiet logs, warm the npx cache (no "Ok to install?" prompt).
+# Off camera: quiet logs, the release binary on PATH (record-demo.sh
+# symlinks it into /tmp/babelgate-bin), GEMINI_API_KEY inherited from
+# the record script's environment and never printed, and a sanity check
+# that the binary runs.
 Hide
-Type "cd /tmp/babelgate-demo && export PS1='$ ' OPENAI_API_KEY=$OPENROUTER_API_KEY LOG_LEVEL=warn CLAUDE_CODE_MAX_OUTPUT_TOKENS=8000 && unset ANTHROPIC_API_KEY && npx -y babelgate --help >/dev/null && clear" Enter
+Type "cd /tmp/babelgate-demo && export PS1='$ ' LOG_LEVEL=warn && unset ANTHROPIC_API_KEY && babelgate --version >/dev/null && clear" Enter
 Wait /^\$ ?$/
 Show
 
-# 1. Start babelgate in front of OpenRouter.
-#    Its logs go to a file so they can't scribble over Claude Code's screen.
-Type "npx babelgate --preset claude-code --target openai --model poolside/laguna-s-2.1:free --base-url https://openrouter.ai/api > /tmp/babelgate.log 2>&1 &" Enter
+# 1. One command: the binary on the free preset — it fills the target,
+#    base URL, key env var and the proven model itself. Its logs go to
+#    a file so they can't scribble over Claude Code's screen.
+Type "babelgate --preset claude-code --provider gemini-free > /tmp/babelgate.log 2>&1 &" Enter
 Sleep 4s
 Type "grep ^export /tmp/babelgate.log" Enter
 Wait+Screen@60s /ANTHROPIC_AUTH_TOKEN/

@@ -1,0 +1,8 @@
+diff --git a/.github/FUNDING.yml b/.github/FUNDING.yml
+new file mode 100644
+index 0000000..195b019
+--- /dev/null
++++ b/.github/FUNDING.yml
+@@ -0,0 +1,2 @@
++# GitHub Sponsors — enabling Sponsors on the account is the owner's act.
++github: [dorrabbkhan]
