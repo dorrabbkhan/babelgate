@@ -73,14 +73,14 @@ rule with no citing doc is an observation: it can produce
 
 | scenario | babelgate | babelgate-default | ccr | free-claude-code |
 | --- | --- | --- | --- | --- |
-| thinking-after-tool:anthropic->openai | pass (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (mock-only, unconfirmed) |
-| thinking-after-tool:responses->openai | pass (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | pass (mock) |
+| thinking-after-tool:anthropic->openai | pass (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) |
+| thinking-after-tool:responses->openai | pass (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) |
 | thinking-after-tool:anthropic->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
 | thinking-after-tool:responses->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
 | streamed-tool-args:anthropic->openai | pass (mock) | pass (mock) | pass (mock) | pass (mock) |
-| streamed-tool-args:responses->openai | pass (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) | pass (mock) |
-| multi-turn-reasoning:anthropic->openai | pass (live-confirmed 2026-11-24) | differs (observed, live 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (mock-only, unconfirmed) |
-| multi-turn-reasoning:responses->openai | pass (live-confirmed 2026-11-24) | differs (observed, live 2026-11-24) | fail (live-confirmed 2026-11-24) | differs (observed) |
+| streamed-tool-args:responses->openai | pass (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) | pass (live-confirmed 2026-11-24) |
+| multi-turn-reasoning:anthropic->openai | pass (live-confirmed 2026-11-24) | differs (observed, live 2026-11-24) | fail (live-confirmed 2026-11-24) | fail (live-confirmed 2026-11-24) |
+| multi-turn-reasoning:responses->openai | pass (live-confirmed 2026-11-24) | differs (observed, live 2026-11-24) | fail (live-confirmed 2026-11-24) | differs (observed, live 2026-11-24) |
 | multi-turn-reasoning:anthropic->gemini | pass (mock) | pass (mock) | fail (mock-only, unconfirmed) | not supported |
 | multi-turn-reasoning:responses->gemini | pass (mock) | pass (mock) | pass (mock) | not supported |
 
@@ -405,6 +405,108 @@ drawn from them.
 Not re-run (outside the task's Step 5 cell list): the three
 re-checked gateways' `*->gemini` rows and free-claude-code's
 `not supported` rows — they keep their 13d values.
+
+### Task 13g repeats and diagnosis (2026-11-24)
+
+Step 1 (live repeats, run by the conductor on this branch): each
+non-passing free-claude-code cell ran three times and each passing
+cell once more — same pin (v6.15.0, e8806fb608ac), same live model
+(`deepseek/deepseek-v4.1-flash` via OpenRouter). Every upstream
+exchange and client turn returned HTTP 200; per-run spy logs,
+verdicts, vitest logs and redacted gateway logs sit under
+`tmp/conformance/live/repeats/` (`run<N>-<scenario>.<ext>`,
+gitignored, not committed). Per-run results — all runs agreed, so
+each cell is reported as its result:
+
+| cell | run 1 | run 2 | run 3 | final label |
+| --- | --- | --- | --- | --- |
+| multi-turn-reasoning:anthropic->openai | fail (live-confirmed) | fail (live-confirmed) | fail (live-confirmed) | fail (live-confirmed 2026-11-24), 3 of 3 |
+| multi-turn-reasoning:responses->openai | differs (observed) | differs (observed) | differs (observed) | differs (observed, live 2026-11-24), 3 of 3 |
+| streamed-tool-args:responses->openai | pass (13f re-check) | pass (live) | — | pass (live-confirmed 2026-11-24), 2 of 2 |
+| thinking-after-tool:anthropic->openai | pass (13f re-check) | pass (live) | — | pass (live-confirmed 2026-11-24), 2 of 2 |
+| thinking-after-tool:responses->openai | pass (13f re-check) | pass (live) | — | pass (live-confirmed 2026-11-24), 2 of 2 |
+
+`streamed-tool-args:anthropic->openai` keeps `pass (mock)` — it was
+never run live.
+
+Diagnosis, from the spy logs plus FCC source at the pinned commit —
+the cause for both non-passing cells is in free-claude-code itself,
+not in our adapter config: no `FCC_CUSTOM_PROVIDERS` field covers
+either behaviour (the complete field set is
+`src/free_claude_code/config/custom_providers.py:33-47`, a pydantic
+`extra="forbid"` model), so the adapter is unchanged and no cell
+needs a rerun.
+
+- `multi-turn-reasoning:anthropic->openai` — `fail (live-confirmed)`:
+  FCC does emit reasoning to an Anthropic client without any setting
+  — reasoning output is on whenever the request isn't reasoning-off
+  (`output_enabled`,
+  `src/free_claude_code/core/reasoning.py:107-111`; suppression only
+  under a prefer-off classifier policy,
+  `src/free_claude_code/api/stream_delivery.py:66` +
+  `src/free_claude_code/api/handlers/messages.py:164`) and the chat
+  transport opens a `thinking` block for upstream
+  `reasoning_content` deltas
+  (`src/free_claude_code/providers/openai_chat/transport.py:318-328`,
+  `src/free_claude_code/providers/openai_chat/stream_output.py:429-439`)
+  — but the block is always unsigned on a custom provider:
+  `signature_delta` is emitted only from upstream-supplied signed or
+  encrypted `reasoning_details` (`_reasoning_detail_opaque`,
+  `src/free_claude_code/providers/openai_chat/reasoning_details.py:252-263`;
+  `_attach_reasoning_replay`,
+  `src/free_claude_code/providers/openai_chat/stream_output.py:448-453`)
+  through `StructuredReasoningStream`, which exists only when the
+  profile's `structured_reasoning_details` is set
+  (`src/free_claude_code/providers/openai_chat/transport.py:213-219`)
+  — a flag the custom-provider profile leaves `False`
+  (`src/free_claude_code/providers/custom.py:159-167`,
+  `src/free_claude_code/providers/openai_chat/profiles.py:131`) and
+  no config can set. DeepSeek's `reasoning_content` carries no
+  signature — the turn-2 spy request shows the echoed reasoning
+  coming back as appended assistant `content` text, proving the
+  client did receive a (unsigned) thinking block — so the signed
+  thinking block the cited Anthropic doc requires can never appear
+  on this provider.
+- `multi-turn-reasoning:responses->openai` — `differs (observed)`:
+  `reasoning_history_format: "reasoning_content"` is honoured — the
+  echoed Responses reasoning item does become `reasoning_content`
+  on the chat assistant message (`_apply_pending_reasoning` /
+  `_apply_reasoning_text`,
+  `src/free_claude_code/core/openai_responses/chat_request.py:301-339`
+  and `:572-580`) — but `prepare_history` runs at the profile's
+  `HistoryScope.TOOL_CONTINUATION`
+  (`src/free_claude_code/providers/openai_chat/profiles.py:132`,
+  `src/free_claude_code/providers/openai_chat/behavior.py:68-69`;
+  unchanged for custom providers,
+  `src/free_claude_code/providers/custom.py:160-167`), which keeps
+  `reasoning_content` only on an assistant message that follows the
+  last non-tool-result user message and is itself followed by tool
+  results (`src/free_claude_code/core/history_replay.py:466-496`);
+  on a plain multi-turn chat it pops the field and appends the text
+  to `content` (`src/free_claude_code/core/history_replay.py:619-623`,
+  `_append_context` `:551-562`) — exactly what all three repeats'
+  spy logs show. The scope is not a `FCC_CUSTOM_PROVIDERS` field
+  (`custom_providers.py:33-47`); even FCC's built-in DeepSeek
+  provider uses `HistoryScope.UNKNOWN`, not `ALL`, for tool-less
+  bodies (`src/free_claude_code/providers/deepseek/client.py:57-58`).
+  `differs` stays an observation: no cited doc requires passback on
+  a plain multi-turn chat.
+- The three passing cells stay `pass (live-confirmed)` — the
+  thinking-after-tool runs show the same scope from the other side:
+  on the tool-call turn `reasoning_content` did ride upstream (the
+  spy's turn-2 assistant message carries it), and the client-stream
+  check was n/a because that turn's live upstream response carried
+  no reasoning.
+
+Whether the unsigned-thinking behaviour is a reportable upstream
+bug is the owner's decision under spec §3.10 / D9; no issue has been
+filed.
+
+**What we may say:** these results are observed on this run only —
+three agreeing runs for the two non-passing cells, two for the
+passing ones; no verdict language about free-claude-code the
+project; nothing in README, recipes, launch or site copy until the
+owner decides under D9.
 
 ## Not supported
 
