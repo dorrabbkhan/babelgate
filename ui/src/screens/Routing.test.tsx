@@ -62,6 +62,7 @@ const INFO: RoutingInfo = {
     },
     { target: "or/unknown-model" },
   ],
+  breakers: [],
 };
 
 describe("Routing screen", () => {
@@ -156,5 +157,78 @@ describe("Routing screen", () => {
     expect(text).toContain("or/anthropic/claude-sonnet-4.5");
     expect(text).toContain("local/qwen3-coder:30b");
     expect(text).toContain("rule:0");
+  });
+
+  it("routing shows open breaker with time left", async () => {
+    // Frozen clock so "retry in" is exact; advanceTimersByTimeAsync(0)
+    // plays the role of tick() under fake timers.
+    vi.useFakeTimers();
+    try {
+      routingMock.mockResolvedValue({
+        ...INFO,
+        breakers: [
+          {
+            provider: "or",
+            state: "open",
+            openUntil: Date.now() + 45_000,
+            consecutiveFailures: 3,
+          },
+          { provider: "local", state: "closed", consecutiveFailures: 0 },
+        ],
+      });
+      await act(async () => {
+        render(<Routing />, container);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const providerRow = (name: string): string =>
+        container.querySelector(
+          `tr[data-provider="${name}"]`,
+        )?.textContent ?? "";
+      // "openai" contains the substring "open" — pin the cell text.
+      expect(providerRow("or")).toContain("open · retry in 45s");
+      expect(providerRow("local")).toContain("closed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("free-tier route cost reads $0 (free tier, per docs on <date>)", async () => {
+    routingMock.mockResolvedValue({
+      ...INFO,
+      prices: [
+        ...INFO.prices,
+        {
+          target: "free/deepseek/deepseek-v4.1-flash:free",
+          freeTier: {
+            preset: "openrouter-free",
+            docs: "https://openrouter.ai/docs/quickstart",
+            verified: "2026-11-22",
+          },
+        },
+      ],
+    });
+    await act(async () => {
+      render(<Routing />, container);
+    });
+    await act(async () => {
+      await tick();
+    });
+
+    const row = [...container.querySelectorAll("tr")].find((tr) =>
+      tr.textContent?.includes("free/deepseek/deepseek-v4.1-flash:free"),
+    );
+    expect(row?.textContent).toContain(
+      "$0 (free tier, per openrouter-free docs on 2026-11-22)",
+    );
+    // the label is the price — no bundled number beside it
+    expect(row?.textContent).not.toContain("per 1M");
+    // and the docs URL is the link target, not shown as bare text
+    const link = row?.querySelector("a");
+    expect(link?.getAttribute("href")).toBe(
+      "https://openrouter.ai/docs/quickstart",
+    );
   });
 });

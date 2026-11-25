@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { getConfig } from "../config/env-config";
+import { PROVIDER_PRESETS } from "../config/provider-presets";
 import { lookupPrice, type Price } from "../cost/price-table";
 import { planRoute, type RouteTarget } from "../routing/plan-route";
 import { uiError } from "./access";
@@ -55,13 +56,29 @@ export function routingRouter(): Router {
         target: string;
         price?: Price;
         source?: string;
+        freeTier?: { preset: string; docs: string; verified: string };
       }[] = [];
       for (const [label, target] of targets) {
-        const hit = await lookupPrice(
-          config.registry.get(target.provider),
-          target.model,
-          config,
-        );
+        const entry = config.registry.get(target.provider);
+        // §3.3 cost honesty: a route whose provider's preset has
+        // `tier: "free"` carries the free-tier label instead of a
+        // price — the label comes from the preset, so no lookup runs.
+        const presetName = entry.preset;
+        if (presetName !== undefined) {
+          const preset = PROVIDER_PRESETS[presetName];
+          if (preset.tier === "free") {
+            prices.push({
+              target: label,
+              freeTier: {
+                preset: presetName,
+                docs: preset.docs,
+                verified: preset.verified,
+              },
+            });
+            continue;
+          }
+        }
+        const hit = await lookupPrice(entry, target.model, config);
         prices.push({
           target: label,
           ...(hit !== undefined

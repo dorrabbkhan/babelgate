@@ -4,6 +4,8 @@ import {
   getRouting,
   planRoute,
   UiApiError,
+  type BreakerSnapshot,
+  type FreeTier,
   type Price,
   type RoutePlan,
   type RouteTarget,
@@ -42,7 +44,36 @@ function fmtPrice(price: Price | undefined): string {
   return parts.join(", ");
 }
 
-function Providers({ providers }: { providers: RoutingProvider[] }) {
+/** Milliseconds left as "45s", "5m" or "1m 30s"; clamps at 0s. */
+function fmtLeft(ms: number): string {
+  const s = Math.max(0, Math.ceil(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r === 0 ? `${m}m` : `${m}m ${r}s`;
+}
+
+/**
+ * §3.5: the breaker's live state for one provider. No snapshot yet
+ * means it has seen no traffic (or breakers are off) — "—", not a
+ * guessed "closed".
+ */
+function breakerCell(b: BreakerSnapshot | undefined): string {
+  if (b === undefined) return "—";
+  if (b.state === "open" && b.openUntil !== undefined) {
+    return `open · retry in ${fmtLeft(b.openUntil - Date.now())}`;
+  }
+  return "closed";
+}
+
+function Providers({
+  providers,
+  breakers,
+}: {
+  providers: RoutingProvider[];
+  breakers: BreakerSnapshot[];
+}) {
+  const byProvider = new Map(breakers.map((b) => [b.provider, b]));
   return (
     <table>
       <thead>
@@ -52,20 +83,32 @@ function Providers({ providers }: { providers: RoutingProvider[] }) {
           <th>base url</th>
           <th>cap</th>
           <th>flags</th>
+          <th>breaker</th>
         </tr>
       </thead>
       <tbody>
         {providers.map((p) => (
-          <tr key={p.name}>
+          <tr key={p.name} data-provider={p.name}>
             <td>{p.name}</td>
             <td>{p.type}</td>
             <td>{p.baseUrl}</td>
             <td>{p.maxOutputTokens ?? "—"}</td>
             <td>{flagList(p) || "—"}</td>
+            <td>{breakerCell(byProvider.get(p.name))}</td>
           </tr>
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** §3.3 cost honesty: the label is the price — "docs" links the evidence. */
+function FreeTierPrice({ freeTier }: { freeTier: FreeTier }) {
+  return (
+    <>
+      $0 (free tier, per {freeTier.preset}{" "}
+      <a href={freeTier.docs}>docs</a> on {freeTier.verified})
+    </>
   );
 }
 
@@ -74,7 +117,7 @@ function Tables({ info }: { info: RoutingInfo }) {
   return (
     <>
       <h2>providers</h2>
-      <Providers providers={info.providers} />
+      <Providers providers={info.providers} breakers={info.breakers} />
       <p class="muted">default provider: {info.defaultProvider}</p>
       {aliases.length > 0 && (
         <>
@@ -139,7 +182,13 @@ function Tables({ info }: { info: RoutingInfo }) {
               {info.prices.map((p) => (
                 <tr key={p.target}>
                   <td>{p.target}</td>
-                  <td>{fmtPrice(p.price)}</td>
+                  <td>
+                    {p.freeTier !== undefined ? (
+                      <FreeTierPrice freeTier={p.freeTier} />
+                    ) : (
+                      fmtPrice(p.price)
+                    )}
+                  </td>
                   <td>{p.source ?? "—"}</td>
                 </tr>
               ))}

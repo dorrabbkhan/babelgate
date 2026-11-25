@@ -78,6 +78,8 @@ export interface RequestRow {
   passthrough?: boolean;
   /** The shim preset that relayed — pass-through rows only (v1.5 §3.3). */
   preset?: string;
+  /** Set only on a response-cache hit row — absent elsewhere (v1.6 §3.5). */
+  cacheHit?: boolean;
   costUsd: number | null;
   wouldCostUsd: number | null;
   costEstimated: boolean;
@@ -169,12 +171,39 @@ export interface Price {
 /** src/cost/price-table.ts `PriceSource`. */
 export type PriceSource = "override" | "local" | "live" | "bundled";
 
+/** src/routing/circuit-breaker.ts `BreakerSnapshot` (v1.6 §3.5). */
+export interface BreakerSnapshot {
+  provider: string;
+  state: "closed" | "open";
+  /** Epoch ms the open ends; present only while open. */
+  openUntil?: number;
+  consecutiveFailures: number;
+}
+
+/**
+ * A route whose provider's preset has `tier: "free"` (v1.6 §3.3 cost
+ * honesty): the label replaces the price — $0 "per <preset> docs on
+ * <verified>", the preset's own words for its evidence.
+ */
+export interface FreeTier {
+  preset: string;
+  docs: string;
+  verified: string;
+}
+
 export interface RoutingInfo {
   providers: RoutingProvider[];
   aliases: Record<string, RouteTarget>;
   rules: RoutingRule[];
   defaultProvider: string;
-  prices: { target: string; price?: Price; source?: PriceSource }[];
+  prices: {
+    target: string;
+    price?: Price;
+    source?: PriceSource;
+    freeTier?: FreeTier;
+  }[];
+  /** Live breaker state per provider seen so far; [] until traffic. */
+  breakers: BreakerSnapshot[];
 }
 
 export interface RoutePlan {

@@ -9958,3 +9958,37 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
 - **Files outside the Files block:** none — only the two
   Files-block files changed; `tests/process/gateways/free-claude-code.ts`
   stayed untouched because no adapter setting covers either cause.
+
+## v1.6 Task 14 — UI: breaker state, cache hits, free-tier label (spec §3.3 cost honesty, §3.5)
+
+- **The wire fields already existed; the work was rendering and one
+  new field.** `/ui/api/routing` already emitted `breakers`
+  (`config.breakers.snapshot()`, Task 9) and request rows already
+  carried `cacheHit` (Task 10's `cache_hit` column → `traceToRow`);
+  `ui/src/api.ts` only gained the typings. The one new wire field is
+  `prices[].freeTier: {preset, docs, verified}`, emitted for a route
+  whose provider's preset has `tier: "free"` — the label replaces the
+  price and `lookupPrice` does not run for it (spec: "the label comes
+  from the preset"; a free route's price cell reads `$0 (free tier,
+  per <preset> docs on <verified>)` regardless of any bundled number).
+- **The breaker column shows live state, not a guess:** a provider
+  with no snapshot renders "—" (no traffic yet, or breakers off) —
+  never a fabricated "closed". An open breaker renders
+  `open · retry in <N>s|Nm` from `openUntil − now`, matching the §3.5
+  cool-down semantics (expired opens already snapshot as closed
+  server-side).
+- **The cache-hit badge sits in the cost cell**, next to the $0 the
+  hit prices at (§3.5 "usage rows mark cache hits with `$0`"), not in
+  the routed column — a `cache hit` badge explains the zero; the
+  `cache %` column stays prompt-cache-only (different feature).
+- **"docs" is a link** to the preset's `docs` URL — "every claim
+  links its evidence" — while the visible text stays the spec's exact
+  label.
+- **`Usage.tsx` needed no change**: no named test lands there and the
+  response cache adds no usage aggregate (per-request `cacheHit` is a
+  row field, not a `UsageGroup` column) — the Files block permits the
+  file, it does not require touching it.
+- **Files outside the Files block:** `ui/src/api.ts` — the typed
+  fetchers: `RequestRow.cacheHit`, `RoutingInfo.breakers`,
+  `prices[].freeTier` plus the `BreakerSnapshot`/`FreeTier` types the
+  screens render; none of the three features typecheck without them.
