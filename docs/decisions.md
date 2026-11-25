@@ -9992,3 +9992,15 @@ live confirmation found (owner option A, `docs/conductor/notes/v1.6/task13b.md`)
   fetchers: `RequestRow.cacheHit`, `RoutingInfo.breakers`,
   `prices[].freeTier` plus the `BreakerSnapshot`/`FreeTier` types the
   screens render; none of the three features typecheck without them.
+  `src/services/response-cache.test.ts` — Task 10's
+  `"stream hit replays events in order"` flaked in this PR's CI: the
+  OpenAI stream encoder stamps `created` from `Date.now()` once per
+  response (`openai.stream.ts`), so the two collects straddling a
+  second boundary differed by that field alone; verified unrelated to
+  this diff (3/3 local passes pre-fix) and frozen with a scoped
+  `vi.spyOn(Date, "now")` inside the test — the `toEqual` assertion is
+  unchanged. Unfixed semantics left for a later task: a cached unary
+  hit keeps the stored `created` while a stream hit stamps a fresh
+  one (canonical events carry no `created`; spec's "replayed in the
+  client's format" arguably allows it — a wire-format call for the
+  owner, not this task).
