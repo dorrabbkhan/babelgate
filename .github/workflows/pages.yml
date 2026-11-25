@@ -1,0 +1,84 @@
+# GitHub Pages deploy for the landing site (v1.6 spec §3.8, Task 16).
+# Rebuilds on pushes to main that touch the page, its build script or
+# the data the page is generated from. Enabling Pages itself (repo
+# Settings → Pages → Source: GitHub Actions) is the owner's act — the
+# app has no Administration permission.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "scripts/site/**"
+      - "docs/compatibility.md"
+      - "docs/recipes/**"
+      - "docs/assets/demo.gif"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# contents:read checks out; actions:read fetches the client-replay
+# artifact for the "last checked" line; pages+id-token are the Pages
+# deploy's own requirements.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+  actions: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Fetch the latest client-replay summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          # The "last checked" versions must come from the most recent
+          # green client-replay run (spec §3.8 honesty rule): find the
+          # latest live.yml run carrying a client-replay artifact and
+          # drop its summary.md plus a run.json into
+          # tmp/client-replay/, the path build-site.ts reads. Past the
+          # 14-day artifact retention the step downloads nothing and
+          # the page shows only the workflow link.
+          mkdir -p tmp/client-replay
+          for id in $(gh api "repos/$REPO/actions/workflows/live.yml/runs?per_page=30" \
+              --jq '.workflow_runs[] | select(.conclusion=="success") | .database_id'); do
+            if gh api "repos/$REPO/actions/runs/$id/artifacts" \
+                --jq '.artifacts[].name' | grep -qx "client-replay-$id"; then
+              gh run download "$id" --name "client-replay-$id" --dir tmp/client-replay
+              created="$(gh api "repos/$REPO/actions/runs/$id" --jq '.created_at')"
+              printf '{"url":"https://github.com/%s/actions/runs/%s","date":"%s"}\n' \
+                "$REPO" "$id" "$created" > tmp/client-replay/run.json
+              break
+            fi
+          done
+      - name: Build the site
+        run: ./node_modules/.bin/ts-node scripts/site/build-site.ts
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github_pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
