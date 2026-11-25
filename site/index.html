@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>babelgate — any AI tool, any model</title>
+<meta name="description" content="Run Claude Code, Codex, Cursor and your own apps on free, cheap or local models. One small program on your computer — no account, nothing to sign up for.">
+<meta property="og:title" content="babelgate — any AI tool, any model. And we show you it works.">
+<meta property="og:description" content="One small program on your computer translates between AI tool formats. Free, cheap or local models — with the test results to prove it.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://dorrabbkhan.github.io/babelgate/">
+<meta property="og:image" content="https://dorrabbkhan.github.io/babelgate/og.png">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6bff'/%3E%3Ctext x='16' y='23' font-size='20' text-anchor='middle' fill='white' font-family='Georgia,serif'%3Eb%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="glow"></div>
+<div class="wrap">
+  <nav><b>babelgate</b><span><a href="#how">How it works</a><a href="https://github.com/dorrabbkhan/babelgate/blob/main/docs/reference.md">Docs</a><a href="https://github.com/dorrabbkhan/babelgate" class="star">★ GitHub</a></span></nav>
+
+  <header>
+    <h1><span class="w" style="animation-delay:.1s">Any</span> <span class="w" style="animation-delay:.2s">AI</span> <span class="w" style="animation-delay:.3s">tool,</span> <span class="w" style="animation-delay:.4s">any</span> <span class="w" style="animation-delay:.5s">model.</span><br>
+      <span class="w" style="animation-delay:.8s"><i>And we show you it works.</i></span></h1>
+    <p class="lede">Run Claude Code, Codex, Cursor and your own apps on free, cheap or local models. One small program on your computer — no account, nothing to sign up for.</p>
+
+    <div class="install"><span><span class="p">$ </span><span class="typed">brew install dorrabbkhan/babelgate/babelgate</span><span class="caret"></span></span><button class="copy">Copy</button></div>
+    <div class="tabs"><span class="on" data-os="macos">macOS</span><span data-os="linux">Linux</span><span data-os="windows">Windows</span><span data-os="npm">npm</span><span data-os="docker">Docker</span></div>
+
+    <ol class="steps">
+      <li><b>Get a free key</b> — for example <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a></li>
+      <li><b>Run it</b> — <code>GEMINI_API_KEY=&lt;key&gt; babelgate --preset claude-code --provider gemini-free</code></li>
+      <li><b>Paste the two lines it prints</b>, then run <code>claude</code> — free tier per <a href="https://github.com/dorrabbkhan/babelgate/blob/main/src/config/provider-presets.ts">Google's own docs</a>.</li>
+    </ol>
+  </header>
+
+  <div class="diagram" id="how">
+    <svg viewBox="0 0 1000 330" preserveAspectRatio="none" aria-hidden="true">
+      <path id="l1" class="flow" d="M210,45 C330,45 330,165 385,165"/>
+      <path id="l2" class="flow" d="M210,100 C330,100 330,165 385,165"/>
+      <path id="l3" class="flow" d="M210,155 C330,155 330,165 385,165"/>
+      <path id="l4" class="flow" d="M210,210 C330,210 330,165 385,165"/>
+      <path id="l5" class="flow" d="M210,265 C330,265 330,165 385,165"/>
+      <path id="r1" class="flow" d="M615,165 C670,165 670,45 790,45"/>
+      <path id="r2" class="flow" d="M615,165 C670,165 670,100 790,100"/>
+      <path id="r3" class="flow" d="M615,165 C670,165 670,155 790,155"/>
+      <path id="r4" class="flow" d="M615,165 C670,165 670,210 790,210"/>
+      <path id="r5" class="flow" d="M615,165 C670,165 670,265 790,265"/>
+      <circle r="5" class="dot"><animateMotion dur="5s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#l1"/></animateMotion></circle>
+      <circle r="5" class="dot"><animateMotion dur="5s" begin="1s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#l2"/></animateMotion></circle>
+      <circle r="5" class="dot"><animateMotion dur="5s" begin="2s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#l3"/></animateMotion></circle>
+      <circle r="5" class="dot"><animateMotion dur="5s" begin="3s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#l4"/></animateMotion></circle>
+      <circle r="5" class="dot"><animateMotion dur="5s" begin="4s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#l5"/></animateMotion></circle>
+      <circle r="5" class="dot2"><animateMotion dur="5s" begin=".6s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#r1"/></animateMotion></circle>
+      <circle r="5" class="dot2"><animateMotion dur="5s" begin="1.6s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#r2"/></animateMotion></circle>
+      <circle r="5" class="dot2"><animateMotion dur="5s" begin="2.6s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#r3"/></animateMotion></circle>
+      <circle r="5" class="dot2"><animateMotion dur="5s" begin="3.6s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#r4"/></animateMotion></circle>
+      <circle r="5" class="dot2"><animateMotion dur="5s" begin="4.6s" repeatCount="indefinite" keyPoints="0;1;1" keyTimes="0;.12;1" calcMode="linear"><mpath href="#r5"/></animateMotion></circle>
+    </svg>
+    <div class="col l">
+      <div class="chip">Claude Code <small>Anthropic</small></div>
+      <div class="chip">Codex <small>Responses</small></div>
+      <div class="chip">Cursor <small>OpenAI</small></div>
+      <div class="chip">Open WebUI <small>Ollama</small></div>
+      <div class="chip">Your app <small>any SDK</small></div>
+    </div>
+    <div class="hub">
+      <b>babelgate</b><div class="sub">on your computer</div>
+      <div class="ticker"><div><p>Anthropic → Gemini</p><p>Responses → Chat</p><p>OpenAI → Ollama</p><p>Ollama → DeepSeek</p><p>Anthropic → OpenRouter</p></div></div>
+    </div>
+    <div class="col r">
+      <div class="chip free">Gemini <small>free</small></div>
+      <div class="chip free">OpenRouter <small>free</small></div>
+      <div class="chip">DeepSeek <small>cheap</small></div>
+      <div class="chip free">Ollama <small>local</small></div>
+      <div class="chip">Claude, GPT… <small>yours</small></div>
+    </div>
+  </div>
+  <p class="freenote">Free tiers are per each provider's own docs on the date verified — <a href="https://github.com/dorrabbkhan/babelgate/blob/main/src/config/provider-presets.ts">the presets file</a> lists the docs and dates.</p>
+
+  <section class="demo">
+    <div class="kicker">Show, don't tell.</div>
+    <h2>See it work.</h2>
+    <img src="demo.gif" alt="Claude Code fixing a failing test through babelgate on the Gemini free tier" loading="lazy">
+    <p class="c">Recorded on the release binary; the model's thinking time is cut.</p>
+  </section>
+
+  <section class="proof">
+    <div class="kicker">Not a promise. A test result.</div>
+    <h2>Every combination, checked.</h2>
+    <p class="c">Each client format is tested against each provider format on every change — plain chat, streaming and tool calls — and the newest Claude Code and Codex are re-run every week. Columns are provider dialects: OpenRouter, DeepSeek and other OpenAI-compatible providers ride the OpenAI column. The full table, including structured output, reasoning and media, is public.</p>
+    <!-- matrix:start -->
+    <!-- matrix:end -->
+    <div class="more"><a href="https://github.com/dorrabbkhan/babelgate/blob/main/docs/compatibility.md">See the full table and how it's tested →</a></div>
+  </section>
+
+  <footer>
+    <a href="https://github.com/dorrabbkhan/babelgate/tree/main/install">Install</a>
+    <a href="https://github.com/dorrabbkhan/babelgate/tree/main/docs/recipes">Recipes</a>
+    <a href="https://github.com/dorrabbkhan/babelgate/blob/main/docs/compatibility.md">Compatibility</a>
+    <a href="https://github.com/dorrabbkhan/babelgate/blob/main/docs/comparison.md">Comparison</a>
+    <a href="https://github.com/dorrabbkhan/babelgate/blob/main/SECURITY.md">Security</a>
+    <a href="https://github.com/dorrabbkhan/babelgate">GitHub</a>
+  </footer>
+</div>
+<script>
+const cmds={macos:'brew install dorrabbkhan/babelgate/babelgate',linux:'curl -fsSL https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/install/install.sh | sh',windows:'irm https://raw.githubusercontent.com/dorrabbkhan/babelgate/main/install/install.ps1 | iex',npm:'npx babelgate',docker:'docker run -p 3000:3000 ghcr.io/dorrabbkhan/babelgate:latest'};
+const typed=document.querySelector('.typed'),copy=document.querySelector('.copy');
+let cur=cmds.macos;
+document.querySelectorAll('.tabs span').forEach(function(s){s.addEventListener('click',function(){
+document.querySelector('.tabs .on').classList.remove('on');s.classList.add('on');
+cur=cmds[s.dataset.os];typed.textContent=cur;typed.style.width=cur.length+'ch';typed.style.animation='none';});});
+copy.addEventListener('click',function(){
+const done=function(){copy.textContent='Copied';setTimeout(function(){copy.textContent='Copy'},1600);};
+if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(cur).then(done,done);}else{
+const t=document.createElement('textarea');t.value=cur;document.body.appendChild(t);t.select();
+try{document.execCommand('copy');}catch(e){}document.body.removeChild(t);done();}});
+</script>
+</body>
+</html>
