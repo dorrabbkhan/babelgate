@@ -172,7 +172,7 @@ npm_cache="$work/npm-cache"
 export npm_config_cache="$npm_cache"
 proxy_pid=""
 
-# shellcheck disable=SC2317 # invoked indirectly via `trap cleanup EXIT`
+# shellcheck disable=SC2317,SC2329 # invoked indirectly via `trap cleanup EXIT`
 cleanup() {
   if [ -n "$proxy_pid" ]; then
     kill "$proxy_pid" 2>/dev/null || true
